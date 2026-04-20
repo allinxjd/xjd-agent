@@ -1,0 +1,2451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XJDAgent</title>
+<link rel="icon" href="/static/favicon.png" type="image/png">
+<link rel="stylesheet" href="/static/workspace.css?v=6">
+<style>
+/* ── Reset & Variables ── */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg-primary: #0a0a1a;
+  --bg-secondary: #111128;
+  --bg-tertiary: #1a1a38;
+  --bg-elevated: #222250;
+  --bg-hover: #2a2a5a;
+  --bg-active: #333370;
+  --border: #2d2d5a;
+  --border-light: #3d3d6a;
+  --text-primary: #e8eaf0;
+  --text-secondary: #a0a4c0;
+  --text-tertiary: #6b6f90;
+  --accent: #7c5cfc;
+  --accent-hover: #9478ff;
+  --accent-dim: rgba(124,92,252,0.15);
+  --green: #2dd4a0;
+  --green-dim: rgba(45,212,160,0.12);
+  --red: #f43f5e;
+  --orange: #f59e0b;
+  --yellow-dim: rgba(245,158,11,0.12);
+  --user-bubble: linear-gradient(135deg, #4c3aad 0%, #5b42d0 100%);
+  --bot-bubble: #181838;
+  --sidebar-width: 280px;
+  --header-height: 56px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.4);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.5);
+  --transition: 0.2s cubic-bezier(0.4,0,0.2,1);
+}
+html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', sans-serif; background: var(--bg-primary); color: var(--text-primary); overflow: hidden; }
+
+/* ── Layout ── */
+.app { display: flex; height: 100vh; }
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sidebar-width); background: var(--bg-secondary);
+  border-right: 1px solid var(--border); display: flex;
+  flex-direction: column; flex-shrink: 0;
+  transition: transform var(--transition); z-index: 100;
+}
+.sidebar-header {
+  padding: 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px; height: var(--header-height);
+}
+.sidebar-logo { width: 36px; height: 36px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+.sidebar-logo img { width: 36px; height: 36px; object-fit: contain; display: block; }
+.sidebar-brand {
+  font-size: 17px; font-weight: 700; letter-spacing: -0.3px;
+  background: linear-gradient(135deg, #a78bfa, #7c5cfc);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+
+/* Search bar */
+.sidebar-search {
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+}
+.sidebar-search input {
+  width: 100%; padding: 7px 10px 7px 30px; background: var(--bg-tertiary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-primary); font-size: 12px; outline: none;
+}
+.sidebar-search input:focus { border-color: var(--accent); }
+.sidebar-search { position: relative; }
+.sidebar-search .search-icon {
+  position: absolute; left: 20px; top: 50%; transform: translateY(-50%);
+  color: var(--text-tertiary); font-size: 12px; pointer-events: none;
+}
+
+.new-chat-btn {
+  width: calc(100% - 24px); padding: 10px 16px; margin: 10px 12px 6px;
+  background: var(--accent); color: #fff; border: none; border-radius: var(--radius-md);
+  font-size: 14px; font-weight: 500; cursor: pointer; display: flex; align-items: center;
+  gap: 8px; justify-content: center; transition: background var(--transition);
+}
+.new-chat-btn:hover { background: var(--accent-hover); }
+.new-chat-btn svg { width: 16px; height: 16px; }
+.chat-list {
+  flex: 1; overflow-y: auto; padding: 6px 8px;
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+.chat-item {
+  padding: 9px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 13px; color: var(--text-secondary); margin-bottom: 1px;
+  transition: all var(--transition); display: flex; align-items: center; gap: 8px;
+  position: relative;
+}
+.chat-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.chat-item.active { background: var(--accent-dim); color: var(--accent); }
+.chat-item-icon { font-size: 13px; flex-shrink: 0; opacity: 0.6; }
+.chat-item-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.chat-item-actions {
+  display: none; gap: 2px; flex-shrink: 0;
+}
+.chat-item:hover .chat-item-actions { display: flex; }
+.chat-item-actions button {
+  background: none; border: none; color: var(--text-tertiary); cursor: pointer;
+  padding: 2px 4px; border-radius: 4px; font-size: 12px; line-height: 1;
+}
+.chat-item-actions button:hover { background: var(--bg-active); color: var(--text-primary); }
+.chat-item-rename {
+  background: var(--bg-tertiary); border: 1px solid var(--accent);
+  border-radius: 4px; color: var(--text-primary); font-size: 12px;
+  padding: 2px 6px; outline: none; width: 100%;
+}
+
+.sidebar-footer {
+  padding: 10px 12px; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.sidebar-footer-btn {
+  padding: 7px 10px; border-radius: var(--radius-sm); background: none;
+  border: none; color: var(--text-secondary); font-size: 13px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; transition: all var(--transition);
+  text-align: left; width: 100%;
+}
+.sidebar-footer-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* ── Main Content ── */
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+
+/* ── Header Bar ── */
+.header {
+  height: var(--header-height); padding: 0 20px;
+  background: var(--bg-secondary); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+}
+.menu-toggle {
+  display: none; background: none; border: none; color: var(--text-secondary);
+  cursor: pointer; padding: 6px; border-radius: var(--radius-sm);
+}
+.menu-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+.menu-toggle svg { width: 20px; height: 20px; }
+
+/* Model Selector */
+.model-selector { position: relative; display: flex; align-items: center; }
+.model-btn {
+  display: flex; align-items: center; gap: 8px; padding: 6px 14px;
+  background: var(--bg-tertiary); border: 1px solid var(--border);
+  border-radius: var(--radius-md); color: var(--text-primary); cursor: pointer;
+  font-size: 13px; font-weight: 500; transition: all var(--transition);
+}
+.model-btn:hover { border-color: var(--accent); background: var(--bg-hover); }
+.model-btn .model-icon { font-size: 14px; }
+.model-btn .model-name { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-btn .chevron { font-size: 10px; color: var(--text-tertiary); transition: transform var(--transition); }
+.model-btn.open .chevron { transform: rotate(180deg); }
+.model-dropdown {
+  position: absolute; top: calc(100% + 6px); left: 0; min-width: 320px;
+  background: var(--bg-secondary); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
+  z-index: 200; display: none; overflow: hidden;
+}
+.model-dropdown.show { display: block; animation: dropIn 0.15s ease-out; }
+@keyframes dropIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+.model-dropdown-header {
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  font-size: 12px; font-weight: 600; color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.model-group { padding: 6px 0; }
+.model-group-title {
+  padding: 6px 16px; font-size: 11px; font-weight: 600;
+  color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.5px;
+}
+.model-option {
+  padding: 10px 16px; cursor: pointer; display: flex; align-items: center;
+  gap: 10px; transition: background var(--transition);
+}
+.model-option:hover { background: var(--bg-hover); }
+.model-option.active { background: var(--accent-dim); }
+.model-option-icon { font-size: 18px; width: 24px; text-align: center; flex-shrink: 0; }
+.model-option-info { flex: 1; min-width: 0; }
+.model-option-name { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.model-option-desc { font-size: 11px; color: var(--text-tertiary); margin-top: 1px; }
+.model-option-badge {
+  font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600;
+  background: var(--green-dim); color: var(--green); flex-shrink: 0;
+}
+
+/* Connection status */
+.conn-status { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-tertiary); }
+.conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); transition: background var(--transition); }
+.conn-dot.ok { background: var(--green); }
+
+/* Streaming counter */
+.stream-counter {
+  font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums;
+  display: none; align-items: center; gap: 6px;
+}
+.stream-counter.active { display: flex; }
+.stream-counter .counter-value { color: var(--green); font-weight: 500; }
+
+.header-actions { display: flex; align-items: center; gap: 4px; }
+.header-icon-btn {
+  background: none; border: none; padding: 8px; border-radius: var(--radius-sm);
+  color: var(--text-secondary); cursor: pointer; transition: all var(--transition);
+  display: flex; align-items: center; justify-content: center;
+}
+.header-icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.header-icon-btn svg { width: 18px; height: 18px; }
+
+/* Language toggle */
+.lang-toggle {
+  display: flex; align-items: center; background: var(--bg-tertiary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  overflow: hidden; font-size: 12px; font-weight: 500; flex-shrink: 0;
+}
+.lang-toggle button {
+  padding: 5px 10px; background: none; border: none; color: var(--text-tertiary);
+  cursor: pointer; transition: all var(--transition); line-height: 1;
+}
+.lang-toggle button.active {
+  background: var(--accent); color: #fff;
+}
+.lang-toggle button:hover:not(.active) { color: var(--text-primary); background: var(--bg-hover); }
+
+/* ── Messages ── */
+.messages-container {
+  flex: 1; overflow-y: auto; scroll-behavior: smooth;
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+.messages-inner { max-width: 780px; margin: 0 auto; padding: 24px 20px 16px; }
+
+/* Welcome screen */
+.welcome {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; text-align: center; padding: 40px 20px;
+}
+.welcome-logo { width: 80px; height: 80px; margin-bottom: 20px; display: flex; align-items: center; justify-content: center; }
+.welcome-logo img { width: 80px; height: 80px; object-fit: contain; display: block; }
+.welcome-title { font-size: 28px; font-weight: 700; margin-bottom: 8px; color: var(--text-primary); }
+.welcome-sub { font-size: 15px; color: var(--text-tertiary); margin-bottom: 32px; }
+.welcome-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; max-width: 480px; width: 100%; }
+.welcome-card {
+  padding: 16px; background: var(--bg-tertiary); border: 1px solid var(--border);
+  border-radius: var(--radius-md); cursor: pointer; text-align: left; transition: all var(--transition);
+}
+.welcome-card:hover { border-color: var(--accent); background: var(--bg-hover); transform: translateY(-1px); }
+.welcome-card-icon { font-size: 20px; margin-bottom: 8px; }
+.welcome-card-text { font-size: 13px; color: var(--text-secondary); line-height: 1.4; }
+
+/* Message bubbles */
+.msg-row { display: flex; gap: 12px; margin-bottom: 20px; animation: fadeUp 0.25s ease-out; }
+.msg-row.user { justify-content: flex-end; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.msg-avatar {
+  width: 32px; height: 32px; border-radius: var(--radius-sm); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+  background: var(--bg-elevated);
+}
+.msg-row.user .msg-avatar { background: var(--accent); color: #fff; order: 1; }
+.msg-content { max-width: 72%; min-width: 0; }
+.msg-bubble {
+  padding: 12px 16px; border-radius: var(--radius-lg); font-size: 14px;
+  line-height: 1.65; word-break: break-word;
+}
+.msg-row.bot .msg-bubble { background: var(--bot-bubble); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+.msg-row.user .msg-bubble { background: var(--user-bubble); border-bottom-right-radius: 4px; color: #f0f0ff; }
+.msg-row.system .msg-bubble { background: none; color: var(--text-tertiary); font-size: 13px; text-align: center; margin: 0 auto; }
+
+/* Thinking block */
+.thinking-block {
+  background: var(--yellow-dim); border: 1px solid rgba(245,158,11,0.25);
+  border-radius: var(--radius-sm); margin: 6px 0; overflow: hidden;
+}
+.thinking-header {
+  padding: 6px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--orange); font-weight: 500; user-select: none;
+}
+.thinking-header .arrow { transition: transform var(--transition); font-size: 10px; }
+.thinking-header .arrow.open { transform: rotate(90deg); }
+.thinking-body {
+  padding: 0 12px 8px; font-size: 12px; color: var(--text-secondary);
+  line-height: 1.5; white-space: pre-wrap; display: none; max-height: 200px; overflow-y: auto;
+}
+.thinking-body.open { display: block; }
+
+/* Markdown in messages */
+.msg-bubble p { margin: 0 0 8px; }
+.msg-bubble p:last-child { margin-bottom: 0; }
+.msg-bubble code {
+  background: rgba(124,92,252,0.12); padding: 2px 6px; border-radius: 4px;
+  font-family: 'JetBrains Mono', 'SF Mono', 'Menlo', monospace; font-size: 12.5px;
+}
+.msg-bubble pre {
+  background: #0d0d22; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 14px; margin: 10px 0; overflow-x: auto; position: relative;
+}
+.msg-bubble pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.5; color: #c9d1d9; }
+.msg-bubble pre .copy-btn {
+  position: absolute; top: 8px; right: 8px; padding: 4px 10px;
+  background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-secondary); font-size: 11px; cursor: pointer; opacity: 0;
+  transition: opacity var(--transition);
+}
+.msg-bubble pre:hover .copy-btn { opacity: 1; }
+.msg-bubble pre .copy-btn:hover { background: var(--bg-active); color: var(--text-primary); }
+.msg-bubble a { color: var(--accent); text-decoration: none; }
+.msg-bubble a:hover { text-decoration: underline; }
+.msg-bubble ul, .msg-bubble ol { margin: 6px 0; padding-left: 20px; }
+.msg-bubble li { margin-bottom: 4px; }
+.msg-bubble blockquote {
+  border-left: 3px solid var(--accent); padding-left: 12px; margin: 8px 0; color: var(--text-secondary);
+}
+.msg-bubble h1, .msg-bubble h2, .msg-bubble h3 { margin: 12px 0 6px; font-weight: 600; }
+.msg-bubble h1 { font-size: 18px; } .msg-bubble h2 { font-size: 16px; } .msg-bubble h3 { font-size: 14px; }
+.msg-bubble table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+.msg-bubble th, .msg-bubble td { border: 1px solid var(--border); padding: 6px 10px; font-size: 13px; text-align: left; }
+.msg-bubble th { background: var(--bg-tertiary); font-weight: 600; }
+.msg-bubble hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.msg-bubble img { max-width: 100%; border-radius: var(--radius-sm); margin: 6px 0; }
+
+/* Tool call badges */
+.tool-badge {
+  display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px;
+  background: var(--accent-dim); border-radius: 6px; font-size: 12px;
+  color: var(--accent); margin: 4px 2px; font-family: 'SF Mono', 'Menlo', monospace;
+}
+.tool-badge.result { background: var(--green-dim); color: var(--green); }
+
+/* Stats line */
+.msg-stats { font-size: 11px; color: var(--text-tertiary); margin-top: 6px; padding-left: 2px; }
+
+/* Typing indicator */
+.typing { display: flex; gap: 4px; padding: 8px 0; }
+.typing span {
+  width: 6px; height: 6px; background: var(--text-tertiary);
+  border-radius: 50%; animation: bounce 1.2s infinite;
+}
+.typing span:nth-child(2) { animation-delay: 0.15s; }
+.typing span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes bounce { 0%,80%,100% { transform: translateY(0); } 40% { transform: translateY(-8px); } }
+
+/* ── Input Area ── */
+.input-area { padding: 12px 20px 16px; border-top: 1px solid var(--border); background: var(--bg-secondary); }
+.input-inner { max-width: 780px; margin: 0 auto; position: relative; }
+.input-wrap {
+  display: flex; align-items: flex-end; gap: 8px;
+  background: var(--bg-tertiary); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 8px 12px; transition: border-color var(--transition);
+}
+.input-wrap:focus-within { border-color: var(--accent); }
+.input-wrap textarea {
+  flex: 1; background: none; border: none; color: var(--text-primary);
+  font-size: 14px; resize: none; outline: none; font-family: inherit;
+  min-height: 24px; max-height: 160px; line-height: 1.5; padding: 4px 0;
+}
+.input-wrap textarea::placeholder { color: var(--text-tertiary); }
+.file-upload-btn {
+  cursor: pointer; color: var(--text-tertiary); padding: 4px;
+  border-radius: var(--radius-sm); transition: color var(--transition);
+  display: flex; align-items: center;
+}
+.file-upload-btn:hover { color: var(--accent); }
+.file-preview {
+  padding: 6px 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+}
+.file-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px;
+  background: var(--accent-dim); border-radius: 6px; font-size: 12px; color: var(--accent);
+}
+.file-chip button {
+  background: none; border: none; color: var(--accent); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 0 2px;
+}
+.send-btn {
+  width: 36px; height: 36px; border-radius: var(--radius-sm); border: none;
+  background: var(--accent); color: #fff; cursor: pointer; display: flex;
+  align-items: center; justify-content: center; flex-shrink: 0; transition: all var(--transition);
+}
+.send-btn:hover { background: var(--accent-hover); transform: scale(1.05); }
+.send-btn:disabled { opacity: 0.3; cursor: not-allowed; transform: none; }
+.send-btn svg { width: 18px; height: 18px; }
+.input-footer {
+  display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding: 0 4px;
+}
+.input-hint { font-size: 11px; color: var(--text-tertiary); }
+.input-model-tag { font-size: 11px; color: var(--text-tertiary); display: flex; align-items: center; gap: 4px; }
+
+/* ── Settings Panel ── */
+.settings-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 300;
+  display: none; animation: fadeIn 0.15s;
+}
+.settings-overlay.show { display: block; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.settings-panel {
+  position: fixed; right: 0; top: 0; bottom: 0; width: 420px;
+  background: var(--bg-secondary); border-left: 1px solid var(--border);
+  z-index: 310; transform: translateX(100%); transition: transform 0.25s ease-out;
+  display: flex; flex-direction: column;
+}
+.settings-panel.show { transform: translateX(0); }
+.settings-header {
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.settings-title { font-size: 16px; font-weight: 600; }
+.settings-close {
+  background: none; border: none; color: var(--text-secondary); cursor: pointer;
+  padding: 4px; border-radius: var(--radius-sm);
+}
+.settings-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+.settings-body { flex: 1; overflow-y: auto; padding: 20px; }
+.settings-section { margin-bottom: 24px; }
+.settings-section-title {
+  font-size: 12px; font-weight: 600; color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;
+}
+.setting-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.setting-row:last-child { border-bottom: none; }
+.setting-label { font-size: 13px; color: var(--text-secondary); }
+.setting-value { font-size: 13px; color: var(--text-primary); font-weight: 500; }
+.setting-input {
+  background: var(--bg-tertiary); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 6px 10px; color: var(--text-primary);
+  font-size: 13px; width: 180px; outline: none;
+}
+.setting-input:focus { border-color: var(--accent); }
+.system-prompt-textarea {
+  width: 100%; min-height: 120px; background: var(--bg-tertiary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px; color: var(--text-primary); font-size: 12px;
+  font-family: 'SF Mono', 'Menlo', monospace; resize: vertical; outline: none;
+  line-height: 1.5;
+}
+.system-prompt-textarea:focus { border-color: var(--accent); }
+.settings-save-btn {
+  padding: 6px 16px; background: var(--accent); color: #fff; border: none;
+  border-radius: var(--radius-sm); font-size: 12px; cursor: pointer;
+  margin-top: 8px; transition: background var(--transition);
+}
+.settings-save-btn:hover { background: var(--accent-hover); }
+
+/* ── Settings Tabs ── */
+.settings-tabs {
+  display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 20px;
+}
+.settings-tab {
+  padding: 10px 16px; font-size: 13px; font-weight: 500; cursor: pointer;
+  background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--text-tertiary); transition: all 0.15s;
+}
+.settings-tab:hover { color: var(--text-primary); }
+.settings-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.settings-tab-content { display: none; }
+.settings-tab-content.active { display: block; }
+
+/* ── Toggle Switch ── */
+.toggle-switch {
+  position: relative; display: inline-block; width: 40px; height: 22px;
+}
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background: var(--bg-hover); border-radius: 22px; transition: 0.2s;
+}
+.toggle-slider::before {
+  content: ''; position: absolute; height: 16px; width: 16px;
+  left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--accent); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
+
+/* ── Channel Card ── */
+.channel-card {
+  display: flex; align-items: center; gap: 12px; padding: 12px;
+  background: var(--bg-tertiary); border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.channel-card-info { flex: 1; }
+.channel-card-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.channel-card-status { font-size: 11px; margin-top: 2px; }
+.channel-card-actions { display: flex; gap: 6px; }
+.channel-card-actions button {
+  padding: 4px 10px; font-size: 11px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-secondary);
+}
+.channel-card-actions button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+.status-dot.running { background: #22c55e; }
+.status-dot.stopped { background: #9ca3af; }
+.status-dot.error { background: #ef4444; }
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .sidebar { position: fixed; left: 0; top: 0; bottom: 0; transform: translateX(-100%); }
+  .sidebar.open { transform: translateX(0); }
+  .menu-toggle { display: flex; }
+  .model-btn .model-name { max-width: 120px; }
+  .welcome-grid { grid-template-columns: 1fr; }
+  .msg-content { max-width: 85%; }
+  .settings-panel { width: 100%; }
+}
+@media (max-width: 480px) {
+  .model-btn .model-name { max-width: 80px; }
+  .conn-status span:not(.conn-dot) { display: none; }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo"><img src="/static/logo-64.png" alt="XJD"></div>
+      <span class="sidebar-brand">XJDAgent</span>
+    </div>
+    <button class="new-chat-btn" onclick="newChat()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      <span data-i18n="newChat">New Chat</span>
+    </button>
+    <div class="sidebar-search">
+      <span class="search-icon">&#x1F50D;</span>
+      <input type="text" id="searchInput" data-i18n-placeholder="searchPlaceholder" placeholder="Search conversations..." oninput="filterChats(this.value)">
+    </div>
+    <div class="chat-list" id="chatList"></div>
+    <div class="sidebar-footer">
+      <button class="sidebar-footer-btn" onclick="exportChat()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span data-i18n="exportChat">Export Chat</span>
+      </button>
+      <button class="sidebar-footer-btn" onclick="openSettings()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        <span data-i18n="settings">Settings</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main">
+    <header class="header">
+      <button class="menu-toggle" onclick="toggleSidebar()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <div class="model-selector" id="modelSelector">
+        <button class="model-btn" id="modelBtn" onclick="toggleModelDropdown()">
+          <span class="model-icon" id="modelIcon">&#x2728;</span>
+          <span class="model-name" id="currentModelName" data-i18n="loading">Loading...</span>
+          <span class="chevron">&#x25BC;</span>
+        </button>
+        <div class="model-dropdown" id="modelDropdown">
+          <div class="model-dropdown-header" data-i18n="selectModel">Select Model</div>
+          <div id="modelList"></div>
+        </div>
+      </div>
+      <div class="conn-status">
+        <span class="conn-dot" id="connDot"></span>
+        <span id="connText" data-i18n="connecting">Connecting...</span>
+      </div>
+      <div class="stream-counter" id="streamCounter">
+        <span class="counter-value" id="streamTokens">0</span> tok
+        <span class="counter-value" id="streamSpeed">0</span> tok/s
+        <span id="streamElapsed">0.0s</span>
+      </div>
+      <div class="header-actions">
+        <div class="lang-toggle" id="langToggle">
+          <button onclick="setLang('zh')" id="langZh">中</button>
+          <button onclick="setLang('en')" id="langEn">EN</button>
+        </div>
+        <button class="header-icon-btn" title="Settings" onclick="openSettings()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Workspace Tabs -->
+    <div class="workspace-tabs">
+      <button class="ws-tab active" data-tab="chat" onclick="switchTab('chat')"><span class="tab-icon">&#x1F4AC;</span> Chat</button>
+      <button class="ws-tab" data-tab="canvas" onclick="switchTab('canvas')"><span class="tab-icon">&#x1F3A8;</span> Canvas</button>
+      <button class="ws-tab" data-tab="terminal" onclick="switchTab('terminal')"><span class="tab-icon">&#x2328;</span> Terminal</button>
+      <button class="ws-tab" data-tab="files" onclick="switchTab('files')"><span class="tab-icon">&#x1F4CC;</span> Context</button>
+      <button class="ws-tab" data-tab="memory" onclick="switchTab('memory')"><span class="tab-icon">&#x1F9E0;</span> Memory</button>
+      <button class="ws-tab" data-tab="skills" onclick="switchTab('skills')"><span class="tab-icon">&#x26A1;</span> Skills</button>
+      <button class="ws-tab" data-tab="inspector" onclick="switchTab('inspector')"><span class="tab-icon">&#x1F50D;</span> Inspector</button>
+    </div>
+
+    <!-- Chat Panel (default) -->
+    <div class="ws-panel active" id="chatPanel">
+    <!-- Messages -->
+    <div class="messages-container" id="messagesContainer">
+      <div class="messages-inner" id="messages">
+        <div class="welcome" id="welcome">
+          <div class="welcome-logo"><img src="/static/logo-128.png" alt="XJD"></div>
+          <h2 class="welcome-title">XJDAgent</h2>
+          <p class="welcome-sub" data-i18n="welcomeSub">Intelligent AI Agent Platform</p>
+          <div class="welcome-grid">
+            <div class="welcome-card" onclick="quickPrompt(t('card1Prompt'))">
+              <div class="welcome-card-icon">&#x1F4DD;</div>
+              <div class="welcome-card-text" data-i18n="card1">Help me write a Python script</div>
+            </div>
+            <div class="welcome-card" onclick="quickPrompt(t('card2Prompt'))">
+              <div class="welcome-card-icon">&#x1F4A1;</div>
+              <div class="welcome-card-text" data-i18n="card2">Explain a complex concept</div>
+            </div>
+            <div class="welcome-card" onclick="quickPrompt(t('card3Prompt'))">
+              <div class="welcome-card-icon">&#x1F41B;</div>
+              <div class="welcome-card-text" data-i18n="card3">Debug my code</div>
+            </div>
+            <div class="welcome-card" onclick="quickPrompt(t('card4Prompt'))">
+              <div class="welcome-card-icon">&#x1F680;</div>
+              <div class="welcome-card-text" data-i18n="card4">Brainstorm project ideas</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input -->
+    <div class="input-area">
+      <div class="input-inner">
+        <div class="input-wrap">
+          <label class="file-upload-btn" data-i18n-title="uploadFile" title="Upload file">
+            <input type="file" id="fileInput" style="display:none" onchange="handleFileUpload(this)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+          </label>
+          <button id="autoTTSBtn" onclick="toggleAutoTTS()" title="Auto TTS" style="background:none;border:none;cursor:pointer;padding:4px 6px;border-radius:6px;color:var(--text-secondary);font-size:18px;opacity:0.4;transition:opacity .2s">
+            &#x1f50a;
+          </button>
+          <textarea id="inputEl" data-i18n-placeholder="inputPlaceholder" placeholder="Send a message... (Enter to send, Shift+Enter for new line)" rows="1"></textarea>
+          <button class="send-btn" id="sendBtn" onclick="send()" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+        <div class="file-preview" id="filePreview" style="display:none"></div>
+        <div class="input-footer">
+          <span class="input-hint" data-i18n="inputHint">Enter to send, Shift+Enter for new line</span>
+          <span class="input-model-tag" id="inputModelTag"></span>
+        </div>
+      </div>
+    </div>
+    </div><!-- /chatPanel -->
+
+    <!-- Canvas Panel -->
+    <div class="ws-panel" id="canvasPanel">
+      <div class="canvas-empty"><span class="icon">&#x1F3A8;</span><span>No canvas components yet. Agent-generated UI will appear here.</span></div>
+      <div class="canvas-viewport"></div>
+    </div>
+
+    <!-- Terminal Panel -->
+    <div class="ws-panel" id="terminalPanel">
+      <div class="terminal-container">
+        <div class="terminal-output" id="termOutput"></div>
+        <div class="terminal-input-bar">
+          <span class="terminal-prompt">$</span>
+          <input class="terminal-input" id="termInput" placeholder="Enter command..." onkeydown="termKeydown(event)">
+        </div>
+      </div>
+    </div>
+
+    <!-- Context Panel (was Files) -->
+    <div class="ws-panel" id="filesPanel">
+      <div class="ctx-container">
+        <!-- 左栏: Pinned + Browse -->
+        <div class="ctx-left">
+          <div class="ctx-section">
+            <div class="ctx-section-header">
+              <span class="ctx-section-title">Pinned Context</span>
+              <span class="ctx-pin-count" id="ctxPinCount">0</span>
+            </div>
+            <div class="ctx-pin-list" id="ctxPinList">
+              <div class="ctx-empty">No pinned files yet. Browse below to pin files.</div>
+            </div>
+          </div>
+          <div class="ctx-section">
+            <div class="ctx-section-header ctx-browse-toggle" onclick="toggleFileBrowser()">
+              <span class="ctx-section-title">Browse Files</span>
+              <span class="ctx-toggle-icon" id="ctxBrowseIcon">&#x25B6;</span>
+            </div>
+            <div class="ctx-browse" id="ctxBrowse" style="display:none">
+              <div class="file-tree" id="fileTree"></div>
+            </div>
+          </div>
+        </div>
+        <!-- 右栏: Preview / Activity -->
+        <div class="ctx-right">
+          <div class="ctx-tabs">
+            <button class="ctx-tab active" onclick="switchCtxTab('preview')">Preview</button>
+            <button class="ctx-tab" onclick="switchCtxTab('activity')">Activity</button>
+          </div>
+          <div class="ctx-tab-content" id="ctxPreview">
+            <div class="ctx-empty">Pin files to see injected context preview.</div>
+          </div>
+          <div class="ctx-tab-content" id="ctxActivity" style="display:none">
+            <div class="ctx-empty">No file activity yet.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Memory Panel -->
+    <div class="ws-panel" id="memoryPanel">
+      <div class="memory-container">
+        <div class="memory-toolbar">
+          <input class="memory-search" id="memorySearch" placeholder="Search memories..." onkeydown="if(event.key==='Enter')searchMemory()">
+          <button class="memory-search-btn" onclick="searchMemory()">Search</button>
+          <button class="memory-search-btn" onclick="showAddMemory()" style="margin-left:4px">+ Add</button>
+          <button class="memory-search-btn" onclick="loadMemoryHealth()" style="margin-left:4px">Health</button>
+          <button class="memory-search-btn" onclick="loadMemories()" style="margin-left:4px">List</button>
+        </div>
+        <div id="addMemoryForm" class="memory-edit-form">
+          <input type="hidden" id="editMemoryId" value="">
+          <textarea id="newMemoryContent" rows="3" placeholder="Memory content..."></textarea>
+          <div class="memory-edit-row">
+            <select id="newMemoryType">
+              <option value="fact">Fact</option><option value="preference">Preference</option><option value="context">Context</option><option value="episodic">Episodic</option>
+            </select>
+            <select id="newMemoryImportance">
+              <option value="medium">Medium</option><option value="low">Low</option><option value="high">High</option><option value="critical">Critical</option>
+            </select>
+            <button class="btn-primary" onclick="saveMemory()" style="padding:5px 14px;font-size:12px">Save</button>
+            <button class="btn-secondary" onclick="hideAddMemory()" style="padding:5px 10px;font-size:12px">Cancel</button>
+          </div>
+        </div>
+        <div class="memory-list" id="memoryList"></div>
+      </div>
+    </div>
+
+    <!-- Skills Panel -->
+    <div class="ws-panel" id="skillsPanel">
+      <div class="skills-container">
+        <div class="skills-toolbar">
+          <input type="text" class="skills-search" id="skillsSearch" placeholder="Search skills..." oninput="filterSkillCards()">
+          <select class="skills-filter" id="skillsFilter" onchange="loadSkills()">
+            <option value="">All Categories</option>
+            <option value="general">General</option>
+            <option value="code">Code</option>
+            <option value="file">File</option>
+            <option value="web">Web</option>
+            <option value="data">Data</option>
+            <option value="deploy">Deploy</option>
+          </select>
+          <button class="skills-add-btn" onclick="openSkillModal()">+ New</button>
+          <button class="skills-add-btn" style="background:var(--green);color:#000" onclick="openHubModal()">Hub</button>
+        </div>
+        <div class="skills-grid" id="skillsGrid"></div>
+      </div>
+    </div>
+
+    <!-- Hub Search Modal -->
+    <div class="skill-modal-overlay" id="hubModalOverlay" onclick="if(event.target===this)closeHubModal()">
+      <div class="skill-modal" style="max-width:640px">
+        <div class="skill-modal-header">
+          <span>XjdHub</span>
+          <button class="skill-modal-close" onclick="closeHubModal()">&times;</button>
+        </div>
+        <div class="skill-modal-body">
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input type="text" id="hubSearchInput" placeholder="Search skills..." style="flex:1;padding:8px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary)">
+            <button class="btn-primary" onclick="hubSearch()">Search</button>
+          </div>
+          <div id="hubResults" style="max-height:400px;overflow-y:auto"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Skill Modal (Create/Edit) -->
+    <div class="skill-modal-overlay" id="skillModalOverlay" onclick="if(event.target===this)closeSkillModal()">
+      <div class="skill-modal">
+        <div class="skill-modal-header">
+          <span id="skillModalTitle">New Skill</span>
+          <button class="skill-modal-close" onclick="closeSkillModal()">&times;</button>
+        </div>
+        <div class="skill-modal-body">
+          <input type="hidden" id="skillEditId">
+          <label>Name</label>
+          <input type="text" id="skillName" placeholder="Skill name">
+          <label>Description</label>
+          <input type="text" id="skillDesc" placeholder="What does this skill do?">
+          <label>Trigger</label>
+          <input type="text" id="skillTrigger" placeholder="When to trigger (for LLM matching)">
+          <div class="skill-modal-row">
+            <div><label>Category</label>
+              <select id="skillCategory">
+                <option value="general">General</option>
+                <option value="code">Code</option>
+                <option value="file">File</option>
+                <option value="web">Web</option>
+                <option value="data">Data</option>
+                <option value="deploy">Deploy</option>
+              </select>
+            </div>
+            <div><label>Tags (comma separated)</label>
+              <input type="text" id="skillTags" placeholder="deploy, server">
+            </div>
+          </div>
+          <label>Examples (one per line)</label>
+          <textarea id="skillExamples" rows="3" placeholder="Example trigger phrases..."></textarea>
+          <label>Steps</label>
+          <div id="skillStepsEditor"></div>
+          <button class="skill-step-add" onclick="addSkillStep()">+ Add Step</button>
+        </div>
+        <div class="skill-modal-footer">
+          <button class="btn-secondary" onclick="closeSkillModal()">Cancel</button>
+          <button class="btn-primary" onclick="saveSkill()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Inspector Panel -->
+    <div class="ws-panel" id="inspectorPanel">
+      <div class="inspector-container">
+        <div class="inspector-toolbar">
+          <div class="inspector-filters">
+            <button class="inspector-filter-btn active" data-filter="all" onclick="filterInspector('all')">All</button>
+            <button class="inspector-filter-btn" data-filter="llm" onclick="filterInspector('llm')">LLM</button>
+            <button class="inspector-filter-btn" data-filter="tools" onclick="filterInspector('tools')">Tools</button>
+            <button class="inspector-filter-btn" data-filter="messages" onclick="filterInspector('messages')">Msgs</button>
+            <button class="inspector-filter-btn" data-filter="cron" onclick="filterInspector('cron')">Cron</button>
+            <button class="inspector-filter-btn" data-filter="errors" onclick="filterInspector('errors')">Errors</button>
+          </div>
+          <input class="inspector-search" id="inspectorSearch" type="text" placeholder="Search events..." oninput="searchInspector(this.value)">
+          <div class="inspector-toolbar-right">
+            <button class="inspector-autoscroll active" id="inspectorAutoScroll" onclick="toggleAutoScroll()" title="Auto-scroll">&#8595;</button>
+            <button class="inspector-clear-btn" onclick="clearInspector()">Clear</button>
+            <div class="inspector-status"><span class="dot"></span> Live</div>
+          </div>
+        </div>
+        <div class="inspector-stats-row">
+          <div class="inspector-stat-card" data-stat="llm">
+            <div class="inspector-stat-value" id="statLLM">0</div>
+            <div class="inspector-stat-label">LLM Calls</div>
+          </div>
+          <div class="inspector-stat-card" data-stat="tools">
+            <div class="inspector-stat-value" id="statTools">0</div>
+            <div class="inspector-stat-label">Tool Calls</div>
+          </div>
+          <div class="inspector-stat-card" data-stat="tokens">
+            <div class="inspector-stat-value" id="statTokens">0</div>
+            <div class="inspector-stat-label">Tokens</div>
+          </div>
+          <div class="inspector-stat-card" data-stat="time">
+            <div class="inspector-stat-value" id="statTime">0.0s</div>
+            <div class="inspector-stat-label">Total Time</div>
+          </div>
+        </div>
+        <div class="inspector-timeline" id="inspectorTimeline">
+          <div class="inspector-empty">
+            <div class="inspector-empty-icon">&#9678;</div>
+            <div>Waiting for events...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Settings Overlay -->
+<div class="settings-overlay" id="settingsOverlay" onclick="closeSettings()"></div>
+<div class="settings-panel" id="settingsPanel">
+  <div class="settings-header">
+    <span class="settings-title" data-i18n="settings">Settings</span>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button onclick="doLogout()" style="background:none;border:1px solid #555;color:#aaa;padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px" data-i18n="logout">Logout</button>
+      <button class="settings-close" onclick="closeSettings()">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="settings-tabs">
+    <button class="settings-tab active" onclick="switchSettingsTab('general')" data-i18n="tabGeneral">General</button>
+    <button class="settings-tab" onclick="switchSettingsTab('channels')" data-i18n="tabChannels">Channels</button>
+    <button class="settings-tab" onclick="switchSettingsTab('voice')" data-i18n="tabVoice">Voice</button>
+    <button class="settings-tab" onclick="switchSettingsTab('skills')" data-i18n="tabSkills">Skills</button>
+  </div>
+  <div class="settings-body">
+    <!-- General Tab -->
+    <div class="settings-tab-content active" id="settingsTabGeneral">
+      <div class="settings-section">
+        <div class="settings-section-title" data-i18n="systemPrompt">System Prompt</div>
+        <textarea class="system-prompt-textarea" id="systemPromptEl" data-i18n-placeholder="enterSystemPrompt" placeholder="Enter system prompt..."></textarea>
+        <button class="settings-save-btn" onclick="saveSystemPrompt()" data-i18n="savePrompt">Save Prompt</button>
+      </div>
+      <div class="settings-section">
+        <div class="settings-section-title" data-i18n="modelConfig">Model Configuration</div>
+        <div class="setting-row"><span class="setting-label">Provider</span>
+          <select id="settingProvider" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+            <option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option><option value="google">Google</option>
+            <option value="qwen">Qwen</option><option value="doubao">Doubao</option>
+            <option value="zhipu">Zhipu</option><option value="moonshot">Moonshot</option>
+            <option value="minimax">MiniMax</option><option value="mistral">Mistral</option>
+            <option value="openrouter">OpenRouter</option><option value="ollama">Ollama</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div class="setting-row"><span class="setting-label" data-i18n="primaryModel">Model</span>
+          <input type="text" id="settingModelName" placeholder="deepseek-chat" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+        <div class="setting-row"><span class="setting-label">API Key</span>
+          <input type="password" id="settingApiKey" placeholder="sk-..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+        <div class="setting-row"><span class="setting-label">Base URL</span>
+          <input type="text" id="settingBaseUrl" placeholder="(optional)" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+        <button class="settings-save-btn" onclick="saveModelConfig()" data-i18n="saveModel">Save Model</button>
+      </div>
+      <div class="settings-section">
+        <div class="settings-section-title" data-i18n="serverStats">Server Stats</div>
+        <div class="setting-row"><span class="setting-label" data-i18n="uptime">Uptime</span><span class="setting-value" id="settingUptime">-</span></div>
+        <div class="setting-row"><span class="setting-label" data-i18n="totalMessages">Total Messages</span><span class="setting-value" id="settingMsgs">-</span></div>
+        <div class="setting-row"><span class="setting-label" data-i18n="activeSessions">Active Sessions</span><span class="setting-value" id="settingSessions">-</span></div>
+        <div class="setting-row"><span class="setting-label" data-i18n="registeredTools">Registered Tools</span><span class="setting-value" id="settingTools">-</span></div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-section-title" data-i18n="availableProviders">Available Providers</div>
+        <div id="settingProviders" style="font-size:13px;color:var(--text-secondary);" data-i18n="loading">Loading...</div>
+      </div>
+    </div>
+    <!-- Channels Tab -->
+    <div class="settings-tab-content" id="settingsTabChannels">
+      <div class="settings-section">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div class="settings-section-title" style="margin:0" data-i18n="channelManagement">Channel Management</div>
+          <button class="settings-save-btn" style="margin:0;padding:6px 14px" onclick="showAddChannel()" data-i18n="addChannel">+ Add</button>
+        </div>
+        <div id="channelList" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+      <!-- Add/Edit Channel Form (hidden by default) -->
+      <div class="settings-section" id="channelForm" style="display:none;">
+        <div class="settings-section-title" id="channelFormTitle" data-i18n="addChannel">Add Channel</div>
+        <div class="setting-row"><span class="setting-label" data-i18n="platform">Platform</span>
+          <select id="channelPlatformSelect" onchange="onPlatformSelect()" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;"></select>
+        </div>
+        <div id="channelFields"></div>
+        <div style="display:flex;gap:8px;margin-top:12px;">
+          <button class="settings-save-btn" onclick="saveChannel()" data-i18n="save">Save</button>
+          <button class="settings-save-btn" style="background:var(--bg-hover);color:var(--text-primary);" onclick="hideChannelForm()" data-i18n="cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <!-- Voice Tab -->
+    <div class="settings-tab-content" id="settingsTabVoice">
+      <div class="settings-section">
+        <div class="settings-section-title" data-i18n="voicePipeline">Voice Pipeline</div>
+        <div class="setting-row"><span class="setting-label" data-i18n="voiceEnabled">Enabled</span>
+          <label class="toggle-switch"><input type="checkbox" id="voiceEnabled"><span class="toggle-slider"></span></label>
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-section-title">STT (Speech-to-Text)</div>
+        <div class="setting-row"><span class="setting-label">Provider</span>
+          <select id="sttProvider" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+            <option value="whisper_local">Whisper Local</option><option value="whisper_api">Whisper API</option>
+          </select>
+        </div>
+        <div class="setting-row"><span class="setting-label" data-i18n="sttModel">Model</span>
+          <select id="sttModel" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+            <option value="tiny">tiny</option><option value="base" selected>base</option><option value="small">small</option><option value="medium">medium</option><option value="large">large</option>
+          </select>
+        </div>
+        <div class="setting-row"><span class="setting-label" data-i18n="sttLanguage">Language</span>
+          <input type="text" id="sttLanguage" placeholder="auto" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+        <div class="setting-row"><span class="setting-label">API Key</span>
+          <input type="password" id="sttApiKey" placeholder="Whisper API / Groq key" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+        <div class="setting-row"><span class="setting-label">Base URL</span>
+          <input type="text" id="sttBaseUrl" placeholder="https://api.groq.com/openai/v1" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+      </div>
+      <div class="settings-section">
+        <div class="settings-section-title">TTS (Text-to-Speech)</div>
+        <div class="setting-row"><span class="setting-label">Provider</span>
+          <select id="ttsProvider" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+            <option value="edge_tts">Edge TTS</option><option value="elevenlabs">ElevenLabs</option><option value="openai_tts">OpenAI TTS</option>
+          </select>
+        </div>
+        <div class="setting-row"><span class="setting-label" data-i18n="ttsVoice">Voice</span>
+          <input type="text" id="ttsVoice" value="zh-CN-XiaoxiaoNeural" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+        <div class="setting-row"><span class="setting-label" data-i18n="ttsSpeed">Speed</span>
+          <input type="number" id="ttsSpeed" value="1.0" step="0.1" min="0.5" max="2.0" style="width:80px;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+        <div class="setting-row"><span class="setting-label">API Key</span>
+          <input type="password" id="ttsApiKey" placeholder="ElevenLabs / OpenAI key" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+        <div class="setting-row"><span class="setting-label">Base URL</span>
+          <input type="text" id="ttsBaseUrl" placeholder="Custom endpoint (optional)" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="settings-save-btn" onclick="saveVoiceConfig()" data-i18n="saveVoice">Save Voice Config</button>
+        <button class="settings-save-btn" onclick="testVoice()" style="background:#2a6a3a" data-i18n="testVoice">Test TTS</button>
+      </div>
+      <div id="voiceTestArea" style="display:none;margin-top:10px">
+        <input type="text" id="voiceTestText" value="你好，这是一段语音测试。" oninput="debounceTTS()" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;margin-bottom:8px">
+        <audio id="voiceTestAudio" controls preload="auto" style="width:100%"></audio>
+        <div id="voiceTestStatus" style="font-size:12px;color:#888;margin-top:4px"></div>
+      </div>
+    </div>
+    <!-- Skills / Credentials Tab -->
+    <div class="settings-tab-content" id="settingsTabSkills">
+      <div class="settings-section">
+        <div class="settings-section-title" data-i18n="ecommerceMode">E-Commerce Mode</div>
+        <div class="setting-row"><span class="setting-label" data-i18n="ecommerceEnabled">Enabled</span>
+          <label class="toggle-switch"><input type="checkbox" id="ecommerceEnabled" onchange="toggleEcommerce()"><span class="toggle-slider"></span></label>
+        </div>
+      </div>
+      <div id="skillSecretsContainer"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──
+let ws = null;
+let streaming = false;
+let streamStartTime = 0;
+let streamTokenCount = 0;
+let streamTimer = null;
+let autoTTSEnabled = localStorage.getItem('xjd_auto_tts') === '1';
+let _ttsAudio = null;
+let currentModel = { provider: '', model: '' };
+let conversations = JSON.parse(localStorage.getItem('xjd_conversations') || '[]');
+let activeConvId = null;
+let pendingFiles = [];
+let curLang = localStorage.getItem('xjd_lang') || (navigator.language.startsWith('zh') ? 'zh' : 'en');
+const STORAGE_KEY = 'xjd_conversations';
+
+// ── i18n ──
+const I18N = {
+  zh: {
+    newChat: '新对话', searchPlaceholder: '搜索对话...', exportChat: '导出对话',
+    settings: '设置', selectModel: '选择模型', connecting: '连接中...',
+    connected: '已连接', disconnected: '已断开', loading: '加载中...',
+    welcomeSub: '智能 AI 代理平台',
+    card1: '帮我写一个 Python 脚本', card1Prompt: '帮我写一个 Python 脚本',
+    card2: '用简单的话解释一个复杂概念', card2Prompt: '用简单的话解释量子计算',
+    card3: '帮我调试代码', card3Prompt: '帮我调试这段代码',
+    card4: '头脑风暴项目创意', card4Prompt: '帮我头脑风暴一些项目创意',
+    inputPlaceholder: '输入消息... (Enter 发送, Shift+Enter 换行)',
+    inputHint: 'Enter 发送, Shift+Enter 换行',
+    uploadFile: '上传文件',
+    systemPrompt: '系统提示词', enterSystemPrompt: '输入系统提示词...',
+    savePrompt: '保存提示词', modelConfig: '模型配置',
+    primaryModel: '主模型', cheapModel: '经济模型', smartRouting: '智能路由',
+    serverStats: '服务器状态', uptime: '运行时间', totalMessages: '总消息数',
+    activeSessions: '活跃会话', registeredTools: '已注册工具',
+    availableProviders: '可用供应商',
+    // Dynamic messages
+    modelSwitched: '模型已切换为', modelSwitchFailed: '切换模型失败: ',
+    deleteConfirm: '确定删除这个对话吗？', noMessages: '没有消息可导出',
+    exported: '导出时间', user: '用户', assistant: '助手',
+    thinking: '思考中...', copy: '复制', copied: '已复制!',
+    promptUpdated: '系统提示词已更新', promptUpdateFailed: '更新失败: ',
+    noModel: '无模型', offline: '离线', notSet: '未设置',
+    enabled: '已启用', disabled: '已禁用', noProviders: '无可用供应商',
+    tokens: '令牌', toolCalls: '工具调用',
+    // Model descriptions
+    'desc:Fast & affordable': '快速实惠', 'desc:Deep reasoning': '深度推理',
+    'desc:Most capable': '最强能力', 'desc:Fast & cheap': '快速经济',
+    'desc:Balanced': '均衡', 'desc:Fast': '快速',
+    'desc:Fast multimodal': '快速多模态', 'desc:Advanced reasoning': '高级推理',
+    'desc:Alibaba flagship': '阿里旗舰', 'desc:ByteDance flagship': '字节旗舰',
+    // Settings tabs
+    tabGeneral: '通用', tabChannels: '渠道', tabVoice: '语音', tabSkills: '技能凭证',
+    channelManagement: '渠道管理', addChannel: '+ 添加', platform: '平台',
+    voicePipeline: '语音管线', voiceEnabled: '启用', sttModel: '模型', sttLanguage: '语言',
+    ttsVoice: '声音', ttsSpeed: '语速', saveVoice: '保存语音配置',
+    ecommerceMode: '电商模式', ecommerceEnabled: '启用', skillSecrets: '技能凭证',
+    save: '保存', cancel: '取消', editChannel: '编辑渠道', saveModel: '保存模型',
+    modelSaved: '模型配置已保存', logout: '登出', testVoice: '试听 TTS',
+    running: '运行中', stopped: '已停止', start: '启动', stop: '停止',
+    edit: '编辑', delete: '删除', channelSaved: '渠道配置已保存',
+    channelDeleted: '渠道已删除', channelStarted: '渠道已启动', channelStopped: '渠道已停止',
+    voiceSaved: '语音配置已保存', ecommerceToggled: '电商模式已更新',
+    confirmDelete: '确定删除该渠道吗？',
+  },
+  en: {
+    newChat: 'New Chat', searchPlaceholder: 'Search conversations...', exportChat: 'Export Chat',
+    settings: 'Settings', selectModel: 'Select Model', connecting: 'Connecting...',
+    connected: 'Connected', disconnected: 'Disconnected', loading: 'Loading...',
+    welcomeSub: 'Intelligent AI Agent Platform',
+    card1: 'Help me write a Python script', card1Prompt: 'Help me write a Python script',
+    card2: 'Explain a complex concept', card2Prompt: 'Explain quantum computing simply',
+    card3: 'Debug my code', card3Prompt: 'Debug this code for me',
+    card4: 'Brainstorm project ideas', card4Prompt: 'Brainstorm project ideas',
+    inputPlaceholder: 'Send a message... (Enter to send, Shift+Enter for new line)',
+    inputHint: 'Enter to send, Shift+Enter for new line',
+    uploadFile: 'Upload file',
+    systemPrompt: 'System Prompt', enterSystemPrompt: 'Enter system prompt...',
+    savePrompt: 'Save Prompt', modelConfig: 'Model Configuration',
+    primaryModel: 'Primary Model', cheapModel: 'Cheap Model', smartRouting: 'Smart Routing',
+    serverStats: 'Server Stats', uptime: 'Uptime', totalMessages: 'Total Messages',
+    activeSessions: 'Active Sessions', registeredTools: 'Registered Tools',
+    availableProviders: 'Available Providers',
+    modelSwitched: 'Model switched to', modelSwitchFailed: 'Failed to switch model: ',
+    deleteConfirm: 'Delete this conversation?', noMessages: 'No messages to export',
+    exported: 'Exported', user: 'User', assistant: 'Assistant',
+    thinking: 'Thinking...', copy: 'Copy', copied: 'Copied!',
+    promptUpdated: 'System prompt updated', promptUpdateFailed: 'Failed to update: ',
+    noModel: 'No model', offline: 'Offline', notSet: 'Not set',
+    enabled: 'Enabled', disabled: 'Disabled', noProviders: 'No providers registered',
+    tokens: 'tokens', toolCalls: 'tool calls',
+    'desc:Fast & affordable': 'Fast & affordable', 'desc:Deep reasoning': 'Deep reasoning',
+    'desc:Most capable': 'Most capable', 'desc:Fast & cheap': 'Fast & cheap',
+    'desc:Balanced': 'Balanced', 'desc:Fast': 'Fast',
+    'desc:Fast multimodal': 'Fast multimodal', 'desc:Advanced reasoning': 'Advanced reasoning',
+    'desc:Alibaba flagship': 'Alibaba flagship', 'desc:ByteDance flagship': 'ByteDance flagship',
+    // Settings tabs
+    tabGeneral: 'General', tabChannels: 'Channels', tabVoice: 'Voice', tabSkills: 'Skill Credentials',
+    channelManagement: 'Channel Management', addChannel: '+ Add', platform: 'Platform',
+    voicePipeline: 'Voice Pipeline', voiceEnabled: 'Enabled', sttModel: 'Model', sttLanguage: 'Language',
+    ttsVoice: 'Voice', ttsSpeed: 'Speed', saveVoice: 'Save Voice Config',
+    ecommerceMode: 'E-Commerce Mode', ecommerceEnabled: 'Enabled', skillSecrets: 'Skill Credentials',
+    save: 'Save', cancel: 'Cancel', editChannel: 'Edit Channel', saveModel: 'Save Model',
+    modelSaved: 'Model config saved',
+    running: 'Running', stopped: 'Stopped', start: 'Start', stop: 'Stop',
+    edit: 'Edit', delete: 'Delete', channelSaved: 'Channel config saved',
+    channelDeleted: 'Channel deleted', channelStarted: 'Channel started', channelStopped: 'Channel stopped',
+    voiceSaved: 'Voice config saved', ecommerceToggled: 'E-Commerce mode updated',
+    confirmDelete: 'Delete this channel?',
+  }
+};
+
+function t(key) { return (I18N[curLang] && I18N[curLang][key]) || (I18N.en[key]) || key; }
+
+function setLang(lang) {
+  curLang = lang;
+  localStorage.setItem('xjd_lang', lang);
+  // Update toggle buttons
+  $('langZh').classList.toggle('active', lang === 'zh');
+  $('langEn').classList.toggle('active', lang === 'en');
+  // Update all data-i18n elements
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.dataset.i18n;
+    // Skip elements whose text is dynamically set (like model name, stats values)
+    if (el.id === 'currentModelName' && currentModel.model) return;
+    if (el.id === 'connText' && ws && ws.readyState === 1) { el.textContent = t('connected'); return; }
+    if (el.id === 'settingProviders' && el.textContent !== t('loading')) return;
+    el.textContent = t(key);
+  });
+  // Update placeholders
+  document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
+  // Update title attributes
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+  // Update connection status text
+  if (ws) {
+    connText.textContent = ws.readyState === 1 ? t('connected') : t('disconnected');
+  }
+}
+const MODEL_PRESETS = {
+  deepseek:  { icon: '\u2728', models: [{id:'deepseek-chat', name:'DeepSeek Chat', desc:'Fast & affordable'},{id:'deepseek-reasoner', name:'DeepSeek Reasoner', desc:'Deep reasoning'}]},
+  openai:    { icon: '\uD83E\uDDE0', models: [{id:'gpt-4o', name:'GPT-4o', desc:'Most capable'},{id:'gpt-4o-mini', name:'GPT-4o Mini', desc:'Fast & cheap'}]},
+  anthropic: { icon: '\uD83E\uDDCA', models: [{id:'claude-sonnet-4-20250514', name:'Claude Sonnet 4', desc:'Balanced'},{id:'claude-3-5-haiku-20241022', name:'Claude 3.5 Haiku', desc:'Fast'}]},
+  google:    { icon: '\uD83D\uDD2E', models: [{id:'gemini-2.0-flash', name:'Gemini 2.0 Flash', desc:'Fast multimodal'},{id:'gemini-1.5-pro', name:'Gemini 1.5 Pro', desc:'Advanced reasoning'}]},
+  qwen:      { icon: '\uD83C\uDF19', models: [{id:'qwen-max', name:'Qwen Max', desc:'Alibaba flagship'},{id:'qwen-turbo', name:'Qwen Turbo', desc:'Fast'}]},
+  doubao:    { icon: '\uD83C\uDF31', models: [{id:'doubao-1.5-pro-256k', name:'Doubao 1.5 Pro', desc:'ByteDance flagship'}]},
+};
+
+// ── DOM refs ──
+const $ = id => document.getElementById(id);
+
+// CSRF-safe POST helper
+async function postJSON(url, body) {
+  const opts = {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-XJD-Request': '1'},
+  };
+  const token = localStorage.getItem('xjd_token');
+  if (token) opts.headers['Authorization'] = 'Bearer ' + token;
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  return fetch(url, opts);
+}
+async function postEmpty(url) {
+  const h = {'X-XJD-Request': '1'};
+  const token = localStorage.getItem('xjd_token');
+  if (token) h['Authorization'] = 'Bearer ' + token;
+  return fetch(url, {method: 'POST', headers: h});
+}
+function authHeaders() {
+  const h = {'X-XJD-Request': '1'};
+  const token = localStorage.getItem('xjd_token');
+  if (token) h['Authorization'] = 'Bearer ' + token;
+  return h;
+}
+
+const messagesEl = $('messages');
+const containerEl = $('messagesContainer');
+const inputEl = $('inputEl');
+const sendBtn = $('sendBtn');
+const connDot = $('connDot');
+const connText = $('connText');
+const welcomeEl = $('welcome');
+const modelBtn = $('modelBtn');
+const modelDropdown = $('modelDropdown');
+const modelList = $('modelList');
+const currentModelNameEl = $('currentModelName');
+const modelIconEl = $('modelIcon');
+const inputModelTag = $('inputModelTag');
+
+// ── Persistence ──
+function saveConversations() {
+  try {
+    const data = conversations.map(c => ({
+      id: c.id, title: c.title, created: c.created,
+      messages: (c.messages || []).slice(-200)
+    }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch(e) {
+    if (conversations.length > 5) {
+      conversations = conversations.slice(0, 5);
+      saveConversations();
+    }
+  }
+}
+
+function getActiveConv() {
+  return conversations.find(c => c.id === activeConvId);
+}
+
+function addMsgToConv(msg) {
+  const conv = getActiveConv();
+  if (conv) {
+    if (!conv.messages) conv.messages = [];
+    conv.messages.push(msg);
+    saveConversations();
+  }
+}
+
+// ── WebSocket ──
+let wsReconnectDelay = 1000;
+let wsHeartbeatTimer = null;
+let wsHasConnected = false;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const psid = localStorage.getItem('xjd_persistent_sid') || '';
+  const wsUrl = `${proto}//${location.host}/ws` + (psid ? `?session_id=${encodeURIComponent(psid)}` : '');
+  ws = new WebSocket(wsUrl);
+  ws.onopen = () => {
+    connDot.classList.add('ok');
+    connText.textContent = t('connected');
+    sendBtn.disabled = false;
+    wsReconnectDelay = 1000; // 重连成功，重置退避
+    subscribeInspector();
+    // 心跳
+    if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
+    wsHeartbeatTimer = setInterval(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({type: 'ping'}));
+      }
+    }, 30000);
+  };
+  ws.onclose = () => {
+    connDot.classList.remove('ok');
+    connText.textContent = t('disconnected');
+    sendBtn.disabled = true;
+    if (wsHeartbeatTimer) { clearInterval(wsHeartbeatTimer); wsHeartbeatTimer = null; }
+    // 指数退避重连: 1s → 2s → 4s → 8s → 16s → 30s max
+    setTimeout(connect, wsReconnectDelay);
+    wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000);
+  };
+  ws.onmessage = e => {
+    const data = JSON.parse(e.data);
+    if (data.type === 'pong') return; // 心跳回复，忽略
+    handleMessage(data);
+  };
+}
+
+function startStreamCounter() {
+  streamStartTime = Date.now();
+  streamTokenCount = 0;
+  $('streamCounter').classList.add('active');
+  streamTimer = setInterval(() => {
+    const elapsed = (Date.now() - streamStartTime) / 1000;
+    $('streamElapsed').textContent = elapsed.toFixed(1) + 's';
+    $('streamTokens').textContent = streamTokenCount;
+    $('streamSpeed').textContent = elapsed > 0 ? (streamTokenCount / elapsed).toFixed(1) : '0';
+  }, 100);
+}
+
+function stopStreamCounter() {
+  if (streamTimer) { clearInterval(streamTimer); streamTimer = null; }
+  setTimeout(() => $('streamCounter').classList.remove('active'), 2000);
+}
+
+function handleMessage(data) {
+  switch(data.type) {
+    case 'connected':
+      if (data.persistent_session_id) {
+        localStorage.setItem('xjd_persistent_sid', data.persistent_session_id);
+      }
+      if (!wsHasConnected && data.history && data.history.length) {
+        clearMessages();
+        hideWelcome();
+        const conv = getActiveConv();
+        if (conv) conv.messages = [];
+        for (const m of data.history) {
+          if (m.role === 'user') {
+            addUserMsg(m.content);
+            addMsgToConv({ role: 'user', content: m.content });
+          } else if (m.role === 'assistant') {
+            addBotMsg(m.content || '');
+            addMsgToConv({ role: 'bot', content: m.content || '' });
+          }
+        }
+        addSystemMsg('已恢复之前的对话');
+      } else if (!wsHasConnected) {
+        addSystemMsg(data.message);
+      }
+      wsHasConnected = true;
+      break;
+    case 'session_created':
+      if (data.persistent_session_id) {
+        localStorage.setItem('xjd_persistent_sid', data.persistent_session_id);
+      }
+      break;
+    case 'thinking':
+      hideWelcome();
+      if (!streaming) { streaming = true; startStreamCounter(); addBotMsg(''); }
+      appendThinking(data.content);
+      addMsgToConv({ role: 'thinking', content: data.content });
+      break;
+    case 'stream':
+      hideWelcome();
+      if (!streaming) { streaming = true; startStreamCounter(); addBotMsg(data.content); }
+      else { appendToLastBot(data.content); }
+      streamTokenCount += Math.ceil(data.content.length / 4);
+      if (autoTTSEnabled) ttsFeedChunk(data.content);
+      break;
+    case 'tool_call':
+      if (!streaming) { streaming = true; startStreamCounter(); addBotMsg(''); }
+      appendToolBadge(data.name, 'call');
+      addMsgToConv({ role: 'tool_call', name: data.name });
+      break;
+    case 'tool_result':
+      appendToolBadge(data.name, 'result');
+      addMsgToConv({ role: 'tool_result', name: data.name });
+      break;
+    case 'complete':
+      streaming = false;
+      sendBtn.disabled = false;
+      stopStreamCounter();
+      if (data.tokens || data.duration_ms) addStats(data.tokens, data.duration_ms, data.tool_calls);
+      removeTyping();
+      addMsgToConv({ role: 'bot', content: data.content || '', thinking: data.thinking || '',
+        tokens: data.tokens, duration_ms: data.duration_ms, tool_calls: data.tool_calls });
+      if (autoTTSEnabled) ttsFlush();
+      break;
+    case 'error':
+      addSystemMsg('\u274C ' + data.message);
+      streaming = false; sendBtn.disabled = false; stopStreamCounter(); removeTyping();
+      break;
+    case 'canvas_render':
+      renderCanvasComponent(data.component || data);
+      switchTab('canvas');
+      break;
+    case 'terminal_output':
+      termAppend(data.content || '', data.error ? 'cmd-error' : '');
+      break;
+    case 'terminal_complete':
+      termAppend(data.content || '', data.exit_code !== 0 ? 'cmd-error' : '');
+      if (data.exit_code !== undefined) termAppend(`[exit ${data.exit_code}]`, 'cmd-info');
+      break;
+    case 'inspector_event':
+      addInspectorEvent(data);
+      break;
+    case 'context_activity':
+      // 实时追加 activity
+      if (typeof loadActivity === 'function') loadActivity();
+      break;
+  }
+}
+
+// ── Messages ──
+function hideWelcome() { if (welcomeEl) welcomeEl.style.display = 'none'; }
+
+function addSystemMsg(text) {
+  const row = document.createElement('div');
+  row.className = 'msg-row system';
+  row.innerHTML = `<div class="msg-content"><div class="msg-bubble">${escapeHtml(text)}</div></div>`;
+  messagesEl.appendChild(row);
+  scrollBottom();
+}
+
+function addUserMsg(text) {
+  hideWelcome();
+  const row = document.createElement('div');
+  row.className = 'msg-row user';
+  row.innerHTML = `<div class="msg-avatar">\uD83D\uDC64</div><div class="msg-content"><div class="msg-bubble">${escapeHtml(text)}</div></div>`;
+  messagesEl.appendChild(row);
+  scrollBottom();
+}
+
+function addBotMsg(text) {
+  const row = document.createElement('div');
+  row.className = 'msg-row bot';
+  row.innerHTML = `<div class="msg-avatar">\uD83E\uDD16</div><div class="msg-content"><div class="msg-bubble bot-text"></div></div>`;
+  row.querySelector('.bot-text').innerHTML = renderMarkdown(text);
+  messagesEl.appendChild(row);
+  scrollBottom();
+}
+
+function appendToLastBot(text) {
+  const bubbles = messagesEl.querySelectorAll('.msg-row.bot .bot-text');
+  const last = bubbles[bubbles.length - 1];
+  if (last) {
+    last._rawText = (last._rawText || '') + text;
+    last.innerHTML = renderMarkdown(last._rawText);
+  }
+  scrollBottom();
+}
+
+function appendThinking(text) {
+  const rows = messagesEl.querySelectorAll('.msg-row.bot .msg-content');
+  const last = rows[rows.length - 1];
+  if (!last) return;
+  // Check if thinking block already exists
+  let block = last.querySelector('.thinking-block');
+  if (!block) {
+    block = document.createElement('div');
+    block.className = 'thinking-block';
+    block.innerHTML = `<div class="thinking-header" onclick="this.querySelector('.arrow').classList.toggle('open');this.nextElementSibling.classList.toggle('open')"><span class="arrow">\u25B6</span> ${t('thinking')}</div><div class="thinking-body"></div>`;
+    // Insert before the bubble
+    const bubble = last.querySelector('.msg-bubble');
+    if (bubble) last.insertBefore(block, bubble);
+    else last.appendChild(block);
+  }
+  const body = block.querySelector('.thinking-body');
+  body.textContent += text;
+  scrollBottom();
+}
+
+function appendToolBadge(name, type) {
+  const rows = messagesEl.querySelectorAll('.msg-row.bot .msg-content');
+  const last = rows[rows.length - 1];
+  if (!last) return;
+  const badge = document.createElement('div');
+  badge.className = `tool-badge ${type === 'result' ? 'result' : ''}`;
+  badge.textContent = type === 'call' ? `\uD83D\uDD27 ${name}` : `\u2705 ${name}`;
+  last.appendChild(badge);
+  scrollBottom();
+}
+
+function addStats(tokens, duration, toolCalls) {
+  const rows = messagesEl.querySelectorAll('.msg-row.bot .msg-content');
+  const last = rows[rows.length - 1];
+  if (!last) return;
+  let text = '';
+  if (tokens) text += `${tokens} ${t('tokens')}`;
+  if (duration) text += `${text?' \u00B7 ':''}${duration}ms`;
+  if (toolCalls) text += ` \u00B7 ${toolCalls} ${t('toolCalls')}`;
+  if (text) {
+    const div = document.createElement('div');
+    div.className = 'msg-stats';
+    div.textContent = text;
+    last.appendChild(div);
+  }
+}
+
+function addTyping() {
+  removeTyping();
+  const row = document.createElement('div');
+  row.className = 'msg-row bot'; row.id = 'typingRow';
+  row.innerHTML = `<div class="msg-avatar">\uD83E\uDD16</div><div class="msg-content"><div class="typing"><span></span><span></span><span></span></div></div>`;
+  messagesEl.appendChild(row);
+  scrollBottom();
+}
+function removeTyping() { const el = $('typingRow'); if (el) el.remove(); }
+function scrollBottom() { containerEl.scrollTop = containerEl.scrollHeight; }
+
+// ── Send ──
+function send() {
+  const text = inputEl.value.trim();
+  if (!text || !ws || ws.readyState !== 1) return;
+  addUserMsg(text);
+  addMsgToConv({ role: 'user', content: text });
+  ws.send(JSON.stringify({ type: 'chat', message: text }));
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  sendBtn.disabled = true;
+  addTyping();
+  // Update conversation title
+  const conv = getActiveConv();
+  if (conv && (conv.title === 'New Chat' || conv.title === t('newChat'))) {
+    conv.title = text.substring(0, 30) + (text.length > 30 ? '...' : '');
+    renderChatList();
+    saveConversations();
+  }
+}
+
+function quickPrompt(text) { inputEl.value = text; send(); }
+
+// ── Markdown (lightweight) ──
+function renderMarkdown(text) {
+  if (!text) return '';
+  let html = escapeHtml(text);
+  // Code blocks
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    return `<pre><code class="lang-${lang}">${code.trim()}</code><button class="copy-btn" onclick="copyCode(this)">${t('copy')}</button></pre>`;
+  });
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Images — 只允许安全 URL scheme
+  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => {
+    if (/^(https?:\/\/|\/)/i.test(url)) return `<img src="${url}" alt="${alt}" loading="lazy">`;
+    return alt || '';
+  });
+  // Bold
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // Links — 只允许安全 URL scheme
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
+    if (/^(https?:\/\/|\/)/i.test(url)) return `<a href="${url}" target="_blank" rel="noopener">${text}</a>`;
+    return text;
+  });
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  // Lists
+  html = html.replace(/^[-*] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
+  // Numbered lists
+  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+  // Blockquote
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+  // HR
+  html = html.replace(/^---$/gm, '<hr>');
+  // Paragraphs
+  html = html.replace(/\n\n/g, '</p><p>');
+  html = html.replace(/\n/g, '<br>');
+  return `<p>${html}</p>`.replace(/<p><\/p>/g, '');
+}
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+function copyCode(btn) {
+  const code = btn.previousElementSibling.textContent;
+  navigator.clipboard.writeText(code);
+  btn.textContent = t('copied');
+  setTimeout(() => btn.textContent = t('copy'), 1500);
+}
+
+// ── Model Selector ──
+function toggleModelDropdown() {
+  const showing = modelDropdown.classList.toggle('show');
+  modelBtn.classList.toggle('open', showing);
+  if (showing) { document.addEventListener('click', closeDropdownOutside); loadModels(); }
+}
+
+function closeDropdownOutside(e) {
+  if (!$('modelSelector').contains(e.target)) {
+    modelDropdown.classList.remove('show');
+    modelBtn.classList.remove('open');
+    document.removeEventListener('click', closeDropdownOutside);
+  }
+}
+
+async function loadModels() {
+  try {
+    const res = await fetch('/api/admin/models', {headers: authHeaders()});
+    const data = await res.json();
+    if (data.primary) {
+      currentModel = { provider: data.primary.provider, model: data.primary.model };
+      updateModelDisplay();
+    }
+    renderModelList(data);
+  } catch(e) { console.warn('Failed to load models', e); }
+}
+
+function renderModelList(serverData) {
+  let html = '';
+  for (const [provKey, prov] of Object.entries(MODEL_PRESETS)) {
+    html += `<div class="model-group"><div class="model-group-title">${prov.icon} ${provKey.charAt(0).toUpperCase() + provKey.slice(1)}</div>`;
+    for (const m of prov.models) {
+      const isActive = provKey === currentModel.provider && m.id === currentModel.model;
+      const isPrimary = serverData.primary && provKey === serverData.primary.provider && m.id === serverData.primary.model;
+      html += `<div class="model-option ${isActive ? 'active' : ''}" onclick="selectModel('${provKey}','${m.id}')">
+        <span class="model-option-icon">${prov.icon}</span>
+        <div class="model-option-info"><div class="model-option-name">${m.name}</div><div class="model-option-desc">${t('desc:'+m.desc)}</div></div>
+        ${isPrimary ? '<span class="model-option-badge">Active</span>' : ''}
+      </div>`;
+    }
+    html += '</div>';
+  }
+  modelList.innerHTML = html;
+}
+
+async function selectModel(provider, model) {
+  currentModel = { provider, model };
+  updateModelDisplay();
+  modelDropdown.classList.remove('show');
+  modelBtn.classList.remove('open');
+  try {
+    await postJSON('/api/admin/config', { primary_provider: provider, primary_model: model });
+    addSystemMsg(`${t('modelSwitched')} ${provider}:${model}`);
+  } catch(e) { addSystemMsg(t('modelSwitchFailed') + e.message); }
+}
+
+function updateModelDisplay() {
+  const prov = MODEL_PRESETS[currentModel.provider];
+  const icon = prov ? prov.icon : '\u2728';
+  const name = currentModel.model || 'Unknown';
+  const shortName = name.length > 25 ? name.substring(0, 22) + '...' : name;
+  modelIconEl.textContent = icon;
+  currentModelNameEl.textContent = shortName;
+  inputModelTag.textContent = `${icon} ${currentModel.provider}:${shortName}`;
+}
+
+// ── Conversations ──
+function newChat() {
+  const id = 'conv-' + Date.now();
+  conversations.unshift({ id, title: t('newChat'), created: Date.now(), messages: [] });
+  activeConvId = id;
+  renderChatList();
+  clearMessages();
+  saveConversations();
+  // 通知后端创建新 session + 重置引擎
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'new_session' }));
+  }
+  fetch('/api/reset', { method: 'POST', headers: {'X-XJD-Request': '1'} }).catch(() => {});
+  $('sidebar').classList.remove('open');
+}
+
+function switchChat(id) {
+  activeConvId = id;
+  renderChatList();
+  restoreMessages(id);
+  $('sidebar').classList.remove('open');
+}
+
+function clearMessages() {
+  messagesEl.innerHTML = '';
+  welcomeEl.style.display = '';
+  messagesEl.appendChild(welcomeEl);
+}
+
+function restoreMessages(convId) {
+  clearMessages();
+  const conv = conversations.find(c => c.id === convId);
+  if (!conv || !conv.messages || conv.messages.length === 0) return;
+  hideWelcome();
+  for (const msg of conv.messages) {
+    if (msg.role === 'user') addUserMsg(msg.content);
+    else if (msg.role === 'bot') {
+      addBotMsg(msg.content || '');
+      if (msg.thinking) appendThinking(msg.thinking);
+      if (msg.tokens || msg.duration_ms) addStats(msg.tokens, msg.duration_ms, msg.tool_calls);
+    }
+    else if (msg.role === 'thinking') { /* already shown with bot msg */ }
+    else if (msg.role === 'tool_call') appendToolBadge(msg.name, 'call');
+    else if (msg.role === 'tool_result') appendToolBadge(msg.name, 'result');
+  }
+}
+
+function renderChatList() {
+  const list = $('chatList');
+  list.innerHTML = conversations.map(c =>
+    `<div class="chat-item ${c.id === activeConvId ? 'active' : ''}" onclick="switchChat('${c.id}')">
+      <span class="chat-item-icon">\uD83D\uDCAC</span>
+      <span class="chat-item-text">${escapeHtml(c.title)}</span>
+      <span class="chat-item-actions">
+        <button onclick="event.stopPropagation();renameChat('${c.id}')" title="Rename">\u270F\uFE0F</button>
+        <button onclick="event.stopPropagation();deleteChat('${c.id}')" title="Delete">\uD83D\uDDD1\uFE0F</button>
+      </span>
+    </div>`
+  ).join('');
+}
+
+function renameChat(id) {
+  const conv = conversations.find(c => c.id === id);
+  if (!conv) return;
+  const item = document.querySelector(`.chat-item[onclick*="${id}"] .chat-item-text`);
+  if (!item) return;
+  const input = document.createElement('input');
+  input.className = 'chat-item-rename';
+  input.value = conv.title;
+  item.replaceWith(input);
+  input.focus();
+  input.select();
+  const finish = () => {
+    const newTitle = input.value.trim() || conv.title;
+    conv.title = newTitle;
+    saveConversations();
+    renderChatList();
+  };
+  input.addEventListener('blur', finish);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(); }
+    if (e.key === 'Escape') { renderChatList(); }
+  });
+}
+
+function deleteChat(id) {
+  if (!confirm(t('deleteConfirm'))) return;
+  conversations = conversations.filter(c => c.id !== id);
+  saveConversations();
+  if (activeConvId === id) {
+    if (conversations.length > 0) { switchChat(conversations[0].id); }
+    else { newChat(); }
+  } else { renderChatList(); }
+}
+
+// ── Search ──
+function filterChats(query) {
+  const q = query.toLowerCase();
+  const items = document.querySelectorAll('.chat-item');
+  items.forEach(item => {
+    const text = item.querySelector('.chat-item-text').textContent.toLowerCase();
+    // Also search message content
+    const convId = item.getAttribute('onclick').match(/'(conv-\d+)'/)?.[1];
+    const conv = conversations.find(c => c.id === convId);
+    let found = text.includes(q);
+    if (!found && conv && conv.messages) {
+      found = conv.messages.some(m => (m.content || '').toLowerCase().includes(q));
+    }
+    item.style.display = found ? '' : 'none';
+  });
+}
+
+// ── Export ──
+function exportChat() {
+  const conv = getActiveConv();
+  if (!conv || !conv.messages || conv.messages.length === 0) {
+    alert(t('noMessages'));
+    return;
+  }
+  let md = `# ${conv.title}\n\n${t('exported')}: ${new Date().toLocaleString()}\n\n---\n\n`;
+  for (const msg of conv.messages) {
+    if (msg.role === 'user') md += `**${t('user')}:** ${msg.content}\n\n`;
+    else if (msg.role === 'bot') {
+      if (msg.thinking) md += `<details><summary>${t('thinking')}</summary>\n\n${msg.thinking}\n\n</details>\n\n`;
+      md += `**${t('assistant')}:** ${msg.content}\n\n`;
+      if (msg.tokens) md += `*${msg.tokens} ${t('tokens')}, ${msg.duration_ms}ms*\n\n`;
+    }
+    else if (msg.role === 'tool_call') md += `> Tool: ${msg.name}\n\n`;
+  }
+  const blob = new Blob([md], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${conv.title.replace(/[^a-zA-Z0-9]/g, '_')}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── File Upload ──
+function handleFileUpload(input) {
+  const files = Array.from(input.files);
+  if (!files.length) return;
+  pendingFiles = files;
+  const preview = $('filePreview');
+  preview.style.display = 'flex';
+  preview.innerHTML = files.map((f, i) =>
+    `<span class="file-chip">${escapeHtml(f.name)} <button onclick="removeFile(${i})">\u00D7</button></span>`
+  ).join('');
+}
+
+function removeFile(idx) {
+  pendingFiles.splice(idx, 1);
+  const preview = $('filePreview');
+  if (pendingFiles.length === 0) { preview.style.display = 'none'; preview.innerHTML = ''; }
+  else {
+    preview.innerHTML = pendingFiles.map((f, i) =>
+      `<span class="file-chip">${escapeHtml(f.name)} <button onclick="removeFile(${i})">\u00D7</button></span>`
+    ).join('');
+  }
+}
+
+// ── Sidebar ──
+function toggleSidebar() { $('sidebar').classList.toggle('open'); }
+
+// ── Settings ──
+function openSettings() {
+  $('settingsOverlay').classList.add('show');
+  $('settingsPanel').classList.add('show');
+  $('sidebar').classList.remove('open');
+  loadSettings();
+  loadChannels();
+  loadVoiceConfig();
+  loadEcommerceConfig();
+}
+function closeSettings() {
+  $('settingsOverlay').classList.remove('show');
+  $('settingsPanel').classList.remove('show');
+}
+
+async function doLogout() {
+  try { await postEmpty('/api/auth/logout'); } catch {}
+  localStorage.removeItem('xjd_token');
+  location.reload();
+}
+
+async function loadSettings() {
+  try {
+    const hdrs = {headers: authHeaders()};
+    const [modelsRes, statsRes, toolsRes, promptRes] = await Promise.all([
+      fetch('/api/admin/models', hdrs).then(r => r.json()).catch(() => ({})),
+      fetch('/api/admin/stats', hdrs).then(r => r.json()).catch(() => ({})),
+      fetch('/api/admin/tools', hdrs).then(r => r.json()).catch(() => ({ count: 0 })),
+      fetch('/api/admin/system-prompt', hdrs).then(r => r.json()).catch(() => ({ prompt: '' })),
+    ]);
+    $('settingProvider').value = modelsRes.primary?.provider || 'deepseek';
+    $('settingModelName').value = modelsRes.primary?.model || '';
+    $('settingBaseUrl').value = modelsRes.primary?.base_url || '';
+    if (statsRes.uptime_seconds !== undefined) {
+      const m = Math.floor(statsRes.uptime_seconds / 60);
+      $('settingUptime').textContent = m < 60 ? `${m}m` : `${Math.floor(m/60)}h ${m%60}m`;
+    }
+    $('settingMsgs').textContent = statsRes.total_messages || '0';
+    $('settingSessions').textContent = statsRes.active_ws || '0';
+    $('settingTools').textContent = toolsRes.count || '0';
+    $('systemPromptEl').value = promptRes.prompt || '';
+    const providers = modelsRes.providers || [];
+    $('settingProviders').innerHTML = providers.length
+      ? providers.map(p => `<div style="padding:4px 0;">\u2022 ${p}</div>`).join('')
+      : t('noProviders');
+  } catch(e) { console.warn('Settings load failed', e); }
+}
+
+async function saveSystemPrompt() {
+  const prompt = $('systemPromptEl').value;
+  try {
+    const res = await postJSON('/api/admin/system-prompt', { prompt });
+    const data = await res.json();
+    if (data.status === 'ok') addSystemMsg(t('promptUpdated'));
+    else addSystemMsg(t('promptUpdateFailed') + (data.error || 'unknown'));
+  } catch(e) { addSystemMsg(t('promptUpdateFailed') + e.message); }
+}
+
+async function saveModelConfig() {
+  const provider = $('settingProvider').value;
+  const model = $('settingModelName').value.trim();
+  const api_key = $('settingApiKey').value.trim();
+  const base_url = $('settingBaseUrl').value.trim();
+  if (!model) { addSystemMsg(curLang==='zh'?'请填写模型名称':'Model name required'); return; }
+  if (!api_key) { addSystemMsg(curLang==='zh'?'请填写 API Key':'API Key required'); return; }
+  try {
+    const res = await postJSON('/api/admin/model-config', { provider, model, api_key, base_url });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      addSystemMsg(t('modelSaved'));
+      currentModel = { provider, model };
+      updateModelDisplay();
+      $('settingApiKey').value = '';
+    } else addSystemMsg(data.error || 'Save failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+
+// ── Settings Tabs & Gateway Config ──
+let _platformSchemas = null;
+let _editingPlatform = null;
+
+function switchSettingsTab(tab) {
+  document.querySelectorAll('.settings-tab').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.settings-tab-content').forEach(el => el.classList.remove('active'));
+  const idx = ['general','channels','voice','skills'].indexOf(tab);
+  document.querySelectorAll('.settings-tab')[idx]?.classList.add('active');
+  $('settingsTab' + tab.charAt(0).toUpperCase() + tab.slice(1))?.classList.add('active');
+}
+
+async function loadPlatformSchemas() {
+  if (_platformSchemas) return _platformSchemas;
+  try {
+    const res = await fetch('/api/admin/gateway/schemas', {headers: authHeaders()});
+    _platformSchemas = await res.json();
+    return _platformSchemas;
+  } catch { return {}; }
+}
+
+async function loadChannels() {
+  try {
+    const [data, schemas] = await Promise.all([
+      fetch('/api/admin/gateway/channels', {headers: authHeaders()}).then(r => r.json()).catch(() => ({})),
+      loadPlatformSchemas(),
+    ]);
+    const channelsObj = data.channels || {};
+    const channels = Object.entries(channelsObj).map(([platform, info]) => ({
+      platform, ...info,
+    }));
+    const list = $('channelList');
+    if (!channels.length) { list.innerHTML = `<div style="color:var(--text-tertiary);font-size:13px;padding:8px 0;">${curLang==='zh'?'暂无渠道配置':'No channels configured'}</div>`; return; }
+    list.innerHTML = channels.map(ch => {
+      const schema = schemas[ch.platform] || {};
+      const name = curLang === 'zh' ? (schema.name || ch.platform) : (schema.name_en || ch.platform);
+      const isRunning = ch.running;
+      const statusCls = isRunning ? 'running' : 'stopped';
+      const statusText = isRunning ? t('running') : t('stopped');
+      const mode = ch.config?.mode || '';
+      const modeLabel = mode ? ` (${mode})` : '';
+      return `<div class="channel-card">
+        <div class="channel-card-info">
+          <div class="channel-card-name">${name}${modeLabel}</div>
+          <div class="channel-card-status"><span class="status-dot ${statusCls}"></span>${statusText}${ch.bot_user ? ' · ' + ch.bot_user : ''}</div>
+        </div>
+        <div class="channel-card-actions">
+          ${isRunning
+            ? `<button onclick="stopChannel('${ch.platform}')">${t('stop')}</button>`
+            : `<button onclick="startChannel('${ch.platform}')">${t('start')}</button>`}
+          <button onclick="editChannel('${ch.platform}')">${t('edit')}</button>
+          <button onclick="deleteChannel('${ch.platform}')">${t('delete')}</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) { console.warn('loadChannels failed', e); }
+}
+
+async function showAddChannel() {
+  _editingPlatform = null;
+  $('channelFormTitle').textContent = t('addChannel');
+  $('channelForm').style.display = '';
+  const schemas = await loadPlatformSchemas();
+  const sel = $('channelPlatformSelect');
+  sel.innerHTML = Object.entries(schemas).map(([k, v]) =>
+    `<option value="${k}">${curLang==='zh' ? v.name : v.name_en}</option>`
+  ).join('');
+  sel.disabled = false;
+  onPlatformSelect();
+}
+
+async function editChannel(platform) {
+  _editingPlatform = platform;
+  $('channelFormTitle').textContent = t('editChannel');
+  $('channelForm').style.display = '';
+  const schemas = await loadPlatformSchemas();
+  const sel = $('channelPlatformSelect');
+  sel.innerHTML = `<option value="${platform}">${curLang==='zh' ? schemas[platform]?.name : schemas[platform]?.name_en}</option>`;
+  sel.disabled = true;
+  onPlatformSelect();
+  // Fill existing values
+  try {
+    const data = await fetch('/api/admin/gateway/channels', {headers: authHeaders()}).then(r => r.json());
+    const channelsObj = data.channels || {};
+    const ch = channelsObj[platform];
+    if (ch?.config) {
+      Object.entries(ch.config).forEach(([k, v]) => {
+        const el = document.getElementById('cf_' + k);
+        if (el) el.value = (v === '***' ? '' : v) || '';
+      });
+      updateConditionalFields();
+    }
+  } catch {}
+}
+
+function onPlatformSelect() {
+  const platform = $('channelPlatformSelect').value;
+  if (!_platformSchemas || !_platformSchemas[platform]) { $('channelFields').innerHTML = ''; return; }
+  const fields = _platformSchemas[platform].fields || [];
+  const inputStyle = 'flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;';
+  $('channelFields').innerHTML = fields.map(f => {
+    const label = curLang === 'zh' ? f.label_zh : f.label;
+    const req = f.required ? ' *' : '';
+    const showWhen = f.show_when ? ` data-show-when='${JSON.stringify(f.show_when)}'` : '';
+    let input;
+    if (f.type === 'select' && f.options) {
+      const opts = f.options.map(o => {
+        const optLabel = curLang === 'zh' ? o.label_zh : o.label;
+        const sel = f.default === o.value ? ' selected' : '';
+        return `<option value="${o.value}"${sel}>${optLabel}</option>`;
+      }).join('');
+      input = `<select id="cf_${f.key}" style="${inputStyle}" onchange="updateConditionalFields()">${opts}</select>`;
+    } else {
+      const type = f.type === 'password' ? 'password' : f.type === 'number' ? 'number' : 'text';
+      const val = f.default !== undefined ? ` value="${f.default}"` : '';
+      input = `<input type="${type}" id="cf_${f.key}" placeholder="${f.label}"${val} style="${inputStyle}">`;
+    }
+    return `<div class="setting-row" id="row_cf_${f.key}"${showWhen}><span class="setting-label">${label}${req}</span>${input}</div>`;
+  }).join('');
+  updateConditionalFields();
+}
+
+function updateConditionalFields() {
+  const rows = document.querySelectorAll('#channelFields .setting-row[data-show-when]');
+  rows.forEach(row => {
+    const cond = JSON.parse(row.getAttribute('data-show-when'));
+    let visible = true;
+    for (const [key, val] of Object.entries(cond)) {
+      const el = document.getElementById('cf_' + key);
+      if (!el || el.value !== val) { visible = false; break; }
+    }
+    row.style.display = visible ? '' : 'none';
+  });
+}
+
+async function saveChannel() {
+  const platform = $('channelPlatformSelect').value;
+  if (!_platformSchemas?.[platform]) return;
+  const config = {};
+  _platformSchemas[platform].fields.forEach(f => {
+    const row = document.getElementById('row_cf_' + f.key);
+    if (row && row.style.display === 'none') return;
+    const el = document.getElementById('cf_' + f.key);
+    if (el && el.value) config[f.key] = f.type === 'number' ? Number(el.value) : el.value;
+  });
+  try {
+    const res = await postJSON('/api/admin/gateway/channels', { platform, config });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      addSystemMsg(t('channelSaved'));
+      hideChannelForm();
+      // 保存后自动启动
+      await startChannel(platform);
+      loadChannels();
+    }
+    else addSystemMsg(data.error || 'Save failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+
+function hideChannelForm() {
+  $('channelForm').style.display = 'none';
+  _editingPlatform = null;
+}
+
+async function startChannel(platform) {
+  try {
+    const res = await postEmpty(`/api/admin/gateway/channels/${platform}/start`);
+    const data = await res.json();
+    if (data.status === 'ok') { addSystemMsg(t('channelStarted') + ': ' + platform); loadChannels(); }
+    else addSystemMsg(data.error || 'Start failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+
+async function stopChannel(platform) {
+  try {
+    const res = await postEmpty(`/api/admin/gateway/channels/${platform}/stop`);
+    const data = await res.json();
+    if (data.status === 'ok') { addSystemMsg(t('channelStopped') + ': ' + platform); loadChannels(); }
+    else addSystemMsg(data.error || 'Stop failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+
+async function deleteChannel(platform) {
+  if (!confirm(t('confirmDelete'))) return;
+  try {
+    const res = await fetch(`/api/admin/gateway/channels/${platform}`, { method: 'DELETE', headers: {'X-XJD-Request': '1'} });
+    const data = await res.json();
+    if (data.status === 'ok') { addSystemMsg(t('channelDeleted') + ': ' + platform); loadChannels(); }
+    else addSystemMsg(data.error || 'Delete failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+
+async function loadVoiceConfig() {
+  try {
+    const res = await fetch('/api/admin/gateway/voice', {headers: authHeaders()}).then(r => r.json());
+    const data = res.voice || res;
+    $('voiceEnabled').checked = !!data.enabled;
+    if (data.stt_provider) $('sttProvider').value = data.stt_provider;
+    if (data.stt_model) $('sttModel').value = data.stt_model;
+    $('sttLanguage').value = data.stt_language || '';
+    $('sttApiKey').value = data.stt_api_key || '';
+    $('sttBaseUrl').value = data.stt_base_url || '';
+    if (data.tts_provider) $('ttsProvider').value = data.tts_provider;
+    if (data.tts_voice) $('ttsVoice').value = data.tts_voice;
+    if (data.tts_speed) $('ttsSpeed').value = data.tts_speed;
+    $('ttsApiKey').value = data.tts_api_key || '';
+    $('ttsBaseUrl').value = data.tts_base_url || '';
+  } catch {}
+}
+
+async function saveVoiceConfig() {
+  const body = {
+    enabled: $('voiceEnabled').checked,
+    stt_provider: $('sttProvider').value,
+    stt_model: $('sttModel').value,
+    stt_language: $('sttLanguage').value || 'auto',
+    stt_api_key: $('sttApiKey').value,
+    stt_base_url: $('sttBaseUrl').value,
+    tts_provider: $('ttsProvider').value,
+    tts_voice: $('ttsVoice').value,
+    tts_speed: parseFloat($('ttsSpeed').value) || 1.0,
+    tts_api_key: $('ttsApiKey').value,
+    tts_base_url: $('ttsBaseUrl').value,
+  };
+  try {
+    const res = await postJSON('/api/admin/gateway/voice', body);
+    const data = await res.json();
+    if (data.status === 'ok') addSystemMsg(t('voiceSaved'));
+    else addSystemMsg(data.error || 'Save failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+
+let _ttsDebounce = null;
+function debounceTTS() {
+  clearTimeout(_ttsDebounce);
+  _ttsDebounce = setTimeout(() => testVoice(), 800);
+}
+
+function toggleAutoTTS() {
+  autoTTSEnabled = !autoTTSEnabled;
+  localStorage.setItem('xjd_auto_tts', autoTTSEnabled ? '1' : '0');
+  const btn = $('autoTTSBtn');
+  if (btn) btn.style.opacity = autoTTSEnabled ? '1' : '0.4';
+  if (!autoTTSEnabled) ttsStop();
+}
+
+// ── 分句流式 TTS (预加载) ──
+let _ttsBuf = '';
+let _ttsQueue = [];       // 待合成文本队列
+let _ttsReady = [];       // 已合成音频队列
+let _ttsPlaying = false;
+let _ttsFetching = false;
+const _ttsSplitRe = /[。！？.!?\n]/;
+
+function ttsFeedChunk(chunk) {
+  _ttsBuf += chunk;
+  let idx;
+  while ((idx = _ttsBuf.search(_ttsSplitRe)) !== -1) {
+    const sentence = _ttsBuf.slice(0, idx + 1).trim();
+    _ttsBuf = _ttsBuf.slice(idx + 1);
+    if (sentence) ttsEnqueue(sentence);
+  }
+}
+
+function ttsFlush() {
+  const rest = _ttsBuf.replace(/[#*`>\-|]/g, '').trim();
+  _ttsBuf = '';
+  if (rest) ttsEnqueue(rest);
+}
+
+function ttsStop() {
+  _ttsBuf = '';
+  _ttsQueue = [];
+  _ttsReady = [];
+  _ttsPlaying = false;
+  _ttsFetching = false;
+  if (_ttsAudio) { _ttsAudio.pause(); _ttsAudio = null; }
+}
+
+function ttsEnqueue(text) {
+  const clean = text.replace(/```[\s\S]*?```/g, '').replace(/[#*`>\-|]/g, '').trim();
+  if (!clean) return;
+  _ttsQueue.push(clean);
+  ttsPump();
+}
+
+// 持续预加载：把文本队列转成音频队列
+async function ttsPump() {
+  if (_ttsFetching) return;
+  if (_ttsQueue.length === 0) return;
+  _ttsFetching = true;
+  const text = _ttsQueue.shift();
+  try {
+    const res = await postJSON('/api/admin/gateway/voice/test', { text });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.audio) {
+        _ttsReady.push('data:audio/' + (data.format || 'mp3') + ';base64,' + data.audio);
+      }
+    }
+  } catch(e) { console.warn('[TTS] fetch failed:', e); }
+  _ttsFetching = false;
+  // 继续预加载下一句
+  if (_ttsQueue.length > 0) ttsPump();
+  // 如果没在播放，开始播
+  if (!_ttsPlaying) ttsPlayNext();
+}
+
+function ttsPlayNext() {
+  if (_ttsReady.length === 0) { _ttsPlaying = false; return; }
+  _ttsPlaying = true;
+  const src = _ttsReady.shift();
+  _ttsAudio = new Audio(src);
+  _ttsAudio.onended = () => ttsPlayNext();
+  _ttsAudio.onerror = () => ttsPlayNext();
+  _ttsAudio.play().catch(() => ttsPlayNext());
+}
+
+async function testVoice() {
+  const area = $('voiceTestArea');
+  const status = $('voiceTestStatus');
+  const audio = $('voiceTestAudio');
+  area.style.display = 'block';
+  status.textContent = 'Generating...';
+
+  const text = $('voiceTestText').value || '你好，这是一段语音测试。';
+  try {
+    const res = await postJSON('/api/admin/gateway/voice/test', { text });
+    if (!res.ok) {
+      const errText = await res.text();
+      status.textContent = `HTTP ${res.status}: ${errText}`;
+      return;
+    }
+    const data = await res.json();
+    if (data.error) {
+      status.textContent = 'Error: ' + data.error;
+      return;
+    }
+    if (!data.audio) {
+      status.textContent = 'Error: No audio data in response';
+      return;
+    }
+    audio.src = 'data:audio/' + (data.format || 'mp3') + ';base64,' + data.audio;
+    audio.load();
+    audio.play().catch(() => {});
+    status.textContent = `OK — ${data.format}, ${(data.size / 1024).toFixed(1)} KB`;
+  } catch(e) {
+    status.textContent = 'Request failed: ' + e.message;
+  }
+}
+
+async function loadEcommerceConfig() {
+  try {
+    const data = await fetch('/api/admin/gateway/ecommerce', {headers: authHeaders()}).then(r => r.json());
+    $('ecommerceEnabled').checked = !!data.ecommerce_mode;
+  } catch {}
+  loadSkillSecrets();
+}
+
+async function toggleEcommerce() {
+  const enabled = $('ecommerceEnabled').checked;
+  try {
+    const res = await postJSON('/api/admin/gateway/ecommerce', { enabled });
+    const data = await res.json();
+    if (data.status === 'ok') addSystemMsg(t('ecommerceToggled'));
+    else addSystemMsg(data.error || 'Toggle failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+
+async function loadSkillSecrets() {
+  const container = $('skillSecretsContainer');
+  if (!container) return;
+  try {
+    const data = await fetch('/api/admin/skill-secrets', {headers: authHeaders()}).then(r => r.json());
+    if (!data.skills || !data.skills.length) {
+      container.innerHTML = '<div class="settings-section"><div style="color:var(--text-tertiary);font-size:13px;">' +
+        (curLang === 'zh' ? '暂无需要配置凭证的技能' : 'No skills require credentials') + '</div></div>';
+      return;
+    }
+    container.innerHTML = '';
+    for (const skill of data.skills) {
+      await renderSkillSecretSection(container, skill);
+    }
+  } catch(e) { container.innerHTML = '<div style="color:var(--red);font-size:13px;">Load failed: ' + e.message + '</div>'; }
+}
+
+async function renderSkillSecretSection(container, skill) {
+  try {
+    const data = await fetch('/api/admin/skill-secrets/' + encodeURIComponent(skill.skill_id), {headers: authHeaders()}).then(r => r.json());
+    const section = document.createElement('div');
+    section.className = 'settings-section';
+    const statusColor = skill.configured === skill.total_secrets ? 'var(--green)' : 'var(--orange)';
+    const statusText = skill.configured + '/' + skill.total_secrets;
+    let html = '<div class="settings-section-title">' + escapeHtml(data.skill_name) +
+      ' <span style="font-size:11px;color:' + statusColor + '">(' + statusText + ')</span></div>';
+    const inputStyle = 'flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;';
+    for (const sec of data.secrets) {
+      const isSensitive = /password|secret|token/i.test(sec.key);
+      const inputType = isSensitive ? 'password' : 'text';
+      const placeholder = isSensitive ? (sec.has_value ? '(configured)' : '(not set)') : (sec.default || '');
+      const val = sec.value || '';
+      html += '<div class="setting-row"><span class="setting-label" title="' + escapeHtml(sec.key) + '">' + escapeHtml(sec.description || sec.key) + '</span>' +
+        '<input type="' + inputType + '" data-secret-key="' + escapeHtml(sec.key) + '" value="' + escapeHtml(val) + '" placeholder="' + escapeHtml(placeholder) + '" style="' + inputStyle + '"></div>';
+    }
+    html += '<button class="settings-save-btn" data-skill-id="' + escapeHtml(skill.skill_id) + '" onclick="saveSkillSecrets(this.dataset.skillId, this)">' +
+      (curLang === 'zh' ? '保存' : 'Save') + '</button>' +
+      '<div class="skill-secret-status" style="font-size:12px;color:var(--text-tertiary);margin-top:6px;"></div>';
+    section.innerHTML = html;
+    container.appendChild(section);
+  } catch {}
+}
+
+async function saveSkillSecrets(skillId, btn) {
+  const section = btn.closest('.settings-section');
+  const inputs = section.querySelectorAll('input[data-secret-key]');
+  const body = {};
+  inputs.forEach(inp => {
+    if (inp.value) body[inp.dataset.secretKey] = inp.value;
+  });
+  const statusEl = section.querySelector('.skill-secret-status');
+  try {
+    const res = await postJSON('/api/admin/skill-secrets/' + encodeURIComponent(skillId), body);
+    const data = await res.json();
+    if (data.status === 'ok') {
+      if (statusEl) { statusEl.textContent = curLang === 'zh' ? '已保存' : 'Saved'; statusEl.style.color = 'var(--green)'; }
+      addSystemMsg(curLang === 'zh' ? '技能凭证已保存' : 'Skill credentials saved');
+    } else {
+      if (statusEl) { statusEl.textContent = data.error || 'Failed'; statusEl.style.color = 'var(--red)'; }
+    }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = 'Error: ' + e.message; statusEl.style.color = 'var(--red)'; }
+  }
+}
+
+// ── Input handlers ──
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+inputEl.addEventListener('input', () => {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    modelDropdown.classList.remove('show');
+    modelBtn.classList.remove('open');
+    closeSettings();
+  }
+});
+
+// ── Auth UI ──
+function showLoginDialog() {
+  if (document.getElementById('authOverlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'authOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `<div style="background:#1e1e2e;border-radius:12px;padding:32px;width:340px;max-width:90vw">
+    <h3 style="margin:0 0 20px;color:#e0e0e0;font-size:18px">Login</h3>
+    <input id="loginUser" placeholder="Username" style="width:100%;padding:10px;margin-bottom:12px;border-radius:6px;border:1px solid #444;background:#2a2a3e;color:#fff;box-sizing:border-box">
+    <input id="loginPass" type="password" placeholder="Password" style="width:100%;padding:10px;margin-bottom:12px;border-radius:6px;border:1px solid #444;background:#2a2a3e;color:#fff;box-sizing:border-box">
+    <div id="loginError" style="color:#f66;font-size:13px;margin-bottom:10px;display:none"></div>
+    <button id="loginBtn" style="width:100%;padding:10px;border-radius:6px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-size:14px">Login</button>
+  </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('loginBtn').onclick = doLogin;
+  document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+}
+
+async function doLogin() {
+  const username = document.getElementById('loginUser').value.trim();
+  const password = document.getElementById('loginPass').value;
+  const errEl = document.getElementById('loginError');
+  if (!username || !password) { errEl.textContent = 'Please fill in all fields'; errEl.style.display = 'block'; return; }
+  try {
+    const res = await fetch('/api/auth/login', {method:'POST', headers:{'Content-Type':'application/json','X-XJD-Request':'1'}, body: JSON.stringify({username, password})});
+    const data = await res.json();
+    if (res.ok && data.token) {
+      localStorage.setItem('xjd_token', data.token);
+      location.reload();
+    } else {
+      errEl.textContent = data.error || 'Login failed';
+      errEl.style.display = 'block';
+    }
+  } catch(e) { errEl.textContent = 'Network error'; errEl.style.display = 'block'; }
+}
+
+function showSetupDialog() {
+  if (document.getElementById('authOverlay')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'authOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `<div style="background:#1e1e2e;border-radius:12px;padding:32px;width:340px;max-width:90vw">
+    <h3 style="margin:0 0 20px;color:#e0e0e0;font-size:18px">Create Admin Account</h3>
+    <input id="setupUser" placeholder="Username" style="width:100%;padding:10px;margin-bottom:12px;border-radius:6px;border:1px solid #444;background:#2a2a3e;color:#fff;box-sizing:border-box">
+    <input id="setupPass" type="password" placeholder="Password" style="width:100%;padding:10px;margin-bottom:12px;border-radius:6px;border:1px solid #444;background:#2a2a3e;color:#fff;box-sizing:border-box">
+    <input id="setupPass2" type="password" placeholder="Confirm Password" style="width:100%;padding:10px;margin-bottom:12px;border-radius:6px;border:1px solid #444;background:#2a2a3e;color:#fff;box-sizing:border-box">
+    <div id="setupError" style="color:#f66;font-size:13px;margin-bottom:10px;display:none"></div>
+    <button id="setupBtn" style="width:100%;padding:10px;border-radius:6px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-size:14px">Create Account</button>
+  </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('setupBtn').onclick = doSetup;
+  document.getElementById('setupPass2').addEventListener('keydown', e => { if (e.key === 'Enter') doSetup(); });
+}
+
+async function doSetup() {
+  const username = document.getElementById('setupUser').value.trim();
+  const password = document.getElementById('setupPass').value;
+  const password2 = document.getElementById('setupPass2').value;
+  const errEl = document.getElementById('setupError');
+  if (!username || !password) { errEl.textContent = 'Please fill in all fields'; errEl.style.display = 'block'; return; }
+  if (password !== password2) { errEl.textContent = 'Passwords do not match'; errEl.style.display = 'block'; return; }
+  try {
+    const res = await fetch('/api/auth/register', {method:'POST', headers:{'Content-Type':'application/json','X-XJD-Request':'1'}, body: JSON.stringify({username, password, role:'admin'})});
+    const data = await res.json();
+    if (res.ok && data.user_id) {
+      // Auto-login after setup
+      const loginRes = await fetch('/api/auth/login', {method:'POST', headers:{'Content-Type':'application/json','X-XJD-Request':'1'}, body: JSON.stringify({username, password})});
+      const loginData = await loginRes.json();
+      if (loginData.token) localStorage.setItem('xjd_token', loginData.token);
+      location.reload();
+    } else {
+      errEl.textContent = data.error || 'Registration failed';
+      errEl.style.display = 'block';
+    }
+  } catch(e) { errEl.textContent = 'Network error'; errEl.style.display = 'block'; }
+}
+
+async function checkAuthStatus() {
+  try {
+    const h = {};
+    const token = localStorage.getItem('xjd_token');
+    if (token) h['Authorization'] = 'Bearer ' + token;
+    const res = await fetch('/api/auth/status', {headers: h}).then(r => r.json());
+    window._authEnabled = res.auth_enabled;
+    if (!res.auth_enabled) {
+      const logoutBtn = document.querySelector('[onclick="doLogout()"]');
+      if (logoutBtn) logoutBtn.style.display = 'none';
+    } else if (res.needs_setup) {
+      showSetupDialog();
+    } else if (res.auth_enabled && !res.user) {
+      if (!token) showLoginDialog();
+    }
+  } catch(e) { console.warn('Auth status check failed:', e); }
+}
+
+// ── Init ──
+(async function init() {
+  setLang(curLang);
+  await checkAuthStatus();
+  if (conversations.length > 0) {
+    activeConvId = conversations[0].id;
+    renderChatList();
+    restoreMessages(activeConvId);
+  } else {
+    newChat();
+  }
+  connect();
+  // 初始化 auto-TTS 按钮状态
+  const _ab = $('autoTTSBtn');
+  if (_ab) _ab.style.opacity = autoTTSEnabled ? '1' : '0.4';
+  try {
+    const res = await fetch('/api/admin/models', {headers: authHeaders()});
+    const data = await res.json();
+    if (data.primary && data.primary.model) {
+      currentModel = { provider: data.primary.provider, model: data.primary.model };
+      updateModelDisplay();
+    } else { currentModelNameEl.textContent = t('noModel'); }
+  } catch(e) { currentModelNameEl.textContent = t('offline'); }
+})();
+</script>
+<script src="/static/workspace.js?v=6"></script>
+</body>
+</html>

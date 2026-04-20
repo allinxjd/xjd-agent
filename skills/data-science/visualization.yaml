@@ -1,0 +1,28 @@
+skill_id: data-visualization
+name: 数据可视化
+description: 读取数据集并生成合适的可视化图表代码
+trigger: 数据可视化, 画图表, 生成图表, visualization, plot, chart
+category: data-science
+steps:
+  - description: 读取数据文件，了解数据结构和字段
+    tool: read_file
+    args_template:
+      file_path: "{{ data_file }}"
+  - description: 根据数据特征选择合适的图表类型（折线图、柱状图、散点图、热力图等）
+  - description: 生成可视化代码并执行
+    tool: execute_code
+    args_template:
+      language: python
+      code: "{{ visualization_code }}"
+  - description: 根据结果调整样式、标签和配色
+tags:
+  - data-science
+  - visualization
+  - matplotlib
+  - plotly
+examples:
+  - 帮我把这个 CSV 数据画成折线图
+  - 用热力图展示相关性矩阵
+version: 1
+use_count: 0
+success_rate: 1.0

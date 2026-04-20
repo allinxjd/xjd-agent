@@ -1,0 +1,24 @@
+skill_id: tech-debt-assessment
+name: 技术债评估
+description: 扫描代码库识别技术债务并按优先级排序给出治理建议
+trigger: 技术债评估, 代码质量评估, tech debt, 技术债务, code smell
+category: software-development
+steps:
+  - description: 扫描代码中的 TODO/FIXME/HACK 标记
+    tool: grep_search
+    args_template: {pattern: "(TODO|FIXME|HACK|XXX|WORKAROUND)", path: "${PROJECT_ROOT}"}
+  - description: 检查重复代码和过长函数
+    tool: run_terminal
+    args_template: {command: "find ${PROJECT_ROOT} -name '*.ts' -o -name '*.js' | xargs wc -l | sort -rn | head -20"}
+  - description: 检查过时依赖和废弃 API 使用
+    tool: run_terminal
+    args_template: {command: "npm outdated --json 2>/dev/null || true"}
+  - description: 评估每项技术债的影响范围和修复成本
+  - description: 输出技术债清单 (问题描述 + 影响 + 优先级 + 建议修复方案)
+tags: [tech-debt, code-quality, refactoring, maintenance]
+examples:
+  - 评估一下项目的技术债
+  - assess tech debt in this codebase
+version: 1
+use_count: 0
+success_rate: 1.0

@@ -1,0 +1,22 @@
+skill_id: blog-post
+name: 博客文章撰写
+description: 从选题到成稿完成一篇博客文章的撰写和润色
+trigger: 写博客, 博客文章, blog post, 撰写文章, write article
+category: creative
+steps:
+  - description: 确定选题方向和目标读者
+  - description: 搜索相关素材和参考资料
+    tool: web_search
+    args_template: {query: "${TOPIC} 最新趋势 技术分析"}
+  - description: 拟定文章大纲 (标题 + 各段要点)
+  - description: 撰写初稿并输出到文件
+    tool: write_file
+    args_template: {path: "${OUTPUT_PATH}", content: "${ARTICLE_CONTENT}"}
+  - description: 润色文章 (优化标题/段落衔接/SEO关键词)
+tags: [blog, writing, content, article, seo]
+examples:
+  - 帮我写一篇关于 AI 的博客文章
+  - write a blog post about microservices best practices
+version: 1
+use_count: 0
+success_rate: 1.0

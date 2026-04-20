@@ -1,0 +1,28 @@
+skill_id: access-audit
+name: 权限审计
+description: 审计系统权限配置，发现过度授权和异常访问
+trigger: 权限审计, 访问控制, 权限检查, access audit, permission review
+category: security
+steps:
+  - description: 检查系统用户和权限配置
+    tool: run_terminal
+    args_template:
+      command: "{{ audit_command }}"
+  - description: 搜索代码中的权限控制逻辑
+    tool: grep_search
+    args_template:
+      pattern: "(role|permission|authorize|isAdmin)"
+      path: "{{ project_root }}"
+  - description: 分析是否存在过度授权或权限绕过风险
+  - description: 输出权限审计报告和加固建议
+tags:
+  - security
+  - access-control
+  - audit
+  - permissions
+examples:
+  - 审计一下项目的权限控制是否合理
+  - 检查有没有权限绕过的风险
+version: 1
+use_count: 0
+success_rate: 1.0

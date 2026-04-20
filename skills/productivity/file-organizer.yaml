@@ -1,0 +1,23 @@
+skill_id: file-organizer
+name: 文件整理
+description: 扫描目录结构并按规则整理文件
+trigger: 整理文件、organize files、清理目录、文件归类
+category: general
+steps:
+  - description: 扫描目标目录
+    tool: list_directory
+    args_template: {path: "{target_dir}"}
+  - description: 分析文件类型和命名规律
+  - description: 制定整理方案 (按类型/日期/项目分类)
+  - description: 执行文件移动和重命名
+    tool: run_terminal
+    args_template: {command: "mv {source} {dest}"}
+  - description: 输出整理报告
+tags: [file, organize, cleanup, directory]
+examples:
+  - 帮我整理下载文件夹
+  - organize this directory
+  - 清理项目中的临时文件
+version: 1
+use_count: 0
+success_rate: 1.0

@@ -1,0 +1,26 @@
+skill_id: api-design
+name: API 接口设计
+description: 分析需求并设计 RESTful API 端点，生成 OpenAPI 规范文档
+trigger: 设计API、design API、接口设计、RESTful设计、OpenAPI
+category: code
+steps:
+  - description: 读取需求文档或相关代码
+    tool: read_file
+    args_template: {path: "{file_path}"}
+  - description: 分析现有 API 路由结构
+    tool: grep_search
+    args_template: {pattern: "export.*(?:GET|POST|PUT|DELETE|PATCH)", path: "{project_root}"}
+  - description: 设计 RESTful 端点 (URL、方法、参数、响应格式)
+  - description: 定义请求/响应 Schema 和错误码
+  - description: 生成 OpenAPI spec 文件
+    tool: write_file
+    args_template: {path: "{output_path}", content: "{openapi_spec}"}
+  - description: 输出 API 设计文档 (端点列表 + 数据模型 + 示例)
+tags: [api, rest, openapi, design]
+examples:
+  - 帮我设计用户管理的 API 接口
+  - design a RESTful API for order system
+  - 生成这个模块的 OpenAPI 文档
+version: 1
+use_count: 0
+success_rate: 1.0

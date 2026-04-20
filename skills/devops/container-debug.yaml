@@ -1,0 +1,26 @@
+skill_id: container-debug
+name: 容器调试
+description: 排查 Docker 容器运行问题包括日志检查和状态诊断
+trigger: 容器调试, docker调试, container debug, 容器排错, docker troubleshoot
+category: devops
+steps:
+  - description: 查看容器运行状态
+    tool: run_terminal
+    args_template: {command: "docker ps -a --filter name=${CONTAINER_NAME}"}
+  - description: 检查容器日志
+    tool: run_terminal
+    args_template: {command: "docker logs --tail 100 ${CONTAINER_NAME}"}
+  - description: 检查容器资源使用和健康状态
+    tool: run_terminal
+    args_template: {command: "docker inspect ${CONTAINER_NAME} --format '{{.State.Status}} {{.State.Health}}'"}
+  - description: 进入容器内部排查
+    tool: run_terminal
+    args_template: {command: "docker exec ${CONTAINER_NAME} sh -c '${DEBUG_COMMAND}'"}
+  - description: 汇总问题原因和修复建议
+tags: [docker, container, debugging, troubleshooting, devops]
+examples:
+  - 帮我排查容器为什么启动失败
+  - debug why the container keeps restarting
+version: 1
+use_count: 0
+success_rate: 1.0

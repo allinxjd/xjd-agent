@@ -1,0 +1,26 @@
+skill_id: performance-profiling
+name: 性能分析
+description: 识别代码性能瓶颈，提供优化建议并生成分析报告
+trigger: 性能分析、performance profiling、优化性能、找瓶颈、slow code
+category: code
+steps:
+  - description: 读取目标代码文件
+    tool: read_file
+    args_template: {path: "{file_path}"}
+  - description: 识别性能瓶颈 (N+1查询、大循环、内存泄漏、阻塞操作)
+  - description: 检查数据库查询效率
+    tool: grep_search
+    args_template: {pattern: "findMany|findFirst|\\$queryRaw|SELECT", path: "{file_path}"}
+  - description: 分析 bundle 大小和加载性能
+    tool: run_terminal
+    args_template: {command: "cd {project_root} && npx next build --profile 2>&1 | tail -50"}
+  - description: 提出优化方案 (缓存、懒加载、索引、并发控制)
+  - description: 输出性能报告 (瓶颈列表 + 优化建议 + 预期收益)
+tags: [performance, optimization, profiling, bottleneck]
+examples:
+  - 这个接口响应很慢，帮我分析一下
+  - profile this code for performance issues
+  - 帮我找出性能瓶颈
+version: 1
+use_count: 0
+success_rate: 1.0

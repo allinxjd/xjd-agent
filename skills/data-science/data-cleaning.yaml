@@ -1,0 +1,26 @@
+skill_id: data-cleaning
+name: 数据清洗
+description: 处理缺失值、异常值、重复数据和格式标准化
+trigger: 数据清洗、clean data、处理缺失值、去重
+category: data
+steps:
+  - description: 读取原始数据
+    tool: read_file
+    args_template: {path: "{data_file}"}
+  - description: 检测数据质量问题 (缺失值、异常值、重复行)
+    tool: execute_code
+    args_template: {language: python, code: "{quality_check}"}
+  - description: 执行清洗操作
+    tool: execute_code
+    args_template: {language: python, code: "{cleaning_code}"}
+  - description: 保存清洗后的数据
+    tool: write_file
+    args_template: {path: "{output_file}", content: "{cleaned_data}"}
+tags: [data, cleaning, missing, duplicates, outliers]
+examples:
+  - 清洗这个数据集
+  - 处理缺失值和异常值
+  - clean this CSV
+version: 1
+use_count: 0
+success_rate: 1.0

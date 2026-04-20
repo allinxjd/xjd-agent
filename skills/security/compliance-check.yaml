@@ -1,0 +1,28 @@
+skill_id: compliance-check
+name: 合规检查
+description: 检查代码和配置是否符合安全合规要求
+trigger: 合规检查, 安全合规, 等保, compliance check, security compliance
+category: security
+steps:
+  - description: 搜索敏感信息泄露（密钥、密码、token等）
+    tool: grep_search
+    args_template:
+      pattern: "(password|secret|api_key|token)\\s*[:=]"
+      path: "{{ project_root }}"
+  - description: 读取安全相关配置文件
+    tool: read_file
+    args_template:
+      file_path: "{{ config_file }}"
+  - description: 检查是否符合安全基线（HTTPS、加密、认证、日志等）
+  - description: 输出合规检查报告和整改建议
+tags:
+  - security
+  - compliance
+  - audit
+  - configuration
+examples:
+  - 检查项目代码有没有硬编码的密钥
+  - 做一次安全合规审查
+version: 1
+use_count: 0
+success_rate: 1.0

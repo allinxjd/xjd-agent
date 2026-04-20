@@ -1,0 +1,25 @@
+skill_id: presentation-outline
+name: 演示文稿大纲
+description: 根据主题生成结构清晰的演示文稿大纲
+trigger: 演示文稿, PPT大纲, 幻灯片, presentation outline, slide deck
+category: creative
+steps:
+  - description: 明确演示目标、受众和时长
+  - description: 设计整体叙事结构（开场、主体、总结）
+  - description: 为每页幻灯片规划标题、要点和视觉建议
+  - description: 输出完整大纲文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ outline_content }}"
+tags:
+  - creative
+  - presentation
+  - slides
+  - outline
+examples:
+  - 帮我写一个产品发布会的 PPT 大纲
+  - 生成季度汇报的演示文稿结构
+version: 1
+use_count: 0
+success_rate: 1.0

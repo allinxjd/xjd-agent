@@ -1,0 +1,31 @@
+skill_id: kubernetes-deploy
+name: K8s 部署
+description: 生成 Kubernetes 部署配置并执行滚动发布与验证
+trigger: k8s部署, kubernetes部署, 发布到k8s, deploy to kubernetes, k8s rollout
+category: devops
+steps:
+  - description: 收集部署参数（镜像名、副本数、命名空间、端口等）
+    tool: read_file
+    args_template: {path: "deploy/k8s/values.yaml"}
+  - description: 生成 Deployment 和 Service YAML 配置
+    tool: write_file
+    args_template: {path: "deploy/k8s/deployment.yaml", content: "generated deployment manifest"}
+  - description: 应用配置到集群
+    tool: run_terminal
+    args_template: {command: "kubectl apply -f deploy/k8s/deployment.yaml"}
+  - description: 等待滚动更新完成
+    tool: run_terminal
+    args_template: {command: "kubectl rollout status deployment/${DEPLOY_NAME} -n ${NAMESPACE} --timeout=300s"}
+  - description: 验证 Pod 状态和服务可达性
+    tool: run_terminal
+    args_template: {command: "kubectl get pods -n ${NAMESPACE} -l app=${APP_NAME} && kubectl get svc -n ${NAMESPACE}"}
+  - description: 如果失败则自动回滚到上一版本
+    tool: run_terminal
+    args_template: {command: "kubectl rollout undo deployment/${DEPLOY_NAME} -n ${NAMESPACE}"}
+tags: [kubernetes, deploy, rollout, container]
+examples:
+  - 把 xjd-api 镜像部署到 k8s 集群
+  - kubernetes 滚动发布 v1.10.23
+version: 1
+use_count: 0
+success_rate: 1.0
