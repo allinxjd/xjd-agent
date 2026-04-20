@@ -1,0 +1,28 @@
+skill_id: sla-report
+name: SLA 报告
+description: 查询服务数据并生成 SLA 达标报告
+trigger: SLA报告, 服务等级, 可用性报告, SLA report, uptime report
+category: productivity
+steps:
+  - description: 查询服务可用性和性能数据
+    tool: database_query
+    args_template:
+      query: "{{ sla_query }}"
+  - description: 计算 SLA 指标（可用性、响应时间、错误率）
+  - description: 对比 SLA 目标，标注未达标项
+  - description: 输出 SLA 报告文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ sla_report_content }}"
+tags:
+  - productivity
+  - SLA
+  - monitoring
+  - report
+examples:
+  - 生成本月的 SLA 达标报告
+  - 统计服务可用性和响应时间
+version: 1
+use_count: 0
+success_rate: 1.0

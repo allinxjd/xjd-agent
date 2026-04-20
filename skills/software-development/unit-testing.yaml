@@ -1,0 +1,28 @@
+skill_id: unit-testing
+name: 单元测试编写
+description: 读取源代码，识别关键测试点，生成完整的单元测试用例
+trigger: 写单元测试、unit test、生成测试、编写测试用例、write tests
+category: code
+steps:
+  - description: 读取目标源代码文件
+    tool: read_file
+    args_template: {path: "{file_path}"}
+  - description: 分析函数签名、分支逻辑和边界条件
+  - description: 识别测试点 (正常路径、异常路径、边界值、mock 依赖)
+  - description: 检查项目现有测试框架和配置
+    tool: read_file
+    args_template: {path: "{project_root}/package.json"}
+  - description: 生成测试用例文件
+    tool: write_file
+    args_template: {path: "{test_file_path}", content: "{test_code}"}
+  - description: 运行测试验证通过
+    tool: run_terminal
+    args_template: {command: "npx jest {test_file_path} --no-coverage"}
+tags: [test, unit-test, jest, vitest, quality]
+examples:
+  - 帮我给这个函数写单元测试
+  - generate unit tests for this module
+  - 这个文件缺少测试，帮我补上
+version: 1
+use_count: 0
+success_rate: 1.0

@@ -1,0 +1,28 @@
+skill_id: debug-error
+name: 错误调试
+description: 分析错误日志、定位根因并修复
+trigger: 调试错误、debug、报错、traceback、异常
+category: code
+steps:
+  - description: 读取错误日志或 traceback
+  - description: 搜索相关源码文件
+    tool: grep_search
+    args_template: {pattern: "{error_keyword}", path: "."}
+  - description: 读取出错的源码文件
+    tool: read_file
+    args_template: {path: "{source_file}"}
+  - description: 分析错误根因
+  - description: 编写修复代码
+    tool: edit_file
+    args_template: {path: "{source_file}", content: "{fix}"}
+  - description: 验证修复
+    tool: run_terminal
+    args_template: {command: "{test_command}"}
+tags: [debug, error, fix, traceback]
+examples:
+  - 这个报错怎么修
+  - debug this error
+  - 帮我看看这个 traceback
+version: 1
+use_count: 0
+success_rate: 1.0

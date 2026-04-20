@@ -1,0 +1,27 @@
+skill_id: market-research
+name: 市场调研
+description: 搜索行业数据和趋势，输出市场分析报告
+trigger: 市场调研, 行业分析, 市场趋势, market research, industry analysis
+category: research
+steps:
+  - description: 搜索目标行业的市场规模和增长趋势
+    tool: web_search
+    args_template:
+      query: "{{ industry }} 市场规模 趋势 {{ year }}"
+  - description: 搜索行业报告和权威数据来源
+    tool: web_search
+    args_template:
+      query: "{{ industry }} industry report market size"
+  - description: 分析市场驱动因素、风险和机会
+  - description: 输出市场调研报告，包含数据、趋势和建议
+tags:
+  - research
+  - market
+  - industry
+  - trend
+examples:
+  - 调研一下国内 AIGC 市场的规模和趋势
+  - 帮我分析跨境电商行业的市场前景
+version: 1
+use_count: 0
+success_rate: 1.0

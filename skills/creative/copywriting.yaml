@@ -1,0 +1,21 @@
+skill_id: copywriting
+name: 文案撰写
+description: 根据需求撰写营销文案、产品描述或社交媒体内容
+trigger: 写文案、copywriting、营销文案、产品描述、社交媒体
+category: general
+steps:
+  - description: 了解目标受众和平台
+  - description: 搜索行业优秀案例
+    tool: web_search
+    args_template: {query: "{industry} 文案案例"}
+  - description: 撰写初稿 (标题 + 正文 + CTA)
+  - description: 优化措辞和排版
+  - description: 输出多个版本供选择
+tags: [copywriting, marketing, content, social]
+examples:
+  - 帮我写一段产品介绍
+  - 写个朋友圈文案
+  - write marketing copy for this product
+version: 1
+use_count: 0
+success_rate: 1.0

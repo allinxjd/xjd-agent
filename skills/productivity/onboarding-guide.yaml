@@ -1,0 +1,28 @@
+skill_id: onboarding-guide
+name: 入职指南
+description: 根据项目代码和文档生成新人入职指南
+trigger: 入职指南, 新人文档, onboarding guide, getting started
+category: productivity
+steps:
+  - description: 读取项目核心配置和文档
+    tool: read_file
+    args_template:
+      file_path: "{{ project_root }}/README.md"
+  - description: 梳理项目架构、技术栈和开发流程
+  - description: 整理环境搭建步骤和常见问题
+  - description: 输出入职指南文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ guide_content }}"
+tags:
+  - productivity
+  - onboarding
+  - documentation
+  - team
+examples:
+  - 帮我生成项目的新人入职指南
+  - 整理一份开发环境搭建文档
+version: 1
+use_count: 0
+success_rate: 1.0

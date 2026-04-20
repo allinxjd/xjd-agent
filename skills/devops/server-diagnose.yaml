@@ -1,0 +1,27 @@
+skill_id: server-diagnose
+name: 服务器诊断
+description: 检查服务器资源使用、进程状态和日志
+trigger: 服务器诊断、server status、检查服务器、系统资源
+category: deploy
+steps:
+  - description: 检查 CPU 和内存使用
+    tool: run_terminal
+    args_template: {command: "top -bn1 | head -20"}
+  - description: 检查磁盘空间
+    tool: run_terminal
+    args_template: {command: "df -h"}
+  - description: 检查关键进程状态
+    tool: run_terminal
+    args_template: {command: "ps aux | grep -E '{process_name}'"}
+  - description: 检查最近的错误日志
+    tool: run_terminal
+    args_template: {command: "journalctl -u {service} --since '1 hour ago' --no-pager | tail -50"}
+  - description: 汇总诊断结果和建议
+tags: [server, diagnose, monitoring, health]
+examples:
+  - 检查服务器状态
+  - 服务器内存不够了
+  - diagnose server issues
+version: 1
+use_count: 0
+success_rate: 1.0

@@ -1,0 +1,25 @@
+skill_id: project-planning
+name: 项目规划
+description: 制定项目计划，包含里程碑、任务分解和时间线
+trigger: 项目规划, 项目计划, 任务分解, project planning, project plan, WBS
+category: productivity
+steps:
+  - description: 明确项目目标、范围和约束条件
+  - description: 进行工作分解（WBS），拆分为可执行的任务
+  - description: 估算工时，安排任务依赖和时间线
+  - description: 输出项目计划文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ plan_content }}"
+tags:
+  - productivity
+  - project-management
+  - planning
+  - WBS
+examples:
+  - 帮我做一个新功能开发的项目计划
+  - 制定产品上线的里程碑和时间表
+version: 1
+use_count: 0
+success_rate: 1.0

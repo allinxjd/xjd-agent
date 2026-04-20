@@ -1,0 +1,35 @@
+skill_id: feature-engineering
+name: 特征工程
+description: 分析原始数据并提取、选择有效特征以提升模型表现
+trigger: 特征工程, 特征提取, 特征选择, feature engineering, feature selection
+category: data-science
+steps:
+  - description: 读取数据并分析各字段分布和类型
+    tool: read_file
+    args_template:
+      file_path: "{{ data_file }}"
+  - description: 执行探索性分析，识别有价值的特征
+    tool: execute_code
+    args_template:
+      language: python
+      code: "{{ eda_code }}"
+  - description: 提取新特征（交叉特征、时间特征、文本特征等）
+    tool: execute_code
+    args_template:
+      language: python
+      code: "{{ extraction_code }}"
+  - description: 特征选择（相关性分析、重要性排序、降维）
+    tool: execute_code
+    args_template:
+      language: python
+      code: "{{ selection_code }}"
+tags:
+  - data-science
+  - feature-engineering
+  - preprocessing
+examples:
+  - 帮我做特征工程提升模型效果
+  - 分析哪些特征对预测最重要
+version: 1
+use_count: 0
+success_rate: 1.0

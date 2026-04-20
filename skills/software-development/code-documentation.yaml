@@ -1,0 +1,24 @@
+skill_id: code-documentation
+name: 代码文档生成
+description: 读取代码结构，自动生成 docstring、注释和 README 文档
+trigger: 生成文档、generate docs、写注释、代码文档、docstring、README
+category: code
+steps:
+  - description: 读取目标代码文件
+    tool: read_file
+    args_template: {path: "{file_path}"}
+  - description: 提取模块结构 (类、函数、接口、导出)
+  - description: 分析函数参数、返回值和副作用
+  - description: 生成 JSDoc/TSDoc/docstring 注释
+  - description: 写入文档注释到源文件
+    tool: write_file
+    args_template: {path: "{file_path}", content: "{documented_code}"}
+  - description: 输出文档摘要 (模块说明 + 公开 API 列表)
+tags: [documentation, jsdoc, tsdoc, readme, comments]
+examples:
+  - 帮这个模块生成文档注释
+  - generate documentation for this file
+  - 给所有导出函数加上 JSDoc
+version: 1
+use_count: 0
+success_rate: 1.0

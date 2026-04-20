@@ -1,0 +1,22 @@
+skill_id: web-research
+name: 网络调研
+description: 搜索并汇总特定主题的最新信息
+trigger: 调研、research、搜索资料、查找信息
+category: web
+steps:
+  - description: 搜索相关网页
+    tool: web_search
+    args_template: {query: "{topic}"}
+  - description: 抓取关键页面内容
+    tool: web_fetch
+    args_template: {url: "{url}"}
+  - description: 提取关键信息并交叉验证
+  - description: 汇总调研报告 (来源 + 结论 + 建议)
+tags: [research, search, web, information]
+examples:
+  - 帮我调研一下 xxx
+  - research the latest trends in AI
+  - 搜索 Python 3.13 的新特性
+version: 1
+use_count: 0
+success_rate: 1.0

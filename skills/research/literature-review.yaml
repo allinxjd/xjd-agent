@@ -1,0 +1,27 @@
+skill_id: literature-review
+name: 文献综述
+description: 搜索学术文献并整理成结构化的综述报告
+trigger: 文献综述, 论文调研, 学术搜索, literature review, paper survey
+category: research
+steps:
+  - description: 根据研究主题搜索相关学术文献
+    tool: web_search
+    args_template:
+      query: "{{ topic }} research paper survey"
+  - description: 获取关键论文的摘要和核心内容
+    tool: web_fetch
+    args_template:
+      url: "{{ paper_url }}"
+  - description: 按主题分类整理文献，提取核心观点和方法
+  - description: 撰写综述报告，包含研究现状、主要方法和未来方向
+tags:
+  - research
+  - literature
+  - academic
+  - survey
+examples:
+  - 帮我调研大模型微调的最新论文
+  - 整理一下推荐系统领域的文献综述
+version: 1
+use_count: 0
+success_rate: 1.0

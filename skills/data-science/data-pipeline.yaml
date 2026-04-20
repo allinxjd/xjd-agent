@@ -1,0 +1,24 @@
+skill_id: data-pipeline
+name: 数据管道构建
+description: 设计并实现 ETL 数据管道包括抽取转换加载和调度
+trigger: 数据管道, ETL, data pipeline, 数据抽取, 数据处理流程
+category: data-science
+steps:
+  - description: 分析数据源格式和目标存储需求
+  - description: 编写数据抽取脚本 (Extract)
+    tool: execute_code
+    args_template: {code: "${EXTRACT_CODE}", language: "python"}
+  - description: 编写数据清洗和转换逻辑 (Transform)
+    tool: execute_code
+    args_template: {code: "${TRANSFORM_CODE}", language: "python"}
+  - description: 编写数据加载脚本 (Load)
+    tool: write_file
+    args_template: {path: "${PIPELINE_SCRIPT_PATH}", content: "${PIPELINE_CODE}"}
+  - description: 设计调度策略并输出完整管道文档
+tags: [etl, data-pipeline, data-engineering, automation]
+examples:
+  - 帮我搭建一个数据处理管道
+  - build an ETL pipeline for this data source
+version: 1
+use_count: 0
+success_rate: 1.0

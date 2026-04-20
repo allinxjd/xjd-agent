@@ -1,0 +1,26 @@
+skill_id: ci-cd-setup
+name: CI/CD 配置
+description: 分析项目结构，生成 GitHub Actions 或 GitLab CI 流水线配置
+trigger: CI/CD配置、setup CI、GitHub Actions、GitLab CI、流水线、pipeline
+category: code
+steps:
+  - description: 分析项目结构和技术栈
+    tool: read_file
+    args_template: {path: "{project_root}/package.json"}
+  - description: 检查现有 CI/CD 配置
+    tool: read_file
+    args_template: {path: "{project_root}/.github/workflows"}
+  - description: 确定流水线阶段 (lint、test、build、deploy)
+  - description: 生成 CI/CD 配置文件
+    tool: write_file
+    args_template: {path: "{project_root}/.github/workflows/ci.yml", content: "{ci_config}"}
+  - description: 配置环境变量和密钥引用
+  - description: 输出流水线说明 (阶段描述 + 触发条件 + 所需 secrets)
+tags: [ci, cd, github-actions, gitlab-ci, pipeline, devops]
+examples:
+  - 帮我配置 GitHub Actions CI/CD
+  - setup a CI pipeline for this project
+  - 生成自动化部署流水线
+version: 1
+use_count: 0
+success_rate: 1.0

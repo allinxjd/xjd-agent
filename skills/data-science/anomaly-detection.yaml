@@ -1,0 +1,24 @@
+skill_id: anomaly-detection
+name: 异常检测
+description: 对数据进行统计分析设定阈值并建立异常告警机制
+trigger: 异常检测, 异常值分析, anomaly detection, outlier detection, 数据告警
+category: data-science
+steps:
+  - description: 加载数据并进行基础统计分析 (均值/标准差/分位数)
+    tool: execute_code
+    args_template: {code: "${STATS_CODE}", language: "python"}
+  - description: 应用异常检测算法 (Z-Score/IQR/Isolation Forest)
+    tool: execute_code
+    args_template: {code: "${DETECTION_CODE}", language: "python"}
+  - description: 可视化异常点分布
+    tool: execute_code
+    args_template: {code: "${VISUALIZATION_CODE}", language: "python"}
+  - description: 设定告警阈值和规则
+  - description: 输出异常检测报告 (异常点列表 + 置信度 + 告警建议)
+tags: [anomaly-detection, statistics, alerting, data-quality]
+examples:
+  - 帮我检测数据中的异常值
+  - detect anomalies in this time series data
+version: 1
+use_count: 0
+success_rate: 1.0

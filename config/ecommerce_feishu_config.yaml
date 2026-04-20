@@ -1,0 +1,287 @@
+# 电商作图飞书机器人配置
+# 集成电商图片生成功能的飞书群管理机器人
+
+gateway:
+  platforms:
+    feishu:
+      # 基础配置
+      app_id: "请填写您的App ID"
+      app_secret: "请填写您的App Secret"
+      verification_token: "请填写您的Verification Token"
+      encrypt_key: ""
+      
+      # 部署模式
+      mode: "webhook"
+      webhook_port: 9001
+      webhook_path: "/feishu/webhook"
+      
+      # 消息配置
+      message:
+        enable_mention: true
+        enable_private_chat: true
+        enable_group_chat: true
+        default_response: "你好！我是电商作图助手，可以帮你生成白底图、商品详情图等电商图片。输入'帮助'查看功能列表。"
+
+# 电商作图技能配置
+skills:
+  # 群欢迎消息
+  group_welcome:
+    name: "电商群欢迎消息"
+    description: "欢迎新成员加入电商相关群聊"
+    triggers:
+      - event: "im.chat.member.user.added_v1"
+    actions:
+      - type: "send_message"
+        template: |
+          欢迎 {user_name} 加入电商作图交流群！
+          
+          🛍️ 我是电商作图助手，可以帮你：
+          1. 生成电商白底图
+          2. 制作商品详情图
+          3. 透明底图处理
+          4. 平台规范咨询
+          5. 批量图片处理
+          
+          常用命令：
+          • 白底图帮助 - 查看白底图生成指南
+          • 详情图模板 - 获取商品详情图模板
+          • 平台规范 [平台] - 查看平台图片要求
+          • 批量处理 - 批量生成电商图片
+          
+          输入"帮助"查看完整功能列表。
+
+  # 电商作图命令
+  ecommerce_white_bg:
+    name: "白底图生成"
+    description: "生成电商平台白底图"
+    triggers:
+      - event: "im.message.receive_v1"
+        condition: "message contains '白底图'"
+    actions:
+      - type: "ai_response"
+        model: "gpt-3.5-turbo"
+        system_prompt: |
+          你是一个电商图片生成专家，专门帮助用户生成符合平台规范的白底图。
+          
+          平台规范：
+          1. 淘宝/天猫：800×800px，纯白背景，JPG格式
+          2. 京东：800×800px，可带品牌元素
+          3. 拼多多：400×400px+，价格突出
+          
+          生成步骤：
+          1. 智能抠图移除背景
+          2. 填充纯白色背景
+          3. 调整尺寸到平台要求
+          4. 优化图片质量
+          
+          请提供详细的指导和建议。
+
+  ecommerce_detail_image:
+    name: "商品详情图生成"
+    description: "生成商品详情页图片"
+    triggers:
+      - event: "im.message.receive_v1"
+        condition: "message contains '详情图' or message contains 'product detail'"
+    actions:
+      - type: "ai_response"
+        model: "gpt-3.5-turbo"
+        system_prompt: |
+          你是一个商品详情图设计专家，帮助用户制作吸引人的商品详情页图片。
+          
+          详情图应包含：
+          1. 主展示图 - 产品整体展示
+          2. 细节展示图 - 材质、工艺特写
+          3. 使用场景图 - 实际使用场景
+          4. 参数规格图 - 技术参数表格
+          5. 对比展示图 - 与竞品对比
+          
+          设计建议：
+          • 保持风格统一
+          • 突出核心卖点
+          • 使用高清图片
+          • 添加营销文案
+          • 符合平台规范
+
+  platform_guidelines:
+    name: "平台规范查询"
+    description: "查询各电商平台图片规范"
+    triggers:
+      - event: "im.message.receive_v1"
+        condition: "message contains '平台规范' or message contains 'guidelines'"
+    actions:
+      - type: "send_message"
+        template: |
+          📋 电商平台图片规范指南：
+          
+          🛒 淘宝/天猫：
+          • 主图尺寸：800×800px
+          • 格式：JPG
+          • 背景：纯白色 (#FFFFFF)
+          • 要求：无logo、无水印、无阴影
+          
+          🔴 京东：
+          • 主图尺寸：800×800px
+          • 格式：JPG
+          • 可带品牌认证标识
+          • 建议添加参数展示
+          
+          🎵 抖音：
+          • 比例：9:16 竖版
+          • 格式：PNG（透明底）
+          • 适配短视频封面
+          • 建议添加动态元素
+          
+          💰 拼多多：
+          • 尺寸：400×400px+
+          • 格式：JPG
+          • 突出价格信息
+          • 显示销量和评价
+          
+          📱 小红书：
+          • 比例：3:4 或 1:1
+          • 格式：JPG
+          • 生活方式展示
+          • 使用教程风格
+          
+          输入具体平台名称获取详细规范。
+
+  batch_processing:
+    name: "批量图片处理"
+    description: "批量生成电商图片"
+    triggers:
+      - event: "im.message.receive_v1"
+        condition: "message contains '批量处理' or message contains 'batch'"
+    actions:
+      - type: "send_message"
+        template: |
+          🔄 批量图片处理流程：
+          
+          1. 准备图片：
+             • 高质量原图
+             • 统一命名规范
+             • 分类存放
+          
+          2. 处理配置：
+             • 选择目标平台
+             • 设置图片类型
+             • 配置输出格式
+          
+          3. 批量生成：
+             • 自动抠图去背景
+             • 批量尺寸调整
+             • 统一风格处理
+          
+          4. 结果输出：
+             • 按平台分类
+             • 生成处理报告
+             • 提供下载链接
+          
+          支持平台：淘宝、京东、抖音、拼多多、小红书
+          支持类型：白底图、详情图、透明底图、营销图
+
+  ecommerce_help:
+    name: "电商作图帮助"
+    description: "显示电商作图功能帮助"
+    triggers:
+      - event: "im.message.receive_v1"
+        condition: "message contains '帮助' and ('电商' in message or '作图' in message)"
+    actions:
+      - type: "send_message"
+        template: |
+          🛍️ 电商作图助手 - 功能列表
+          
+          📸 图片生成：
+          • 白底图 [平台] - 生成平台规范白底图
+          • 详情图 [产品] - 制作商品详情页图片
+          • 透明底图 - 生成透明背景产品图
+          • 营销图 [活动] - 制作促销活动图片
+          
+          📋 规范查询：
+          • 平台规范 [平台] - 查看平台图片要求
+          • 尺寸要求 - 各平台尺寸规范
+          • 格式建议 - 图片格式选择指南
+          
+          🔄 批量处理：
+          • 批量白底图 - 批量生成白底图
+          • 批量详情图 - 批量制作详情图
+          • 批量转换 - 格式/尺寸批量转换
+          
+          🎯 设计建议：
+          • 文案优化 - 营销文案建议
+          • 布局建议 - 图片布局设计
+          • 配色方案 - 色彩搭配建议
+          
+          💡 示例：
+          • "生成淘宝白底图"
+          • "制作手机详情图"
+          • "抖音透明底图要求"
+          • "批量处理服装图片"
+
+# 电商作图专用配置
+ecommerce_config:
+  # 图片处理配置
+  image_processing:
+    default_platform: "taobao"
+    default_format: "jpg"
+    default_quality: 90
+    enable_ai_enhancement: true
+    
+  # 平台特定配置
+  platform_settings:
+    taobao:
+      main_image_size: "800x800"
+      background_color: "#FFFFFF"
+      compression_level: "high"
+      
+    douyin:
+      aspect_ratio: "9:16"
+      transparent_background: true
+      file_format: "png"
+      
+    jd:
+      allow_branding: true
+      show_parameters: true
+      certification_badge: true
+      
+  # 批量处理配置
+  batch_processing:
+    max_concurrent: 5
+    output_directory: "./output/ecommerce_images"
+    organize_by: ["platform", "date", "product_type"]
+    generate_report: true
+    
+  # 质量检查
+  quality_control:
+    min_resolution: 800
+    max_file_size: "5MB"
+    check_background: true
+    verify_dimensions: true
+
+# 数据库配置（存储处理记录）
+database:
+  enabled: true
+  type: "sqlite"
+  path: "data/ecommerce_bot.db"
+  tables:
+    - name: "processed_images"
+      columns:
+        - "id INTEGER PRIMARY KEY"
+        - "original_filename TEXT"
+        - "platform TEXT"
+        - "image_type TEXT"
+        - "processed_time DATETIME"
+        - "output_path TEXT"
+        - "status TEXT"
+    - name: "platform_guidelines"
+      columns:
+        - "platform TEXT PRIMARY KEY"
+        - "specifications JSON"
+        - "last_updated DATETIME"
+
+# 日志配置
+logging:
+  level: "INFO"
+  file: "logs/ecommerce_bot.log"
+  max_size: "10MB"
+  backup_count: 5
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

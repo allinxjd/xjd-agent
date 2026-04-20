@@ -1,0 +1,28 @@
+skill_id: git-workflow
+name: Git 工作流
+description: 配置分支管理策略、PR 模板和 commit 规范
+trigger: Git工作流、git workflow、分支管理、PR模板、commit规范、branching strategy
+category: code
+steps:
+  - description: 分析当前 Git 分支结构
+    tool: git_command
+    args_template: {command: "branch -a"}
+  - description: 查看现有 commit 风格
+    tool: git_command
+    args_template: {command: "log --oneline -20"}
+  - description: 设计分支策略 (main/develop/feature/hotfix 命名规范)
+  - description: 生成 PR 模板
+    tool: write_file
+    args_template: {path: "{project_root}/.github/pull_request_template.md", content: "{pr_template}"}
+  - description: 配置 commit 规范 (Conventional Commits)
+    tool: write_file
+    args_template: {path: "{project_root}/.commitlintrc.json", content: "{commitlint_config}"}
+  - description: 输出工作流文档 (分支策略 + 合并规则 + 发布流程)
+tags: [git, workflow, branch, pr, commit, convention]
+examples:
+  - 帮我配置 Git 工作流规范
+  - setup a branching strategy for the team
+  - 生成 PR 模板和 commit 规范
+version: 1
+use_count: 0
+success_rate: 1.0

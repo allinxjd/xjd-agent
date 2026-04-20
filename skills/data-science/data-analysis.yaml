@@ -1,0 +1,24 @@
+skill_id: data-analysis
+name: 数据分析
+description: 加载数据集、清洗、统计分析并生成可视化
+trigger: 数据分析、analyze data、统计、数据清洗
+category: data
+steps:
+  - description: 读取数据文件 (CSV/JSON/Excel)
+    tool: read_file
+    args_template: {path: "{data_file}"}
+  - description: 编写 Python 脚本进行数据清洗和分析
+    tool: execute_code
+    args_template: {language: python, code: "{analysis_code}"}
+  - description: 生成统计摘要和可视化图表
+    tool: execute_code
+    args_template: {language: python, code: "{visualization_code}"}
+  - description: 输出分析结论和建议
+tags: [data, analysis, statistics, visualization, pandas]
+examples:
+  - 分析这个 CSV 文件
+  - 帮我做数据统计
+  - analyze this dataset
+version: 1
+use_count: 0
+success_rate: 1.0

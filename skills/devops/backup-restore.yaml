@@ -1,0 +1,29 @@
+skill_id: backup-restore
+name: 备份恢复
+description: 制定数据备份策略并执行备份与恢复验证
+trigger: 数据备份, 备份恢复, backup restore, 数据库备份, 恢复数据
+category: devops
+steps:
+  - description: 分析需要备份的数据源（数据库、文件、配置）
+    tool: read_file
+    args_template: {path: ".env.local"}
+  - description: 执行数据库全量备份
+    tool: run_terminal
+    args_template: {command: "mysqldump -u ${DB_USER} -p${DB_PASS} ${DB_NAME} --single-transaction --routines --triggers > backup/db_$(date +%Y%m%d_%H%M%S).sql"}
+  - description: 备份应用配置和上传文件
+    tool: run_terminal
+    args_template: {command: "tar czf backup/files_$(date +%Y%m%d_%H%M%S).tar.gz uploads/ .env.local"}
+  - description: 验证备份文件完整性（大小检查和内容抽样）
+    tool: run_terminal
+    args_template: {command: "ls -lh backup/ && head -5 backup/db_*.sql"}
+  - description: 模拟恢复到测试环境验证备份可用性
+    tool: run_terminal
+    args_template: {command: "mysql -u ${DB_USER} -p${DB_PASS} ${DB_NAME}_test < backup/db_latest.sql"}
+  - description: 输出备份报告，包含备份大小、耗时和恢复验证结果
+tags: [backup, restore, database, disaster-recovery]
+examples:
+  - 备份生产数据库到本地
+  - 验证最近一次备份能否正常恢复
+version: 1
+use_count: 0
+success_rate: 1.0

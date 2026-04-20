@@ -1,0 +1,111 @@
+# 飞书机器人配置
+# 请填写你的飞书开放平台信息
+
+gateway:
+  platforms:
+    feishu:
+      # 基础配置
+      app_id: "请填写您的App ID"  # 飞书开放平台 App ID
+      app_secret: "请填写您的App Secret"  # 飞书开放平台 App Secret
+      verification_token: "请填写您的Verification Token"  # 事件订阅 Verification Token
+      encrypt_key: ""  # 加密密钥（可选）
+      
+      # 部署模式：webhook 或 long_poll
+      mode: "webhook"  # webhook 模式需要公网，long_poll 模式无需公网
+      
+      # Webhook 配置（mode=webhook 时生效）
+      webhook_port: 9001  # Webhook 监听端口
+      webhook_path: "/feishu/webhook"  # Webhook 路径
+      
+      # 长连接配置（mode=long_poll 时生效）
+      long_poll_interval: 5  # 轮询间隔（秒）
+      
+      # 消息配置
+      message:
+        enable_mention: true  # 是否启用 @机器人 触发
+        enable_private_chat: true  # 是否启用私聊
+        enable_group_chat: true  # 是否启用群聊
+        default_response: "你好！我是小巨蛋智能助手，有什么可以帮你的吗？"
+        
+      # 群管理配置
+      group_management:
+        enabled: true  # 启用群管理功能
+        welcome_new_members: true  # 欢迎新成员
+        monitor_keywords: []  # 监控关键词列表
+        auto_reply_rules: []  # 自动回复规则
+        
+      # 日志配置
+      log_level: "INFO"  # 日志级别：DEBUG, INFO, WARNING, ERROR
+      log_file: "logs/feishu_bot.log"  # 日志文件路径
+
+# 技能配置
+skills:
+  # 群管理技能
+  group_welcome:
+    name: "群欢迎消息"
+    description: "当新成员加入群时发送欢迎消息"
+    triggers:
+      - event: "im.chat.member.user.added_v1"
+    actions:
+      - type: "send_message"
+        template: |
+          欢迎 {user_name} 加入群聊！
+          我是小巨蛋智能助手，可以帮你：
+          1. 回答常见问题
+          2. 管理任务
+          3. 提醒重要事项
+          4. 同步信息
+          
+          输入 "帮助" 查看完整功能列表。
+          
+  group_monitor:
+    name: "群消息监控"
+    description: "监控群消息，处理违规内容"
+    triggers:
+      - event: "im.message.receive_v1"
+    actions:
+      - type: "check_keywords"
+        keywords: ["广告", "垃圾", "违规"]
+        action: "warn"  # warn, mute, delete
+        
+  group_qa:
+    name: "群智能问答"
+    description: "回答群内常见问题"
+    triggers:
+      - event: "im.message.receive_v1"
+        condition: "message contains '?'"
+    actions:
+      - type: "ai_response"
+        model: "gpt-3.5-turbo"
+        system_prompt: "你是一个专业的群助手，简洁准确地回答群成员的问题。"
+        
+  group_reminder:
+    name: "群定时提醒"
+    description: "定时发送提醒消息"
+    triggers:
+      - schedule: "0 9 * * *"  # 每天9点
+    actions:
+      - type: "send_message"
+        template: "早上好！今天是 {date}，记得完成今日任务哦！"
+        
+  group_summary:
+    name: "群聊摘要"
+    description: "每日生成群聊摘要"
+    triggers:
+      - schedule: "0 18 * * *"  # 每天18点
+    actions:
+      - type: "generate_summary"
+        period: "day"
+        format: "markdown"
+
+# 数据库配置（可选，用于存储群数据）
+database:
+  enabled: false
+  type: "sqlite"  # sqlite, mysql, postgresql
+  path: "data/feishu_bot.db"  # SQLite 数据库路径
+  # 或 MySQL/PostgreSQL 配置
+  # host: "localhost"
+  # port: 3306
+  # username: "root"
+  # password: "password"
+  # database: "feishu_bot"

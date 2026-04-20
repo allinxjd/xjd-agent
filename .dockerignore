@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+dist
+build
+.eggs
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Cache
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.coverage
+htmlcov
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs (not needed in image)
+docs/
+*.md
+!docker/README.md
+LICENSE
+
+# Tests (not needed in production image)
+tests/
+
+# Docker (avoid recursive copy)
+docker/
