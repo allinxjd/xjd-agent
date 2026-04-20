@@ -1,0 +1,28 @@
+skill_id: database-migration
+name: 数据库迁移
+description: 分析 schema 变更，生成数据库迁移脚本并验证执行
+trigger: 数据库迁移、database migration、schema变更、migrate database、迁移脚本
+category: code
+steps:
+  - description: 读取当前 schema 文件
+    tool: read_file
+    args_template: {path: "{project_root}/prisma/schema.prisma"}
+  - description: 对比 schema 变更 (新增表/字段/索引/关系)
+    tool: git_command
+    args_template: {command: "diff HEAD -- prisma/schema.prisma"}
+  - description: 分析变更影响 (数据兼容性、外键约束、默认值)
+  - description: 生成迁移脚本
+    tool: run_terminal
+    args_template: {command: "cd {project_root} && npx prisma migrate dev --name {migration_name} --create-only"}
+  - description: 检查迁移 SQL 内容
+    tool: read_file
+    args_template: {path: "{migration_file_path}"}
+  - description: 验证迁移可回滚性，输出变更摘要和注意事项
+tags: [database, migration, prisma, schema, sql]
+examples:
+  - 帮我生成数据库迁移脚本
+  - create a migration for the schema changes
+  - schema 改了，帮我做迁移
+version: 1
+use_count: 0
+success_rate: 1.0

@@ -1,0 +1,24 @@
+skill_id: error-log-analysis
+name: 错误日志分析
+description: 读取应用错误日志进行分类归因并定位根本原因
+trigger: 错误日志分析, 日志排错, error log analysis, 分析报错, debug logs
+category: software-development
+steps:
+  - description: 读取指定日志文件或最近的错误输出
+    tool: read_file
+    args_template: {path: "${LOG_FILE_PATH}"}
+  - description: 按错误类型和频率进行分类统计
+    tool: grep_search
+    args_template: {pattern: "(Error|Exception|FATAL|panic)", path: "${LOG_FILE_PATH}"}
+  - description: 搜索代码中对应的错误抛出位置
+    tool: grep_search
+    args_template: {pattern: "${ERROR_MESSAGE}", path: "${PROJECT_ROOT}"}
+  - description: 分析错误调用链和上下文，定位根本原因
+  - description: 输出错误分类报告 (错误类型 + 频率 + 根因 + 修复建议)
+tags: [error-analysis, logging, debugging, root-cause]
+examples:
+  - 帮我分析这个错误日志
+  - analyze the error logs and find root cause
+version: 1
+use_count: 0
+success_rate: 1.0

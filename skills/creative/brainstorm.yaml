@@ -1,0 +1,20 @@
+skill_id: brainstorm
+name: 头脑风暴
+description: 围绕主题生成创意方案和点子
+trigger: 头脑风暴、brainstorm、想点子、创意、idea
+category: general
+steps:
+  - description: 明确主题和约束条件
+  - description: 搜索相关领域的创新案例
+    tool: web_search
+    args_template: {query: "{topic} 创新案例"}
+  - description: 从不同角度发散思维 (用户视角、技术视角、商业视角)
+  - description: 输出创意列表 (每个包含简述 + 可行性 + 预期效果)
+tags: [brainstorm, idea, creative, innovation]
+examples:
+  - 帮我想想新功能
+  - brainstorm ideas for this project
+  - 有什么创新的方案
+version: 1
+use_count: 0
+success_rate: 1.0

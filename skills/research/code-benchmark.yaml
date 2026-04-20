@@ -1,0 +1,24 @@
+skill_id: code-benchmark
+name: 代码性能基准测试
+description: 设计并执行代码性能基准测试进行对比分析
+trigger: 性能测试, 基准测试, benchmark, 代码性能, performance test
+category: research
+steps:
+  - description: 明确测试目标和对比方案
+  - description: 编写基准测试代码
+    tool: execute_code
+    args_template: {code: "${BENCHMARK_CODE}", language: "${LANGUAGE}"}
+  - description: 多轮执行收集性能数据 (耗时/内存/吞吐量)
+    tool: execute_code
+    args_template: {code: "${RUN_BENCHMARK}", language: "${LANGUAGE}"}
+  - description: 将测试结果写入报告文件
+    tool: write_file
+    args_template: {path: "${REPORT_PATH}", content: "${BENCHMARK_RESULTS}"}
+  - description: 对比分析并给出优化建议
+tags: [benchmark, performance, profiling, optimization, testing]
+examples:
+  - 帮我做一个性能基准测试
+  - benchmark these two implementations and compare
+version: 1
+use_count: 0
+success_rate: 1.0

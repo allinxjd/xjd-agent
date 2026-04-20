@@ -1,0 +1,24 @@
+skill_id: nginx-config
+name: Nginx 配置
+description: 根据需求生成 Nginx 配置并验证语法正确性
+trigger: Nginx配置, nginx config, 反向代理配置, 负载均衡配置, nginx setup
+category: devops
+steps:
+  - description: 分析需求 (反向代理/负载均衡/SSL/静态文件/限流等)
+  - description: 生成 Nginx 配置文件
+    tool: write_file
+    args_template: {path: "${CONFIG_PATH}", content: "${NGINX_CONFIG}"}
+  - description: 验证配置语法
+    tool: run_terminal
+    args_template: {command: "nginx -t"}
+  - description: 检查端口占用和上游服务可达性
+    tool: run_terminal
+    args_template: {command: "ss -tlnp | grep -E ':(80|443|${PORT})'"}
+  - description: 输出配置说明和注意事项
+tags: [nginx, reverse-proxy, load-balancing, ssl, web-server]
+examples:
+  - 帮我配置 Nginx 反向代理
+  - generate nginx config for load balancing
+version: 1
+use_count: 0
+success_rate: 1.0

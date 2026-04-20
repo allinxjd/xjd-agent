@@ -1,0 +1,28 @@
+skill_id: penetration-test-plan
+name: 渗透测试计划
+description: 制定系统渗透测试方案和检查清单
+trigger: 渗透测试, 安全测试计划, penetration test, pentest plan
+category: security
+steps:
+  - description: 搜索目标技术栈的常见攻击向量
+    tool: web_search
+    args_template:
+      query: "{{ tech_stack }} penetration testing checklist OWASP"
+  - description: 确定测试范围（网络、应用、API、认证等）
+  - description: 制定测试用例和攻击场景
+  - description: 输出渗透测试计划文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ pentest_plan }}"
+tags:
+  - security
+  - penetration-testing
+  - OWASP
+  - plan
+examples:
+  - 帮我制定 Web 应用的渗透测试计划
+  - 生成 API 安全测试清单
+version: 1
+use_count: 0
+success_rate: 1.0

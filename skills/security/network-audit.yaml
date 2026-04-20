@@ -1,0 +1,22 @@
+skill_id: network-audit
+name: 网络安全审计
+description: 审计服务器网络配置包括端口扫描服务识别和风险评估
+trigger: 网络审计, 端口扫描, network audit, 安全审计, port scan
+category: security
+steps:
+  - description: 扫描目标主机开放端口
+    tool: port_scanner
+    args_template: {host: "${TARGET_HOST}", ports: "${PORT_RANGE}"}
+  - description: 识别各端口运行的服务和版本
+    tool: dns_lookup
+    args_template: {domain: "${TARGET_HOST}"}
+  - description: 检查防火墙和安全组配置
+  - description: 评估暴露面风险 (不必要的开放端口/过时服务/弱配置)
+  - description: 输出审计报告 (开放端口 + 服务 + 风险等级 + 加固建议)
+tags: [network, audit, port-scan, security, firewall]
+examples:
+  - 帮我审计服务器的网络安全
+  - audit open ports and services on the server
+version: 1
+use_count: 0
+success_rate: 1.0

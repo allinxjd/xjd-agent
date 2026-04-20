@@ -1,0 +1,26 @@
+skill_id: log-analysis
+name: 日志分析
+description: 收集应用日志进行模式识别和异常检测并生成分析报告
+trigger: 分析日志, 日志排查, log analysis, 查看错误日志, 异常检测
+category: devops
+steps:
+  - description: 收集指定时间范围内的应用日志
+    tool: run_terminal
+    args_template: {command: "pm2 logs ${APP_NAME} --lines 500 --nostream"}
+  - description: 提取错误和警告级别日志
+    tool: run_terminal
+    args_template: {command: "pm2 logs ${APP_NAME} --err --lines 200 --nostream"}
+  - description: 识别高频错误模式和重复异常
+    tool: run_terminal
+    args_template: {command: "pm2 logs ${APP_NAME} --err --lines 1000 --nostream | sort | uniq -c | sort -rn | head -20"}
+  - description: 检查系统资源使用情况关联分析
+    tool: run_terminal
+    args_template: {command: "pm2 monit --no-daemon || pm2 list"}
+  - description: 汇总分析结果，输出异常模式、频率和建议修复方案
+tags: [logging, analysis, troubleshooting, error-detection]
+examples:
+  - 分析最近一小时的错误日志
+  - 排查 xjd 服务的异常日志模式
+version: 1
+use_count: 0
+success_rate: 1.0

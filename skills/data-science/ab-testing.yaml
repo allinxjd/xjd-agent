@@ -1,0 +1,33 @@
+skill_id: ab-testing
+name: A/B 测试分析
+description: 收集实验数据并进行统计检验得出可靠结论
+trigger: AB测试, A/B测试, 实验分析, ab testing, experiment analysis
+category: data-science
+steps:
+  - description: 收集并整理实验组和对照组数据
+    tool: execute_code
+    args_template:
+      language: python
+      code: "{{ data_collection_code }}"
+  - description: 计算关键指标（转化率、均值、样本量等）
+  - description: 执行统计检验（t检验、卡方检验、Mann-Whitney等）
+    tool: execute_code
+    args_template:
+      language: python
+      code: "{{ statistical_test_code }}"
+  - description: 计算置信区间和效应量，输出结论和建议
+    tool: execute_code
+    args_template:
+      language: python
+      code: "{{ conclusion_code }}"
+tags:
+  - data-science
+  - ab-testing
+  - statistics
+  - experiment
+examples:
+  - 分析这组 A/B 测试数据是否显著
+  - 帮我做实验结果的统计检验
+version: 1
+use_count: 0
+success_rate: 1.0

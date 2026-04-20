@@ -1,0 +1,25 @@
+skill_id: sprint-retrospective
+name: Sprint 回顾
+description: 引导 Sprint 回顾会议并生成总结报告
+trigger: Sprint回顾, 迭代复盘, 回顾会, sprint retrospective, retro
+category: productivity
+steps:
+  - description: 收集本次 Sprint 的完成情况和关键数据
+  - description: 引导讨论做得好的、需改进的和行动项
+  - description: 整理回顾结论和改进措施
+  - description: 输出回顾报告文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ retro_content }}"
+tags:
+  - productivity
+  - agile
+  - sprint
+  - retrospective
+examples:
+  - 帮我整理这次 Sprint 的回顾总结
+  - 生成迭代复盘报告模板
+version: 1
+use_count: 0
+success_rate: 1.0

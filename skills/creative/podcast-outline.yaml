@@ -1,0 +1,25 @@
+skill_id: podcast-outline
+name: 播客大纲
+description: 规划播客节目的主题、结构和讨论要点
+trigger: 播客大纲, 播客脚本, podcast outline, podcast script
+category: creative
+steps:
+  - description: 确定播客主题、嘉宾和目标听众
+  - description: 设计节目流程（开场、话题段落、互动、收尾）
+  - description: 为每个段落准备讨论要点和引导问题
+  - description: 输出完整大纲文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ outline_content }}"
+tags:
+  - creative
+  - podcast
+  - audio
+  - outline
+examples:
+  - 帮我规划一期关于 AI 创业的播客大纲
+  - 写一个技术访谈播客的讨论提纲
+version: 1
+use_count: 0
+success_rate: 1.0

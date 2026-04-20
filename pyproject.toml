@@ -1,0 +1,151 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xjd-agent"
+version = "0.3.0"
+description = "XJD Agent — Production-ready AI Agent platform with multi-provider support, 20+ messaging adapters, and extensible tool system"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "XJD Team" }]
+license = { text = "MIT" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    # === Core ===
+    "openai>=2.21.0,<3",
+    "anthropic>=0.39.0,<1",
+    "google-genai>=1.0.0,<2",
+    "python-dotenv>=1.0.0,<2",
+    "httpx[socks]>=0.28.0,<1",
+    "pydantic>=2.10.0,<3",
+    "pyyaml>=6.0.2,<7",
+    "tenacity>=9.0.0,<10",
+    "rich>=14.0.0,<15",
+    "jinja2>=3.1.0,<4",
+
+    # === Web Server ===
+    "aiohttp>=3.9.0,<4",
+
+    # === CLI / TUI ===
+    "prompt_toolkit>=3.0.50,<4",
+    "click>=8.1.0,<9",
+
+    # === Tools ===
+    "firecrawl-py>=4.0.0,<5",
+
+    # === Messaging (常用) ===
+    "lark-oapi>=1.5.0,<2",
+
+    # === TTS / STT ===
+    "edge-tts>=7.0.0,<8",
+
+    # === Cron ===
+    "croniter>=6.0.0,<7",
+
+    # === Data ===
+    "aiosqlite>=0.20.0,<1",
+
+    # === Utils ===
+    "orjson>=3.10.0,<4",
+]
+
+[project.urls]
+Homepage = "https://github.com/allinxjd/xjd-agent"
+Repository = "https://github.com/allinxjd/xjd-agent"
+Documentation = "https://github.com/allinxjd/xjd-agent/tree/main/docs"
+"Bug Tracker" = "https://github.com/allinxjd/xjd-agent/issues"
+Changelog = "https://github.com/allinxjd/xjd-agent/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+# 消息渠道
+telegram = ["python-telegram-bot[webhooks]>=22.0,<23"]
+discord = ["discord.py>=2.7.0,<3"]
+slack = ["slack-bolt>=1.18.0,<2", "slack-sdk>=3.27.0,<4"]
+wechat = ["wechaty>=0.10.0,<1"]
+dingtalk = ["dingtalk-stream>=0.1.0,<1"]
+feishu = ["lark-oapi>=1.5.0,<2"]
+matrix = ["mautrix>=0.20,<1"]
+whatsapp = ["neonize>=1.0.0,<2"]
+
+# AI 模型 Provider
+bedrock = ["boto3>=1.35.0,<2"]
+mistral = ["mistralai>=2.3.0,<3"]
+
+# 高级功能
+voice = ["faster-whisper>=1.0.0,<2", "sounddevice>=0.4.6,<1", "numpy>=1.24.0,<3"]
+tts-premium = ["elevenlabs>=1.0,<2"]
+honcho = ["honcho-ai>=2.0.0,<3"]
+mcp = ["mcp>=1.2.0,<2"]
+browser = ["playwright>=1.40.0,<2"]
+rl = ["wandb>=0.15.0,<1"]
+irc = ["irc>=20.0,<21"]
+google-chat = ["google-auth>=2.0,<3", "google-api-python-client>=2.0,<3"]
+email-adapter = ["aiosmtplib>=3.0,<4"]
+pdf = ["pdfplumber>=0.10.0,<1"]
+computer-use = ["pyautogui>=0.9.54,<1", "Pillow>=10.0,<11", "pytesseract>=0.3.10,<1"]
+teams = ["botbuilder-core>=4.14,<5"]
+sms = ["twilio>=9.0,<10"]
+twitter = ["tweepy>=4.14,<5"]
+reddit = ["asyncpraw>=7.7,<8"]
+
+# 开发
+dev = [
+    "pytest>=9.0.0,<10",
+    "pytest-asyncio>=1.0.0,<2",
+    "pytest-xdist>=3.0,<4",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+]
+
+# 全量安装
+messaging = [
+    "xjd-agent[telegram]",
+    "xjd-agent[discord]",
+    "xjd-agent[slack]",
+    "xjd-agent[dingtalk]",
+    "xjd-agent[feishu]",
+]
+
+all = [
+    "xjd-agent[messaging]",
+    "xjd-agent[bedrock]",
+    "xjd-agent[mistral]",
+    "xjd-agent[voice]",
+    "xjd-agent[tts-premium]",
+    "xjd-agent[honcho]",
+    "xjd-agent[mcp]",
+    "xjd-agent[browser]",
+    "xjd-agent[computer-use]",
+    "xjd-agent[dev]",
+]
+
+[project.scripts]
+xjd-agent = "cli.main:main"
+xjdagent = "cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["agent*", "gateway*", "cli*", "sdk*", "web*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+testpaths = ["tests"]

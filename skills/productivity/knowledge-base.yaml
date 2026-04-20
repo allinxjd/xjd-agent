@@ -1,0 +1,29 @@
+skill_id: knowledge-base
+name: 知识库构建
+description: 从代码和文档中提取知识并构建结构化知识库
+trigger: 知识库, 文档整理, knowledge base, wiki, documentation
+category: productivity
+steps:
+  - description: 搜索项目中的关键文档和注释
+    tool: grep_search
+    args_template:
+      pattern: "{{ search_pattern }}"
+      path: "{{ project_root }}"
+  - description: 分类整理知识点（架构、API、配置、FAQ等）
+  - description: 构建知识库结构和索引
+  - description: 输出知识库文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ kb_content }}"
+tags:
+  - productivity
+  - knowledge-base
+  - documentation
+  - wiki
+examples:
+  - 帮我从代码中提取 API 文档
+  - 整理项目的知识库
+version: 1
+use_count: 0
+success_rate: 1.0

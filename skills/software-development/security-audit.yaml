@@ -1,0 +1,26 @@
+skill_id: security-audit
+name: 安全审计
+description: 基于 OWASP Top 10 进行安全检查，扫描漏洞并提供修复建议
+trigger: 安全审计、security audit、安全检查、OWASP、漏洞检测
+category: code
+steps:
+  - description: 读取目标代码文件或目录
+    tool: read_file
+    args_template: {path: "{file_path}"}
+  - description: 检查注入漏洞 (SQL注入、XSS、命令注入)
+    tool: grep_search
+    args_template: {pattern: "innerHTML|dangerouslySetInnerHTML|\\$queryRaw|exec\\(|eval\\(", path: "{project_root}"}
+  - description: 检查认证和授权缺陷 (硬编码密钥、缺少鉴权)
+    tool: grep_search
+    args_template: {pattern: "password|secret|api_key|token.*=.*['\"]", path: "{project_root}"}
+  - description: 检查敏感数据暴露 (日志泄漏、明文存储)
+  - description: 检查安全配置 (CORS、CSP、HTTPS、Cookie 属性)
+  - description: 输出安全报告 (漏洞列表 + 风险等级 + 修复方案)
+tags: [security, owasp, vulnerability, audit, xss, injection]
+examples:
+  - 帮我做一次安全审计
+  - run a security audit on this project
+  - 检查代码有没有 XSS 或 SQL 注入风险
+version: 1
+use_count: 0
+success_rate: 1.0

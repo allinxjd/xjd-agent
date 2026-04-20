@@ -1,0 +1,22 @@
+skill_id: technology-evaluation
+name: 技术选型评估
+description: 调研对比多个技术方案并给出选型推荐
+trigger: 技术选型, 技术评估, technology evaluation, 方案对比, tech comparison
+category: research
+steps:
+  - description: 明确评估维度 (性能/生态/学习成本/社区活跃度/许可证)
+  - description: 搜索各候选技术的最新信息和评测
+    tool: web_search
+    args_template: {query: "${TECH_A} vs ${TECH_B} comparison ${YEAR}"}
+  - description: 从多个维度进行对比打分
+  - description: 输出评估报告到文件
+    tool: write_file
+    args_template: {path: "${REPORT_PATH}", content: "${EVALUATION_REPORT}"}
+  - description: 给出最终推荐和理由
+tags: [evaluation, comparison, technology, decision, research]
+examples:
+  - 帮我对比 Redis 和 Memcached 的优劣
+  - evaluate React vs Vue for our next project
+version: 1
+use_count: 0
+success_rate: 1.0

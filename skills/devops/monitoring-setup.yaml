@@ -1,0 +1,31 @@
+skill_id: monitoring-setup
+name: 监控配置
+description: 配置 Prometheus 和 Grafana 监控体系并设置告警规则
+trigger: 配置监控, 设置告警, monitoring setup, prometheus配置, grafana看板
+category: devops
+steps:
+  - description: 分析当前服务架构，确定监控目标和指标
+    tool: read_file
+    args_template: {path: "deploy/docker-compose.yaml"}
+  - description: 生成 Prometheus 配置文件（scrape targets、采集间隔）
+    tool: write_file
+    args_template: {path: "monitoring/prometheus.yml", content: "generated prometheus config"}
+  - description: 生成 Grafana 数据源和仪表盘 JSON
+    tool: write_file
+    args_template: {path: "monitoring/grafana/dashboards/app.json", content: "generated dashboard"}
+  - description: 配置告警规则（CPU、内存、响应时间、错误率阈值）
+    tool: write_file
+    args_template: {path: "monitoring/alert-rules.yml", content: "generated alert rules"}
+  - description: 启动监控服务栈
+    tool: run_terminal
+    args_template: {command: "docker-compose -f monitoring/docker-compose.yml up -d"}
+  - description: 验证 Prometheus targets 和 Grafana 面板可访问
+    tool: http_request
+    args_template: {url: "http://localhost:9090/-/healthy", method: "GET"}
+tags: [monitoring, prometheus, grafana, alerting]
+examples:
+  - 给服务配置 Prometheus 监控和 Grafana 看板
+  - 设置 CPU 超过 80% 的告警规则
+version: 1
+use_count: 0
+success_rate: 1.0

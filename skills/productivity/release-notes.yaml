@@ -1,0 +1,28 @@
+skill_id: release-notes
+name: 发布说明
+description: 根据版本变更生成面向用户的发布说明
+trigger: 发布说明, release notes, 版本说明, 更新公告
+category: productivity
+steps:
+  - description: 获取版本间的提交和变更
+    tool: git_command
+    args_template:
+      command: "log {{ from_tag }}..{{ to_tag }} --oneline"
+  - description: 提炼用户可感知的功能变更和修复
+  - description: 撰写面向用户的发布说明（新功能、改进、修复）
+  - description: 输出发布说明文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ release_notes_content }}"
+tags:
+  - productivity
+  - release
+  - notes
+  - version
+examples:
+  - 帮我写 v2.0 的发布说明
+  - 生成这次更新的用户公告
+version: 1
+use_count: 0
+success_rate: 1.0

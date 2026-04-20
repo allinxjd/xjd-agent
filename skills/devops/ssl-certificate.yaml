@@ -1,0 +1,31 @@
+skill_id: ssl-certificate
+name: SSL 证书管理
+description: 检查 SSL 证书过期状态并执行申请续期和部署验证
+trigger: SSL证书, 证书过期, 续期证书, ssl certificate, https证书, certbot续期
+category: devops
+steps:
+  - description: 检查当前域名 SSL 证书过期时间
+    tool: run_terminal
+    args_template: {command: "echo | openssl s_client -servername ${DOMAIN} -connect ${DOMAIN}:443 2>/dev/null | openssl x509 -noout -dates"}
+  - description: 检查本地证书文件状态
+    tool: run_terminal
+    args_template: {command: "openssl x509 -in /etc/nginx/ssl/${DOMAIN}/fullchain.pem -noout -dates -subject"}
+  - description: 使用 certbot 申请或续期证书
+    tool: run_terminal
+    args_template: {command: "certbot renew --cert-name ${DOMAIN} --dry-run"}
+  - description: 部署新证书到 Nginx 并重载配置
+    tool: run_terminal
+    args_template: {command: "nginx -t && nginx -s reload"}
+  - description: 验证 HTTPS 连接和证书链完整性
+    tool: http_request
+    args_template: {url: "https://${DOMAIN}/api/health", method: "GET"}
+  - description: 确认证书同步到所有服务器节点
+    tool: run_terminal
+    args_template: {command: "echo | openssl s_client -servername ${DOMAIN} -connect ${SERVER_IP}:443 2>/dev/null | openssl x509 -noout -dates"}
+tags: [ssl, certificate, https, nginx, certbot]
+examples:
+  - 检查 ai.allinxjd.com 的 SSL 证书是否快过期
+  - 续期并部署 HTTPS 证书
+version: 1
+use_count: 0
+success_rate: 1.0

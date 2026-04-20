@@ -1,0 +1,489 @@
+"""Agent 主循环 — tool calling loop.
+
+- 接收用户消息 → 调用模型 → 解析 tool calls → 执行工具 → 再次调用模型 → 直到完成
+- 支持流式输出
+- 上下文管理 (自动压缩)
+- 记忆注入 (每轮预取)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Any, AsyncIterator, Callable, Optional
+
+from agent.core.model_router import ModelRouter
+from agent.providers.base import (
+    CompletionResponse,
+    Message,
+    StreamChunk,
+    ToolDefinition,
+    Usage,
+)
+
+logger = logging.getLogger(__name__)
+
+# 默认 system prompt
+DEFAULT_SYSTEM_PROMPT = """你是小巨蛋智能体 (XJD Agent)，一个强大的个人 AI 助手。
+
+你有以下核心能力:
+1. 使用工具完成任务 (终端命令、文件操作、网页搜索、代码执行等)
+2. 跨平台消息互通 (微信/飞书/钉钉/Telegram/Discord/Slack 等 30+ 平台)
+3. 从经验中学习 — 将成功的任务流程保存为可复用的技能
+4. 持久记忆 — 记住用户的偏好和重要信息
+5. 定时任务 — 用自然语言设置周期性自动化
+
+行为准则:
+- 简单的问候、闲聊、知识问答，直接用文字回复，不要调用工具
+- 只在用户明确要求执行操作（文件操作、搜索、代码执行、生成图片等）时才使用工具
+- 如果不确定是否需要工具，先直接回答，用户会告诉你是否需要进一步操作
+- 每轮工具调用后，如果已经获得足够信息，立即给出最终回复，不要继续调用工具
+- 任务完成后，考虑是否值得保存为技能
+- 危险操作 (删除文件、执行脚本) 需要用户确认
+- 回复简洁清晰，代码用 markdown 格式
+- 生成 HTML 页面、产品页、展示页、图表、流程图时，必须使用 create_canvas 工具渲染到 Canvas 面板，不要在聊天框直接输出 HTML 代码
+  - type 可选: html / markdown / mermaid / chart / react
+  - 用户能在 Canvas 面板实时预览效果
+
+环境信息:
+- 当前系统: macOS
+- 中文字体路径 (PIL/Pillow 生成图片时必须使用以下字体，否则中文无法显示):
+  - "/System/Library/Fonts/STHeiti Medium.ttc" (黑体，推荐)
+  - "/System/Library/Fonts/Hiragino Sans GB.ttc" (冬青黑体)
+  - "/Library/Fonts/Arial Unicode.ttf" (Arial Unicode)
+  注意: 此系统没有 PingFang.ttc，不要使用。Helvetica 不支持中文，不要用于中文文本。
+  注意: PIL/Pillow 无法渲染 emoji 图标，生成图片时用文字序号或符号(●▶★→)替代 emoji。
+
+- 电商图片生成 (重要):
+  - 任何需要生成产品图、电商图、种草图、主图、白底图、详情图的需求，必须使用 generate_ecommerce_image 工具
+  - 绝对禁止使用 Python/PIL/Pillow 脚本生成电商图片，PIL 做出来的图质量太差不能用
+  - 如果用户没有提供参考图片，先问用户要参考图片路径，不要自己用代码画图
+  - 支持平台: taobao/jd/xiaohongshu/douyin/pdd/dewu/tiktok/ali1688
+  - 图片类型: main(主图)/single(白底图)/detail(详情图)
+  - 参数 reference_image 必填，是本地图片文件路径
+"""
+
+@dataclass
+class ToolHandler:
+    """已注册的工具处理器."""
+
+    definition: ToolDefinition
+    handler: Callable[..., Any]  # async function(args) -> str
+    requires_approval: bool = False
+
+@dataclass
+class TurnResult:
+    """单轮对话结果."""
+
+    content: str = ""
+    thinking: Optional[str] = None
+    tool_calls_made: int = 0
+    total_usage: Usage = field(default_factory=Usage)
+    duration_ms: float = 0.0
+
+class AgentEngine:
+    """Agent 核心引擎.
+
+    用法:
+        engine = AgentEngine(router=model_router)
+        engine.register_tool(terminal_tool)
+
+        result = await engine.run_turn("帮我查看当前目录")
+        print(result.content)
+    """
+
+    def __init__(
+        self,
+        router: ModelRouter,
+        system_prompt: Optional[str] = None,
+        max_tool_rounds: int = 10,
+        max_context_tokens: int = 100_000,
+        memory_manager: Optional[Any] = None,
+        skill_manager: Optional[Any] = None,
+        learning_loop: Optional[Any] = None,
+        registry: Optional[Any] = None,
+        pin_manager: Optional[Any] = None,
+    ) -> None:
+        self._router = router
+        self._system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+        self._max_tool_rounds = max_tool_rounds
+        self._max_context_tokens = max_context_tokens
+        self._pin_manager = pin_manager
+
+        # 外部工具注册表 (ToolRegistry)
+        self._registry = registry
+
+        # 工具注册表 (内部，兼容旧代码)
+        self._tools: dict[str, ToolHandler] = {}
+
+        # 对话历史
+        self._messages: list[Message] = []
+
+        # 学习系统
+        self._memory_manager = memory_manager
+        self._skill_manager = skill_manager
+        self._learning_loop = learning_loop
+
+        # 统计
+        self._total_usage = Usage()
+        self._turn_count = 0
+
+    @property
+    def messages(self) -> list[Message]:
+        return self._messages
+
+    @messages.setter
+    def messages(self, value: list[Message]) -> None:
+        self._messages = value
+
+    @property
+    def tool_definitions(self) -> list[ToolDefinition]:
+        """返回传给模型的工具定义.
+
+        优先使用 ToolRegistry 的 toolset 组合 (core + skills)，
+        如果没有外部 registry 则回退到内部注册的全部工具。
+        """
+        # 优先使用外部 registry 的 toolset 组合
+        if hasattr(self, '_registry') and self._registry:
+            from agent.tools.registry import TOOLSETS
+            defs = self._registry.compose_toolsets("core", "skills")
+            if defs:
+                return defs
+        # 回退: 返回内部注册的全部工具
+        return [t.definition for t in self._tools.values()]
+
+    def register_tool(
+        self,
+        name: str,
+        description: str,
+        parameters: dict[str, Any],
+        handler: Callable[..., Any],
+        requires_approval: bool = False,
+    ) -> None:
+        """注册工具."""
+        self._tools[name] = ToolHandler(
+            definition=ToolDefinition(
+                name=name,
+                description=description,
+                parameters=parameters,
+            ),
+            handler=handler,
+            requires_approval=requires_approval,
+        )
+        logger.info("Registered tool: %s", name)
+
+    def set_system_prompt(self, prompt: str) -> None:
+        """更新 system prompt."""
+        self._system_prompt = prompt
+
+    def add_context(self, context: str) -> None:
+        """向 system prompt 追加上下文 (如记忆、技能提示)."""
+        self._system_prompt += f"\n\n{context}"
+
+    def reset(self) -> None:
+        """重置对话."""
+        self._messages = []
+        self._turn_count = 0
+
+    async def _execute_tool(self, name: str, arguments: str) -> str:
+        """执行工具调用 (带超时保护)."""
+        # 优先使用 ToolRegistry (有超时 + 重试 + 统计)
+        if self._registry:
+            tool = self._registry.get(name)
+            if tool:
+                try:
+                    args = json.loads(arguments) if arguments else {}
+                except json.JSONDecodeError:
+                    return f"Error: Invalid JSON arguments for tool '{name}'"
+                return await self._registry.execute(name, args)
+
+        # 回退: 内部工具表
+        tool = self._tools.get(name)
+        if not tool:
+            return f"Error: Unknown tool '{name}'"
+
+        try:
+            args = json.loads(arguments) if arguments else {}
+        except json.JSONDecodeError:
+            return f"Error: Invalid JSON arguments for tool '{name}'"
+
+        try:
+            result = tool.handler(**args)
+            if hasattr(result, "__await__"):
+                result = await asyncio.wait_for(result, timeout=60.0)
+            return str(result) if result is not None else "OK"
+        except asyncio.TimeoutError:
+            logger.warning("Tool %s timed out after 60s", name)
+            return f"Error: Tool '{name}' timed out"
+        except Exception as e:
+            logger.error("Tool %s failed: %s", name, e, exc_info=True)
+            return f"Error executing {name}: {e}"
+
+    async def run_turn(
+        self,
+        user_message: str,
+        on_stream: Optional[Callable[[str], None]] = None,
+        on_thinking: Optional[Callable[[str], None]] = None,
+        on_tool_call: Optional[Callable[[str, str], None]] = None,
+        on_tool_result: Optional[Callable[[str, str], None]] = None,
+        on_llm_event: Optional[Callable[[str, dict], None]] = None,
+        temperature: float = 0.7,
+        thinking: Optional[str] = None,
+        session_messages: Optional[list[Message]] = None,
+        abort_check: Optional[Callable[[], bool]] = None,
+    ) -> TurnResult:
+        """执行一轮对话 (包含完整的 tool calling loop).
+
+        Args:
+            user_message: 用户输入
+            on_stream: 流式文本回调
+            on_thinking: 思考过程回调
+            on_tool_call: 工具调用回调 (name, args)
+            on_tool_result: 工具结果回调 (name, result)
+            on_llm_event: Inspector 事件回调 (event_type, detail_dict)
+            temperature: 温度
+            thinking: 思考级别 ("off"|"low"|"medium"|"high")
+            session_messages: 外部 session 消息历史 (Gateway 模式)，传入时不操作 self._messages
+            abort_check: 中止检查回调
+
+        Returns:
+            TurnResult: 本轮结果
+        """
+        start_time = time.time()
+        self._turn_count += 1
+        total_tool_calls = 0
+        total_usage = Usage()
+
+        use_session = session_messages is not None
+        messages = session_messages if use_session else self._messages
+
+        # 注入学习上下文 (记忆 + 技能匹配)
+        injected = None
+        if self._learning_loop:
+            try:
+                injected = await self._learning_loop.inject_context(
+                    user_message=user_message,
+                    user_id="default",
+                    model_router=self._router,
+                )
+            except Exception as e:
+                logger.debug("Learning context injection failed: %s", e)
+
+        # 记忆 + 技能概览 → system prompt (稳定前缀，prompt cache 友好)
+        system_content = self._system_prompt
+        if injected and injected.system_context:
+            system_content += "\n" + injected.system_context
+
+        # 匹配到的技能 → user message 前缀 (按需注入，不破坏 cache)
+        actual_user_message = user_message
+        if injected and injected.skill_message:
+            actual_user_message = (
+                f"[已激活技能]\n{injected.skill_message}\n\n"
+                f"[用户消息]\n{user_message}"
+            )
+
+        # Pipeline 技能 → 提升工具轮次上限
+        effective_max_rounds = self._max_tool_rounds
+        if injected and injected.matched_skill_id and self._skill_manager:
+            try:
+                _matched = await self._skill_manager.get_skill(injected.matched_skill_id)
+                if _matched and "pipeline" in (_matched.tags or []):
+                    effective_max_rounds = max(self._max_tool_rounds, 20)
+            except Exception:
+                pass
+
+        # 添加用户消息
+        messages.append(Message(role="user", content=actual_user_message))
+
+        full_messages = [Message(role="system", content=system_content)] + messages
+
+        # Tool calling loop
+        for round_idx in range(effective_max_rounds):
+            if abort_check and abort_check():
+                logger.info("run_turn aborted at round %d (client disconnected)", round_idx)
+                final = "连接已断开，任务中止。"
+                messages.append(Message(role="assistant", content=final))
+                return TurnResult(
+                    content=final,
+                    tool_calls_made=total_tool_calls,
+                    total_usage=total_usage,
+                    duration_ms=(time.time() - start_time) * 1000,
+                )
+            # 调用模型
+            _llm_start = time.time()
+            if on_llm_event:
+                on_llm_event("request", {
+                    "messages_count": len(full_messages),
+                    "has_tools": bool(self.tool_definitions),
+                    "round": round_idx,
+                })
+            response = await self._router.complete_with_failover(
+                messages=full_messages,
+                user_message=user_message if round_idx == 0 else "",
+                tools=self.tool_definitions or None,
+                temperature=temperature,
+                thinking=thinking,
+            )
+
+            # Validate tool_calls structure
+            if not isinstance(response.tool_calls, (list, type(None))):
+                response.tool_calls = None
+
+            # 累加用量
+            total_usage.prompt_tokens += response.usage.prompt_tokens
+            total_usage.completion_tokens += response.usage.completion_tokens
+            total_usage.total_tokens += response.usage.total_tokens
+
+            if on_llm_event:
+                on_llm_event("response", {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "has_tool_calls": bool(response.tool_calls),
+                    "duration_ms": round((time.time() - _llm_start) * 1000),
+                    "round": round_idx,
+                })
+
+            # 思考过程
+            if response.thinking and on_thinking:
+                on_thinking(response.thinking)
+
+            # 没有 tool calls → 最终回复
+            if not response.tool_calls:
+                if response.content and on_stream:
+                    on_stream(response.content)
+
+                # 保存 assistant 回复
+                messages.append(
+                    Message(role="assistant", content=response.content)
+                )
+
+                turn_result = TurnResult(
+                    content=response.content,
+                    thinking=response.thinking,
+                    tool_calls_made=total_tool_calls,
+                    total_usage=total_usage,
+                    duration_ms=(time.time() - start_time) * 1000,
+                )
+
+                # 触发学习闭环
+                if self._learning_loop:
+                    try:
+                        await asyncio.wait_for(
+                            self._learning_loop.on_turn_complete(
+                                messages=[m.__dict__ if hasattr(m, '__dict__') else m for m in messages],
+                                result=turn_result,
+                                user_id="default",
+                                model_router=self._router,
+                                matched_skill_id=getattr(injected, "matched_skill_id", "") if injected else "",
+                            ),
+                            timeout=10.0,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.debug("Learning loop callback timed out")
+                    except Exception as e:
+                        logger.debug("Learning loop callback failed: %s", e)
+
+                # 有用性反馈 — 记录注入的记忆是否有帮助
+                if (
+                    injected
+                    and injected.injected_memory_ids
+                    and self._memory_manager
+                ):
+                    try:
+                        is_success = bool(
+                            turn_result.content
+                            and not any(
+                                kw in turn_result.content.lower()
+                                for kw in ("error:", "failed:", "错误:", "失败:")
+                            )
+                        )
+                        await asyncio.wait_for(
+                            self._memory_manager.record_feedback(
+                                memory_ids=injected.injected_memory_ids,
+                                signal="positive" if is_success else "negative",
+                            ),
+                            timeout=5.0,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.debug("Memory feedback recording timed out")
+                    except Exception as e:
+                        logger.debug("Memory feedback recording failed: %s", e)
+
+                return turn_result
+
+            # 有 tool calls → 执行工具
+            tool_names = [tc["function"]["name"] for tc in response.tool_calls]
+            logger.info("Round %d/%d tool calls: %s", round_idx + 1, effective_max_rounds, tool_names)
+            # 如果模型在 tool call 同时输出了文本，也发给前端
+            if response.content and on_stream:
+                on_stream(response.content)
+
+            # 保存 assistant 的 tool_calls 消息
+            messages.append(
+                Message(
+                    role="assistant",
+                    content=response.content,
+                    tool_calls=response.tool_calls,
+                )
+            )
+            full_messages.append(
+                Message(
+                    role="assistant",
+                    content=response.content,
+                    tool_calls=response.tool_calls,
+                )
+            )
+
+            # 并行执行所有 tool calls (独立工具可并发)
+            async def _run_one_tool(tc):
+                func_name = tc["function"]["name"]
+                func_args = tc["function"]["arguments"]
+                if on_tool_call:
+                    on_tool_call(func_name, func_args)
+                result = await self._execute_tool(func_name, func_args)
+                if on_tool_result:
+                    on_tool_result(func_name, result)
+                return tc, result
+
+            tool_results = await asyncio.gather(
+                *[_run_one_tool(tc) for tc in response.tool_calls],
+                return_exceptions=True,
+            )
+
+            for i, item in enumerate(tool_results):
+                if isinstance(item, Exception):
+                    logger.error("Tool execution exception: %s", item)
+                    # 必须返回 tool message，否则 tool_call/tool_result 不匹配
+                    tc = response.tool_calls[i]
+                    tool_msg = Message(
+                        role="tool",
+                        content=f"Error: {item}",
+                        tool_call_id=tc["id"],
+                    )
+                    messages.append(tool_msg)
+                    full_messages.append(tool_msg)
+                    total_tool_calls += 1
+                    continue
+                tc, result = item
+                total_tool_calls += 1
+                tool_msg = Message(
+                    role="tool",
+                    content=result,
+                    tool_call_id=tc["id"],
+                )
+                messages.append(tool_msg)
+                full_messages.append(tool_msg)
+
+        # 超过最大轮次
+        final_content = "已达到最大工具调用轮次限制。"
+        messages.append(Message(role="assistant", content=final_content))
+
+        return TurnResult(
+            content=final_content,
+            tool_calls_made=total_tool_calls,
+            total_usage=total_usage,
+            duration_ms=(time.time() - start_time) * 1000,
+        )

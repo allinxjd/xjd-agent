@@ -1,0 +1,29 @@
+skill_id: email-campaign
+name: 邮件营销
+description: 设计并生成邮件营销模板和内容
+trigger: 邮件营销, EDM, 营销邮件, email campaign, email marketing
+category: creative
+steps:
+  - description: 确定邮件目标（促活、转化、通知）和受众画像
+  - description: 使用模板渲染邮件内容
+    tool: template_render
+    args_template:
+      template: "{{ email_template }}"
+      variables: "{{ template_vars }}"
+  - description: 撰写邮件主题行、正文和 CTA
+  - description: 输出完整邮件文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ email_content }}"
+tags:
+  - creative
+  - email
+  - marketing
+  - campaign
+examples:
+  - 帮我写一封产品上线的营销邮件
+  - 设计一套用户召回的邮件模板
+version: 1
+use_count: 0
+success_rate: 1.0

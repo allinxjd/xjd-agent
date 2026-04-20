@@ -1,0 +1,28 @@
+skill_id: dependency-audit
+name: 依赖审计
+description: 检查项目依赖的过期版本、已知漏洞和许可证合规性
+trigger: 依赖审计、audit dependencies、检查依赖、漏洞扫描、outdated packages
+category: code
+steps:
+  - description: 读取依赖配置文件
+    tool: read_file
+    args_template: {path: "{project_root}/package.json"}
+  - description: 检查过期依赖
+    tool: run_terminal
+    args_template: {command: "cd {project_root} && npm outdated --json"}
+  - description: 运行安全漏洞扫描
+    tool: run_terminal
+    args_template: {command: "cd {project_root} && npm audit --json"}
+  - description: 分析漏洞严重等级和影响范围
+  - description: 检查许可证兼容性
+    tool: run_terminal
+    args_template: {command: "cd {project_root} && npx license-checker --summary"}
+  - description: 输出审计报告 (过期列表 + 漏洞详情 + 升级建议)
+tags: [dependency, audit, security, npm, vulnerability]
+examples:
+  - 帮我检查项目依赖有没有安全漏洞
+  - audit my project dependencies
+  - 哪些依赖需要升级
+version: 1
+use_count: 0
+success_rate: 1.0

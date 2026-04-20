@@ -1,0 +1,27 @@
+skill_id: patent-search
+name: 专利检索
+description: 搜索相关专利信息并分析技术布局
+trigger: 专利检索, 专利搜索, 知识产权, patent search, IP search
+category: research
+steps:
+  - description: 根据技术关键词搜索相关专利
+    tool: web_search
+    args_template:
+      query: "{{ technology }} patent site:patents.google.com OR site:pss-system.cponline.cnipa.gov.cn"
+  - description: 搜索补充专利数据库信息
+    tool: web_search
+    args_template:
+      query: "{{ technology }} 专利 发明 申请"
+  - description: 分析专利的权利要求、技术方案和申请趋势
+  - description: 输出专利分析报告，包含技术布局和规避建议
+tags:
+  - research
+  - patent
+  - intellectual-property
+  - technology
+examples:
+  - 帮我检索图像生成相关的专利
+  - 搜索一下语音识别领域的核心专利
+version: 1
+use_count: 0
+success_rate: 1.0

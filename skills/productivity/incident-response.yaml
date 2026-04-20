@@ -1,0 +1,28 @@
+skill_id: incident-response
+name: 事故响应
+description: 指导事故排查流程并生成事故报告
+trigger: 事故响应, 故障排查, 事故报告, incident response, postmortem
+category: productivity
+steps:
+  - description: 检查系统状态和日志
+    tool: run_terminal
+    args_template:
+      command: "{{ diagnostic_command }}"
+  - description: 分析故障原因和影响范围
+  - description: 记录时间线、根因和修复措施
+  - description: 输出事故报告文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ incident_report }}"
+tags:
+  - productivity
+  - incident
+  - postmortem
+  - ops
+examples:
+  - 帮我排查服务器 500 错误
+  - 生成昨天宕机的事故报告
+version: 1
+use_count: 0
+success_rate: 1.0
