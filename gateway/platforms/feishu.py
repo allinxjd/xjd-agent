@@ -318,14 +318,13 @@ class FeishuAdapter(BasePlatformAdapter):
 
         # Watchdog: 检测 SDK 重连后事件失效的情况
         async def _watchdog():
-            """每 60 秒检查一次, 如果 3 分钟没有 SDK 活动且线程还活着, 强制重启."""
+            """每 60 秒检查一次, 如果 10 分钟没有 SDK 活动且线程还活着, 强制重启."""
             while self._running:
                 await asyncio.sleep(60)
                 if not self._running:
                     break
                 elapsed = _time.time() - self._last_sdk_activity
-                # 3 分钟无活动 + 线程还在跑 = SDK 重连后事件失效
-                if elapsed > 180 and self._ws_thread and self._ws_thread.is_alive():
+                if elapsed > 600 and self._ws_thread and self._ws_thread.is_alive():
                     logger.warning("飞书 SDK 超过 %.0f 秒无活动, 强制重启连接", elapsed)
                     # 杀掉当前连接, 让 _run_ws 的 while 循环创建新 Client
                     if self._ws_client:
