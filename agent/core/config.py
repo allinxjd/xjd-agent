@@ -141,6 +141,7 @@ class Config:
     language: str = "zh-CN"
     log_level: str = "INFO"
     proxy: str = ""
+    hub_url: str = "https://ai.allinxjd.com"
 
     # Channel 配置 (动态加载)
     channels: dict[str, Any] = field(default_factory=dict)
@@ -221,6 +222,7 @@ class Config:
             config.language = data.get("language", "zh-CN")
             config.log_level = data.get("log_level", "INFO")
             config.proxy = data.get("proxy", "")
+            config.hub_url = data.get("hub_url", "https://ai.allinxjd.com")
             config.channels = data.get("channels", {})
 
             return config

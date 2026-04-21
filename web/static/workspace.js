@@ -995,7 +995,7 @@ let _marketCat = '';
 async function loadMarket() {
   if (_marketLoaded) return;
   _marketLoaded = true;
-  await Promise.all([loadMarketCategories(), marketSearch()]);
+  await Promise.all([loadMarketCategories(), marketSearch(), loadHubBalance()]);
 }
 
 async function loadMarketCategories() {
@@ -1125,4 +1125,169 @@ function marketTryInChat(name) {
   switchTab('chat');
   const input = document.getElementById('chatInput') || document.querySelector('textarea');
   if (input) { input.value = name; input.focus(); }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Recharge / Hub Account
+// ══════════════════════════════════════════════════════════════
+let _rechargePollingTimer = null;
+let _selectedPackage = null;
+
+async function loadHubBalance() {
+  try {
+    const res = await fetch('/api/admin/hub/account/balance');
+    const data = await res.json();
+    if (data.balance !== undefined) {
+      const el = document.getElementById('hubBalanceDisplay');
+      if (el) { el.textContent = data.balance; el.style.display = 'inline'; }
+    }
+  } catch(e) {}
+}
+
+function openRechargeModal() {
+  document.getElementById('rechargeModal').style.display = 'flex';
+  document.getElementById('rechargeStep1').style.display = 'block';
+  document.getElementById('rechargeStep2').style.display = 'none';
+  document.getElementById('rechargeStep3').style.display = 'none';
+  _selectedPackage = null;
+  loadRechargeContent();
+}
+
+function closeRechargeModal() {
+  document.getElementById('rechargeModal').style.display = 'none';
+  if (_rechargePollingTimer) { clearInterval(_rechargePollingTimer); _rechargePollingTimer = null; }
+  loadHubBalance();
+}
+
+async function loadRechargeContent() {
+  const authArea = document.getElementById('rechargeAuthArea');
+  const pkgArea = document.getElementById('rechargePackages');
+
+  const balRes = await fetch('/api/admin/hub/account/balance').then(r=>r.json()).catch(()=>({}));
+  if (balRes.balance !== undefined) {
+    authArea.innerHTML = `<div class="recharge-auth-status">Logged in as ${_esc(balRes.username||'user')} | Balance: ${balRes.balance} credits</div>`;
+    loadPackages(pkgArea);
+  } else {
+    authArea.innerHTML = `
+      <div class="recharge-auth-form">
+        <input id="hubUsername" placeholder="Username" autocomplete="username">
+        <input id="hubEmail" placeholder="Email (for register)" type="email" autocomplete="email">
+        <input id="hubPassword" placeholder="Password" type="password" autocomplete="current-password">
+        <div class="auth-row">
+          <button class="btn-primary" onclick="hubLogin()">Login</button>
+          <button class="btn-secondary" onclick="hubRegister()">Register</button>
+        </div>
+      </div>`;
+    pkgArea.innerHTML = '<div style="color:var(--text-tertiary);text-align:center;padding:20px">Login to view packages</div>';
+  }
+}
+
+async function hubLogin() {
+  const u = document.getElementById('hubUsername')?.value?.trim();
+  const p = document.getElementById('hubPassword')?.value;
+  if (!u || !p) return alert('Please enter username and password');
+  try {
+    const res = await fetch('/api/admin/hub/account/login', {
+      method:'POST', headers:{'Content-Type':'application/json','X-XJD-Request':'1'},
+      body: JSON.stringify({username:u, password:p})
+    });
+    const data = await res.json();
+    if (data.token) { loadRechargeContent(); loadHubBalance(); }
+    else alert(data.error || 'Login failed');
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function hubRegister() {
+  const u = document.getElementById('hubUsername')?.value?.trim();
+  const e = document.getElementById('hubEmail')?.value?.trim();
+  const p = document.getElementById('hubPassword')?.value;
+  if (!u || !e || !p) return alert('Please fill all fields');
+  try {
+    const res = await fetch('/api/admin/hub/account/register', {
+      method:'POST', headers:{'Content-Type':'application/json','X-XJD-Request':'1'},
+      body: JSON.stringify({username:u, email:e, password:p})
+    });
+    const data = await res.json();
+    if (data.token) { loadRechargeContent(); loadHubBalance(); }
+    else alert(data.error || 'Register failed');
+  } catch(er) { alert('Error: ' + er.message); }
+}
+
+async function loadPackages(container) {
+  try {
+    const res = await fetch('/api/admin/hub/recharge/packages');
+    const data = await res.json();
+    const pkgs = data.packages || [];
+    if (!pkgs.length) { container.innerHTML = '<div style="color:var(--text-tertiary);text-align:center">No packages available</div>'; return; }
+    container.innerHTML = pkgs.map((p,i) => {
+      const bonus = p.credits - p.amount_yuan * 10;
+      const bonusHtml = bonus > 0 ? `<span class="recharge-pkg-bonus">+${bonus} bonus</span>` : '';
+      return `<div class="recharge-pkg" data-idx="${i}" onclick="selectPackage(${i})">
+        <div class="recharge-pkg-left">
+          <span class="recharge-pkg-credits">${p.credits} credits</span>
+          ${bonusHtml}
+        </div>
+        <span class="recharge-pkg-price">&yen;${p.amount_yuan}</span>
+      </div>`;
+    }).join('') + '<button class="recharge-pay-btn" id="rechargePayBtn" onclick="rechargeCreate()" disabled>Select a package</button>';
+    window._rechargePackages = pkgs;
+  } catch(e) { container.innerHTML = '<div style="color:var(--red)">Failed to load packages</div>'; }
+}
+
+function selectPackage(idx) {
+  _selectedPackage = idx;
+  document.querySelectorAll('.recharge-pkg').forEach((el,i) => el.classList.toggle('selected', i===idx));
+  const btn = document.getElementById('rechargePayBtn');
+  if (btn) { btn.disabled = false; btn.textContent = `Pay ¥${window._rechargePackages[idx].amount_yuan}`; }
+}
+
+async function rechargeCreate() {
+  if (_selectedPackage === null) return;
+  const pkg = window._rechargePackages[_selectedPackage];
+  const btn = document.getElementById('rechargePayBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating order...'; }
+  try {
+    const res = await fetch('/api/admin/hub/recharge/create', {
+      method:'POST', headers:{'Content-Type':'application/json','X-XJD-Request':'1'},
+      body: JSON.stringify({amount: pkg.amount_yuan, pay_type:'native'})
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); if(btn){btn.disabled=false;btn.textContent=`Pay ¥${pkg.amount_yuan}`;} return; }
+    showQrCode(data, pkg);
+  } catch(e) { alert('Error: ' + e.message); if(btn){btn.disabled=false;btn.textContent=`Pay ¥${pkg.amount_yuan}`;} }
+}
+
+function showQrCode(orderData, pkg) {
+  document.getElementById('rechargeStep1').style.display = 'none';
+  document.getElementById('rechargeStep2').style.display = 'block';
+  document.getElementById('rechargeOrderInfo').textContent = `¥${pkg.amount_yuan} → ${pkg.credits} credits`;
+  const qrDiv = document.getElementById('rechargeQrCode');
+  if (orderData.code_url) {
+    qrDiv.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(orderData.code_url)}" alt="QR">`;
+  } else {
+    qrDiv.innerHTML = '<div style="color:var(--red);padding:20px">No QR code returned</div>';
+  }
+  startPolling(orderData.order_no, pkg);
+}
+
+function startPolling(orderNo, pkg) {
+  const pollEl = document.getElementById('rechargePolling');
+  let count = 0;
+  if (_rechargePollingTimer) clearInterval(_rechargePollingTimer);
+  _rechargePollingTimer = setInterval(async () => {
+    count++;
+    if (count > 180) { clearInterval(_rechargePollingTimer); pollEl.textContent = 'Payment timeout. Please try again.'; return; }
+    try {
+      const res = await fetch(`/api/admin/hub/recharge/status/${orderNo}`);
+      const data = await res.json();
+      if (data.status === 'paid') {
+        clearInterval(_rechargePollingTimer);
+        _rechargePollingTimer = null;
+        document.getElementById('rechargeStep2').style.display = 'none';
+        document.getElementById('rechargeStep3').style.display = 'block';
+        document.getElementById('rechargeSuccessInfo').textContent = `+${pkg.credits} credits added to your account`;
+        loadHubBalance();
+      }
+    } catch(e) {}
+  }, 2000);
 }

@@ -458,7 +458,7 @@ async def _start_gateway(host: str, port: int) -> None:
     # 注册 XjdHub 工具
     try:
         from agent.hub.client import XjdHubClient
-        hub_client = XjdHubClient(skill_manager=skill_manager)
+        hub_client = XjdHubClient(skill_manager=skill_manager, hub_url=config.hub_url)
         await hub_client.initialize()
         from agent.tools.hub_tools import register_hub_tools
         register_hub_tools(tool_registry, hub_client=hub_client, skill_manager=skill_manager)
@@ -688,7 +688,7 @@ async def _start_web(host: str, port: int) -> None:
     hub_client = None
     try:
         from agent.hub.client import XjdHubClient
-        hub_client = XjdHubClient(skill_manager=skill_manager)
+        hub_client = XjdHubClient(skill_manager=skill_manager, hub_url=config.hub_url)
         await hub_client.initialize()
         from agent.tools.hub_tools import register_hub_tools
         register_hub_tools(tool_registry, hub_client=hub_client, skill_manager=skill_manager)

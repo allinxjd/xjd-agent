@@ -58,12 +58,15 @@ class XjdHubClient:
         hub_url: str = "",
     ) -> None:
         self._skill_manager = skill_manager
-        self._hub_url = hub_url
+        self._hub_url = hub_url.rstrip("/") if hub_url else ""
         self._index = None
         from agent.core.config import get_home
         self._home = get_home()
         self._packages_dir = self._home / "packages"
         self._packages_dir.mkdir(parents=True, exist_ok=True)
+        self._token_path = self._home / "hub_token.json"
+        self._remote_token: str = ""
+        self._load_token()
 
     @staticmethod
     def _validate_id(name: str, label: str = "ID") -> None:
@@ -307,6 +310,74 @@ class XjdHubClient:
 
         logger.info("Published skill %s to Hub", skill.name)
         return PublishResult(success=True, pkg_path=pkg_path, message=f"技能 {skill.name} 已发布")
+
+    # ── Remote Hub API (支付/账户) ──────────────────────────────
+
+    def _load_token(self) -> None:
+        if self._token_path.exists():
+            try:
+                data = json.loads(self._token_path.read_text())
+                self._remote_token = data.get("token", "")
+            except Exception:
+                pass
+
+    def _save_token(self, token: str, user_id: str = "", username: str = "") -> None:
+        self._remote_token = token
+        self._token_path.write_text(json.dumps({
+            "token": token, "user_id": user_id, "username": username,
+        }, ensure_ascii=False))
+
+    def _remote_headers(self) -> dict:
+        h = {"Content-Type": "application/json"}
+        if self._remote_token:
+            h["Authorization"] = f"Bearer {self._remote_token}"
+        return h
+
+    async def _remote_get(self, path: str) -> dict:
+        import httpx
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            resp = await c.get(f"{self._hub_url}{path}", headers=self._remote_headers())
+            return resp.json()
+
+    async def _remote_post(self, path: str, body: dict) -> dict:
+        import httpx
+        async with httpx.AsyncClient(timeout=15.0) as c:
+            resp = await c.post(f"{self._hub_url}{path}", json=body, headers=self._remote_headers())
+            return resp.json()
+
+    async def remote_register(self, username: str, email: str, password: str) -> dict:
+        data = await self._remote_post("/hub/api/auth/register", {
+            "username": username, "email": email, "password": password,
+        })
+        if data.get("token"):
+            self._save_token(data["token"], data.get("user_id", ""), username)
+        return data
+
+    async def remote_login(self, username: str, password: str) -> dict:
+        data = await self._remote_post("/hub/api/auth/login", {
+            "username": username, "password": password,
+        })
+        if data.get("token"):
+            self._save_token(data["token"], data.get("user_id", ""), username)
+        return data
+
+    async def remote_balance(self) -> dict:
+        return await self._remote_get("/hub/api/auth/me")
+
+    async def remote_recharge_packages(self) -> dict:
+        return await self._remote_get("/hub/api/recharge/packages")
+
+    async def remote_recharge_create(self, amount: float, pay_type: str = "native") -> dict:
+        return await self._remote_post("/hub/api/recharge/create", {
+            "amount": amount, "pay_type": pay_type,
+        })
+
+    async def remote_recharge_status(self, order_no: str) -> dict:
+        return await self._remote_get(f"/hub/api/recharge/status/{order_no}")
+
+    @property
+    def has_remote_token(self) -> bool:
+        return bool(self._remote_token)
 
     async def close(self) -> None:
         if self._index:

@@ -835,6 +835,10 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
             <option value="rating">Top Rated</option>
             <option value="name">A-Z</option>
           </select>
+          <div class="market-balance-area">
+            <span id="hubBalanceDisplay" class="hub-balance" style="display:none">0</span>
+            <button class="btn-recharge" onclick="openRechargeModal()">Recharge</button>
+          </div>
         </div>
         <div class="market-body">
           <div class="market-sidebar" id="marketSidebar">
@@ -2472,6 +2476,39 @@ async function checkAuthStatus() {
   } catch(e) { currentModelNameEl.textContent = t('offline'); }
 })();
 </script>
-<script src="/static/workspace.js?v=6"></script>
+<script src="/static/workspace.js?v=8"></script>
+
+<!-- Recharge Modal -->
+<div id="rechargeModal" class="recharge-overlay" style="display:none" onclick="if(event.target===this)closeRechargeModal()">
+  <div class="recharge-modal">
+    <div class="recharge-header">
+      <span class="recharge-title">Recharge Credits</span>
+      <span class="recharge-close" onclick="closeRechargeModal()">&times;</span>
+    </div>
+    <div id="rechargeBody" class="recharge-body">
+      <div id="rechargeStep1">
+        <div id="rechargeAuthArea"></div>
+        <div id="rechargePackages" class="recharge-packages"></div>
+      </div>
+      <div id="rechargeStep2" style="display:none">
+        <div class="recharge-qr-area">
+          <p id="rechargeOrderInfo"></p>
+          <div id="rechargeQrCode" class="recharge-qr"></div>
+          <p class="recharge-scan-hint">Scan with WeChat to pay</p>
+          <div id="rechargePolling" class="recharge-polling">Waiting for payment...</div>
+        </div>
+      </div>
+      <div id="rechargeStep3" style="display:none">
+        <div class="recharge-success">
+          <div class="recharge-success-icon">&#10003;</div>
+          <p>Payment successful!</p>
+          <p id="rechargeSuccessInfo"></p>
+          <button class="btn-primary" onclick="closeRechargeModal()">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
