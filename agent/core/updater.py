@@ -166,17 +166,24 @@ def _update_git() -> bool:
     repo_dir = str(Path(__file__).parent.parent.parent)
 
     try:
-        # git pull
         result = subprocess.run(
-            ["git", "pull", "--rebase"],
+            ["git", "fetch", "--tags", "origin"],
             capture_output=True, text=True, timeout=60,
             cwd=repo_dir,
         )
         if result.returncode != 0:
-            logger.warning("git pull failed: %s", result.stderr)
+            logger.warning("git fetch failed: %s", result.stderr)
             return False
 
-        # pip install -e .
+        result = subprocess.run(
+            ["git", "reset", "--hard", "origin/main"],
+            capture_output=True, text=True, timeout=30,
+            cwd=repo_dir,
+        )
+        if result.returncode != 0:
+            logger.warning("git reset failed: %s", result.stderr)
+            return False
+
         result = subprocess.run(
             ["pip", "install", "-e", "."],
             capture_output=True, text=True, timeout=120,
