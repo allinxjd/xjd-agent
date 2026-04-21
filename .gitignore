@@ -60,3 +60,6 @@ inspector.jsonl
 
 # Backups
 *.bak
+
+# Hub (独立仓库 allinxjd/xjd-hub)
+hub/
