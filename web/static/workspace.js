@@ -92,7 +92,7 @@ async function loadCanvasHistory() {
     const res = await fetch('/api/workspace/canvas/list');
     const data = await res.json();
     if (!data.items || !data.items.length) return;
-    for (const item of data.items.slice(-20)) {
+    for (const item of data.items.slice(-20).reverse()) {
       try {
         const r = await fetch('/api/workspace/canvas/' + encodeURIComponent(item.artifact_id));
         const comp = await r.json();
