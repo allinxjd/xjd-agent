@@ -66,6 +66,9 @@ class HubIndex:
 
         needs_new = await self._needs_schema_upgrade()
         if needs_new:
+            await self._db.execute("DROP TABLE IF EXISTS hub_skills")
+            await self._db.execute("DROP TABLE IF EXISTS hub_skill_versions")
+            await self._db.execute("DROP TABLE IF EXISTS hub_users")
             await self._db.executescript(_NEW_SCHEMA_SQL)
             await self._db.commit()
 
