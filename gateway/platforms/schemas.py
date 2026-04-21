@@ -122,6 +122,17 @@ PLATFORM_SCHEMAS: dict[str, dict] = {
             {"key": "user_id", "label": "Bot User ID", "label_zh": "Bot 用户 ID", "type": "text", "required": True},
         ],
     },
+    "wechat_clawbot": {
+        "name": "微信 ClawBot",
+        "name_en": "WeChat ClawBot",
+        "icon": "wechat",
+        "fields": [
+            {"key": "bot_token", "label": "Bot Token", "label_zh": "iLink Bot Token", "type": "password", "required": True,
+             "help": "微信扫码登录 ClawBot 后获取的 Token"},
+            {"key": "base_url", "label": "API Base URL", "label_zh": "API 地址", "type": "text", "required": False,
+             "default": "https://ilinkai.weixin.qq.com", "help": "iLink API 地址，一般无需修改"},
+        ],
+    },
 }
 
 # 适配器类映射 (平台名 → 模块路径, 类名)
@@ -135,6 +146,7 @@ ADAPTER_MAP: dict[str, tuple[str, str]] = {
     "whatsapp": ("gateway.platforms.whatsapp", "WhatsAppAdapter"),
     "line": ("gateway.platforms.line", "LineAdapter"),
     "matrix": ("gateway.platforms.matrix", "MatrixAdapter"),
+    "wechat_clawbot": ("gateway.platforms.wechat_clawbot", "WeChatClawBotAdapter"),
 }
 
 
