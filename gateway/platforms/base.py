@@ -51,6 +51,7 @@ class PlatformType(str, Enum):
     REDDIT = "reddit"
     WEB = "web"
     API = "api"
+    WECHAT_CLAWBOT = "wechat_clawbot"
 
 class MessageType(str, Enum):
     """消息类型."""
