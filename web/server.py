@@ -230,6 +230,9 @@ class WebServer:
 
         # XjdHub API
         app.router.add_get("/api/admin/hub/search", self._hub_search)
+        app.router.add_get("/api/admin/hub/categories", self._hub_categories)
+        app.router.add_get("/api/admin/hub/featured", self._hub_featured)
+        app.router.add_get("/api/admin/hub/skill/{slug}", self._hub_detail)
         app.router.add_post("/api/admin/hub/install", self._hub_install)
         app.router.add_post("/api/admin/hub/publish", self._hub_publish)
         app.router.add_get("/api/admin/hub/published", self._hub_published)
@@ -2542,33 +2545,67 @@ class WebServer:
         return None
 
     async def _hub_search(self, request):
-        """GET /api/admin/hub/search?q=...&category=..."""
+        """GET /api/admin/hub/search?q=...&category=...&sort=...&page=...&per_page=..."""
         from aiohttp import web
         _, err = self._require_admin(request)
         if err:
             return err
 
         hub = self._get_hub_client()
-        if not hub:
+        if not hub or not hub._index:
             return web.json_response({"error": "Hub not initialized"}, status=503)
 
         query = request.query.get("q", "")
         category = request.query.get("category", "")
-        results = await hub.search(query=query, category=category)
-        return web.json_response({
-            "results": [
-                {
-                    "name": r.name,
-                    "version": r.version,
-                    "author": r.author,
-                    "description": r.description,
-                    "tags": r.tags,
-                    "price": r.price,
-                    "downloads": r.downloads,
-                }
-                for r in results
-            ],
-        })
+        sort = request.query.get("sort", "downloads")
+        try:
+            page = max(1, int(request.query.get("page", "1")))
+            per_page = min(50, max(1, int(request.query.get("per_page", "20"))))
+        except (ValueError, TypeError):
+            page, per_page = 1, 20
+
+        results = await hub._index.search(query=query, category=category, sort=sort, page=page, per_page=per_page)
+        total = await hub._index.total_count()
+        return web.json_response({"results": results, "total": total, "page": page})
+
+    async def _hub_categories(self, request):
+        """GET /api/admin/hub/categories"""
+        from aiohttp import web
+        _, err = self._require_admin(request)
+        if err:
+            return err
+        hub = self._get_hub_client()
+        if not hub or not hub._index:
+            return web.json_response({"error": "Hub not initialized"}, status=503)
+        cats = await hub._index.categories()
+        return web.json_response({"categories": cats})
+
+    async def _hub_featured(self, request):
+        """GET /api/admin/hub/featured"""
+        from aiohttp import web
+        _, err = self._require_admin(request)
+        if err:
+            return err
+        hub = self._get_hub_client()
+        if not hub or not hub._index:
+            return web.json_response({"error": "Hub not initialized"}, status=503)
+        results = await hub._index.featured(limit=20)
+        return web.json_response({"results": results})
+
+    async def _hub_detail(self, request):
+        """GET /api/admin/hub/skill/{slug}"""
+        from aiohttp import web
+        _, err = self._require_admin(request)
+        if err:
+            return err
+        hub = self._get_hub_client()
+        if not hub or not hub._index:
+            return web.json_response({"error": "Hub not initialized"}, status=503)
+        slug = request.match_info["slug"]
+        skill = await hub._index.get(slug)
+        if not skill:
+            return web.json_response({"error": "Not found"}, status=404)
+        return web.json_response({"skill": skill})
 
     async def _hub_install(self, request):
         """POST /api/admin/hub/install {name, version?}"""

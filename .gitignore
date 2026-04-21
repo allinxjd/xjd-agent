@@ -62,4 +62,4 @@ inspector.jsonl
 *.bak
 
 # Hub (独立仓库 allinxjd/xjd-hub)
-hub/
+/hub/
