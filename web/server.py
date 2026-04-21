@@ -196,6 +196,10 @@ class WebServer:
         app.router.add_get("/api/workspace/metrics", self._ws_metrics)
         app.router.add_get("/api/workspace/skills", self._ws_skills_list)
 
+        # Canvas API
+        app.router.add_get("/api/workspace/canvas/list", self._canvas_list)
+        app.router.add_get("/api/workspace/canvas/{artifact_id}", self._canvas_get)
+
         # Gateway Admin API (channels, voice, ecommerce)
         app.router.add_get("/api/admin/gateway/channels", self._gw_list_channels)
         app.router.add_post("/api/admin/gateway/channels", self._gw_save_channel)
@@ -709,6 +713,23 @@ class WebServer:
             self._inspector_subs.add(session_id)
             return
 
+        if msg_type == "a2ui_action":
+            import re
+            action = payload.get("action", "")[:100]
+            action_payload = payload.get("payload", {})
+            artifact_id = payload.get("artifact_id", "")
+            if not re.match(r'^[a-zA-Z0-9_-]{0,20}$', artifact_id):
+                return
+            if not action:
+                return
+            a2ui_msg = f"[A2UI 交互] Canvas {artifact_id}: {action}"
+            if action_payload:
+                import json as _json
+                a2ui_msg += f" — {_json.dumps(action_payload, ensure_ascii=False)[:500]}"
+            payload = {"type": "chat", "message": a2ui_msg}
+            msg_type = "chat"
+            user_message = a2ui_msg
+
         if not user_message:
             return
 
@@ -765,6 +786,7 @@ class WebServer:
                     }))
 
                 def on_tool_result(name, result):
+                    result = str(result) if result is not None else ""
                     asyncio.get_event_loop().create_task(_safe_send({
                         "type": "tool_result",
                         "name": name,
@@ -791,7 +813,7 @@ class WebServer:
                             "timestamp": time.time(),
                         }))
                     # Canvas 渲染推送
-                    if name in ("create_canvas", "update_canvas") and result and '"__canvas_render__"' in result:
+                    if result and '"__canvas_render__"' in result:
                         try:
                             import json as _json
                             canvas_data = _json.loads(result)
@@ -806,7 +828,7 @@ class WebServer:
                                     },
                                 }))
                         except Exception:
-                            pass
+                            logger.debug("Canvas render parse failed", exc_info=True)
 
                 def on_llm_event(phase, info):
                     if phase == "request":
@@ -1370,6 +1392,58 @@ class WebServer:
                 dead.append(sid)
         for sid in dead:
             self._inspector_subs.discard(sid)
+
+    async def broadcast_canvas(self, canvas_data: dict, source_platform: str = "", sender: str = "") -> None:
+        """广播 Canvas 渲染到所有 WebUI 客户端 (跨平台 canvas 推送)."""
+        msg = {
+            "type": "canvas_render",
+            "component": {
+                "type": canvas_data.get("type", "html"),
+                "title": canvas_data.get("title", ""),
+                "content": canvas_data.get("content", ""),
+                "artifact_id": canvas_data.get("artifact_id", ""),
+            },
+            "source_platform": source_platform,
+            "sender": sender,
+        }
+        for sid, ws in list(self._ws_connections.items()):
+            if ws and not ws.closed:
+                try:
+                    await asyncio.wait_for(ws.send_json(msg), timeout=5.0)
+                except Exception:
+                    logger.debug("Canvas broadcast to %s failed", sid, exc_info=True)
+
+    async def _canvas_list(self, request):
+        """GET /api/workspace/canvas/list — 列出持久化的 canvas."""
+        from aiohttp import web as _web
+        try:
+            from agent.tools.canvas_tools import _canvas_mgr
+            store = getattr(_canvas_mgr, '_store', None)
+            if not store:
+                return _web.json_response({"items": []})
+            items = store.list_artifacts() or []
+            return _web.json_response({"items": items})
+        except Exception as e:
+            return _web.json_response({"items": [], "error": str(e)})
+
+    async def _canvas_get(self, request):
+        """GET /api/workspace/canvas/{artifact_id} — 获取 canvas 渲染内容."""
+        from aiohttp import web as _web
+        artifact_id = request.match_info.get("artifact_id", "")
+        try:
+            from agent.tools.canvas_tools import _canvas_mgr
+            artifact = _canvas_mgr.get(artifact_id)
+            if not artifact:
+                return _web.json_response({"error": "not found"}, status=404)
+            html = _canvas_mgr.render_html(artifact_id)
+            return _web.json_response({
+                "artifact_id": artifact.artifact_id,
+                "type": artifact.canvas_type.value,
+                "title": artifact.title,
+                "content": html or artifact.content,
+            })
+        except Exception as e:
+            return _web.json_response({"error": str(e)}, status=500)
 
     # ─── Gateway Admin API ───
 
