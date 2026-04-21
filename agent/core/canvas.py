@@ -13,9 +13,12 @@
 
 from __future__ import annotations
 
+import html as _html
 import logging
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
@@ -45,9 +48,19 @@ class CanvasArtifact:
 class CanvasManager:
     """Canvas 管理器."""
 
-    def __init__(self) -> None:
-        self._artifacts: dict[str, CanvasArtifact] = {}
+    MAX_CACHED = 200
+
+    def __init__(self, persist: bool = True) -> None:
+        self._artifacts: OrderedDict[str, CanvasArtifact] = OrderedDict()
+        self._lock = threading.Lock()
         self._listeners: list[Callable[[str, CanvasArtifact], Any]] = []
+        self._store = None
+        if persist:
+            try:
+                from .canvas_store import CanvasStore
+                self._store = CanvasStore()
+            except Exception:
+                logger.debug("Canvas persistence unavailable", exc_info=True)
 
     def on_change(self, callback: Callable[[str, CanvasArtifact], Any]) -> None:
         """注册变更监听器. callback(event, artifact)."""
@@ -68,38 +81,74 @@ class CanvasManager:
             created_at=now,
             updated_at=now,
         )
-        self._artifacts[artifact.artifact_id] = artifact
+        with self._lock:
+            self._artifacts[artifact.artifact_id] = artifact
+            self._evict()
         self._notify("create", artifact)
+        if self._store:
+            try:
+                self._store.save(artifact)
+            except Exception:
+                logger.debug("Canvas persist failed", exc_info=True)
         return artifact
 
     def update(self, artifact_id: str, content: str, metadata: Optional[dict] = None) -> Optional[CanvasArtifact]:
         """更新 Canvas 内容."""
-        artifact = self._artifacts.get(artifact_id)
+        artifact = self.get(artifact_id)
         if not artifact:
             return None
-        artifact.content = content
-        artifact.updated_at = time.time()
-        if metadata:
-            artifact.metadata.update(metadata)
+        with self._lock:
+            artifact.content = content
+            artifact.updated_at = time.time()
+            if metadata:
+                artifact.metadata.update(metadata)
+            self._artifacts.move_to_end(artifact_id)
         self._notify("update", artifact)
+        if self._store:
+            try:
+                self._store.save(artifact)
+            except Exception:
+                logger.debug("Canvas persist failed", exc_info=True)
         return artifact
 
     def get(self, artifact_id: str) -> Optional[CanvasArtifact]:
-        return self._artifacts.get(artifact_id)
+        with self._lock:
+            artifact = self._artifacts.get(artifact_id)
+            if artifact:
+                self._artifacts.move_to_end(artifact_id)
+                return artifact
+        if self._store:
+            artifact = self._store.load(artifact_id)
+            if artifact:
+                with self._lock:
+                    self._artifacts[artifact_id] = artifact
+                    self._evict()
+        return artifact
 
     def list_all(self) -> list[CanvasArtifact]:
-        return list(self._artifacts.values())
+        with self._lock:
+            return list(self._artifacts.values())
 
     def delete(self, artifact_id: str) -> bool:
-        artifact = self._artifacts.pop(artifact_id, None)
+        with self._lock:
+            artifact = self._artifacts.pop(artifact_id, None)
         if artifact:
             self._notify("delete", artifact)
+            if self._store:
+                try:
+                    self._store.delete(artifact_id)
+                except Exception:
+                    pass
             return True
         return False
 
+    def _evict(self) -> None:
+        while len(self._artifacts) > self.MAX_CACHED:
+            self._artifacts.popitem(last=False)
+
     def render_html(self, artifact_id: str) -> Optional[str]:
         """渲染为完整 HTML 页面."""
-        artifact = self._artifacts.get(artifact_id)
+        artifact = self.get(artifact_id)
         if not artifact:
             return None
 
@@ -118,28 +167,35 @@ class CanvasManager:
 
     def _render_markdown(self, a: CanvasArtifact) -> str:
         body = f"""<div id="content">{a.content}</div>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<script>document.getElementById('content').innerHTML=marked.parse(document.getElementById('content').textContent);</script>"""
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" onerror="document.getElementById('_cdn_err').style.display=''"></script>
+<script>if(typeof marked!=='undefined')document.getElementById('content').innerHTML=marked.parse(document.getElementById('content').textContent);</script>
+<div id="_cdn_err" style="display:none;color:#c00;padding:8px;font-size:13px">⚠ Markdown 渲染库加载失败（需要网络），已显示原始内容</div>"""
         return _wrap_html(a.title, body)
 
     def _render_mermaid(self, a: CanvasArtifact) -> str:
-        body = f"""<pre class="mermaid">{a.content}</pre>
-<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
-<script>mermaid.initialize({{startOnLoad:true}});</script>"""
+        safe = _html.escape(a.content)
+        body = f"""<pre class="mermaid" id="_mmd">{safe}</pre>
+<script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js" onerror="document.getElementById('_cdn_err').style.display=''"></script>
+<script>if(typeof mermaid!=='undefined')mermaid.initialize({{startOnLoad:true}});</script>
+<div id="_cdn_err" style="display:none;color:#c00;padding:8px;font-size:13px">⚠ Mermaid 渲染库加载失败（需要网络），已显示原始代码</div>"""
         return _wrap_html(a.title, body)
 
     def _render_chart(self, a: CanvasArtifact) -> str:
+        import json
+        safe_json = json.dumps(a.content)
         body = f"""<canvas id="chart"></canvas>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>new Chart(document.getElementById('chart'),{a.content});</script>"""
+<script src="https://cdn.jsdelivr.net/npm/chart.js" onerror="document.getElementById('_cdn_err').style.display=''"></script>
+<script>if(typeof Chart!=='undefined')new Chart(document.getElementById('chart'),JSON.parse({safe_json}));</script>
+<div id="_cdn_err" style="display:none;color:#c00;padding:8px;font-size:13px">⚠ Chart.js 加载失败（需要网络），无法渲染图表</div>"""
         return _wrap_html(a.title, body)
 
     def _render_react(self, a: CanvasArtifact) -> str:
         body = f"""<div id="root"></div>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" onerror="document.getElementById('_cdn_err').style.display=''"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script type="text/babel">{a.content}</script>"""
+<script type="text/babel">{a.content}</script>
+<div id="_cdn_err" style="display:none;color:#c00;padding:8px;font-size:13px">⚠ React 库加载失败（需要网络），无法渲染组件</div>"""
         return _wrap_html(a.title, body)
 
     def _notify(self, event: str, artifact: CanvasArtifact) -> None:
@@ -150,10 +206,11 @@ class CanvasManager:
                 logger.warning("Canvas listener error: %s", e)
 
 def _wrap_html(title: str, body: str) -> str:
+    safe_title = _html.escape(title)
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{title}</title>
+<title>{safe_title}</title>
 <style>
 *{{box-sizing:border-box}}
 body{{font-family:system-ui,-apple-system,sans-serif;margin:0;padding:2.5rem 3rem;line-height:1.8;color:#1a1a1a;background:#fff}}

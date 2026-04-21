@@ -8,7 +8,8 @@ function switchTab(tabName) {
   document.querySelectorAll('.ws-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
   document.querySelectorAll('.ws-panel').forEach(p => p.classList.toggle('active', p.id === tabName + 'Panel'));
   // Lazy-load panel data
-  if (tabName === 'memory') loadMemories();
+  if (tabName === 'canvas') loadCanvasHistory();
+  else if (tabName === 'memory') loadMemories();
   else if (tabName === 'skills') loadSkills();
   else if (tabName === 'files') { if (!_pinsLoaded) loadPins(); loadContextPreview(); }
 }
@@ -20,6 +21,7 @@ const _canvasComponents = [];
 
 function renderCanvasComponent(comp) {
   _canvasComponents.push(comp);
+  if (_canvasComponents.length > 100) _canvasComponents.splice(0, _canvasComponents.length - 100);
   const viewport = document.querySelector('#canvasPanel .canvas-viewport');
   const empty = document.querySelector('#canvasPanel .canvas-empty');
   if (empty) empty.style.display = 'none';
@@ -33,9 +35,15 @@ function renderCanvasComponent(comp) {
 
   if (comp.type === 'html' || comp.type === 'react') {
     const iframe = document.createElement('iframe');
-    iframe.sandbox = 'allow-scripts allow-same-origin';
+    iframe.sandbox = 'allow-scripts';
     body.appendChild(iframe);
-    iframe.srcdoc = comp.content || '';
+    // 注入 A2UI bridge 到 canvas 内容
+    const safeId = (comp.artifact_id||'').replace(/[^a-zA-Z0-9_-]/g, '');
+    const a2uiBridge = `<script>
+window.xjd={sendAction:function(a,p){window.parent.postMessage({type:"a2ui_action",action:a,payload:p||{},artifact_id:"${safeId}"},"*")}};
+</script>`;
+    const content = comp.content || '';
+    iframe.srcdoc = content.replace('</head>', a2uiBridge + '</head>') || (a2uiBridge + content);
     // 自动撑高 iframe
     iframe.onload = () => {
       try {
@@ -58,12 +66,37 @@ function renderCanvasComponent(comp) {
   viewport.appendChild(el);
 }
 
+// A2UI: 监听 Canvas iframe postMessage，转发到 WebSocket
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'a2ui_action' && typeof ws !== 'undefined' && ws && ws.readyState === 1) {
+    ws.send(JSON.stringify(e.data));
+  }
+});
+
 function clearCanvas() {
   _canvasComponents.length = 0;
   const viewport = document.querySelector('#canvasPanel .canvas-viewport');
   const empty = document.querySelector('#canvasPanel .canvas-empty');
   if (viewport) viewport.innerHTML = '';
   if (empty) empty.style.display = '';
+}
+
+let _canvasHistoryLoaded = false;
+async function loadCanvasHistory() {
+  if (_canvasHistoryLoaded) return;
+  _canvasHistoryLoaded = true;
+  try {
+    const res = await fetch('/api/workspace/canvas/list');
+    const data = await res.json();
+    if (!data.items || !data.items.length) return;
+    for (const item of data.items.slice(-20)) {
+      try {
+        const r = await fetch('/api/workspace/canvas/' + encodeURIComponent(item.artifact_id));
+        const comp = await r.json();
+        if (comp && !comp.error) renderCanvasComponent(comp);
+      } catch(e) {}
+    }
+  } catch(e) {}
 }
 
 // ══════════════════════════════════════════════════════════════
