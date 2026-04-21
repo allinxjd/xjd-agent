@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 PACKAGE_NAME = "xjd-agent"
 GITHUB_REPO = "allinxjd/xjd-agent"
 PYPI_JSON_URL = f"https://pypi.org/pypi/{PACKAGE_NAME}/json"
-GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_TAGS_URL = f"https://api.github.com/repos/{GITHUB_REPO}/tags"
 
 def get_current_version() -> str:
     """获取当前安装版本."""
@@ -81,20 +81,21 @@ async def check_latest_version() -> Optional[str]:
     except Exception as e:
         logger.debug("PyPI check failed: %s", e)
 
-    # 2. 检查 GitHub Releases
+    # 2. 检查 GitHub Tags
     try:
         import httpx
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
-                GITHUB_API_URL,
+                GITHUB_TAGS_URL,
                 headers={"Accept": "application/vnd.github.v3+json"},
             )
             if resp.status_code == 200:
-                data = resp.json()
-                tag = data.get("tag_name", "")
-                return tag.lstrip("v") if tag else None
+                tags = resp.json()
+                if tags:
+                    tag = tags[0].get("name", "")
+                    return tag.lstrip("v") if tag else None
     except Exception as e:
-        logger.debug("GitHub check failed: %s", e)
+        logger.debug("GitHub tags check failed: %s", e)
 
     # 3. 检查 git remote
     try:
