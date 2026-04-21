@@ -11,6 +11,7 @@ function switchTab(tabName) {
   if (tabName === 'canvas') loadCanvasHistory();
   else if (tabName === 'memory') loadMemories();
   else if (tabName === 'skills') loadSkills();
+  else if (tabName === 'market') loadMarket();
   else if (tabName === 'files') { if (!_pinsLoaded) loadPins(); loadContextPreview(); }
 }
 
@@ -983,4 +984,145 @@ function _esc(s) {
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Market Panel
+// ══════════════════════════════════════════════════════════════
+let _marketLoaded = false;
+let _marketCat = '';
+
+async function loadMarket() {
+  if (_marketLoaded) return;
+  _marketLoaded = true;
+  await Promise.all([loadMarketCategories(), marketSearch()]);
+}
+
+async function loadMarketCategories() {
+  try {
+    const token = localStorage.getItem('xjd_token');
+    const headers = {'X-XJD-Request':'1'};
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    const res = await fetch('/api/admin/hub/categories', {headers});
+    const data = await res.json();
+    const sidebar = document.getElementById('marketSidebar');
+    let html = '<div class="market-cat active" data-cat="" onclick="marketFilter(\'\')">All</div>';
+    (data.categories || []).forEach(c => {
+      html += `<div class="market-cat" data-cat="${_esc(c.category)}" onclick="marketFilter('${_esc(c.category)}')">${_esc(c.category)} <span class="market-cat-count">${c.count}</span></div>`;
+    });
+    sidebar.innerHTML = html;
+  } catch(e) {}
+}
+
+async function marketSearch() {
+  const q = (document.getElementById('marketSearchInput')?.value || '').trim();
+  const sort = document.getElementById('marketSort')?.value || 'downloads';
+  const grid = document.getElementById('marketGrid');
+  const detail = document.getElementById('marketDetail');
+  detail.style.display = 'none';
+  grid.innerHTML = '<div style="color:var(--text-tertiary);text-align:center;padding:40px">Loading...</div>';
+  try {
+    const token = localStorage.getItem('xjd_token');
+    const headers = {'X-XJD-Request':'1'};
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    const params = new URLSearchParams({q, sort, per_page: '50'});
+    if (_marketCat) params.set('category', _marketCat);
+    const res = await fetch('/api/admin/hub/search?' + params, {headers});
+    const data = await res.json();
+    renderMarketGrid(data.results || []);
+  } catch(e) {
+    grid.innerHTML = `<div style="color:var(--red);text-align:center;padding:40px">Error: ${_esc(e.message)}</div>`;
+  }
+}
+function renderMarketGrid(skills) {
+  const grid = document.getElementById('marketGrid');
+  if (!skills.length) {
+    grid.innerHTML = '<div style="color:var(--text-tertiary);text-align:center;padding:40px">No skills found</div>';
+    return;
+  }
+  grid.innerHTML = skills.map(s => {
+    const tags = (s.tags||[]).slice(0,3).map(t => `<span class="market-tag">${_esc(t)}</span>`).join('');
+    const installed = s.installed ? '<span class="market-installed">Installed</span>' : '';
+    const price = s.price > 0 ? `¥${s.price}` : 'Free';
+    return `<div class="market-card" onclick="marketShowDetail('${_esc(s.slug)}')">
+      <div class="market-card-header">
+        <span class="market-card-name">${_esc(s.name)}</span>
+        <span class="market-card-ver">v${_esc(s.version)}</span>
+      </div>
+      <div class="market-card-desc">${_esc(s.description)}</div>
+      <div class="market-card-tags">${tags}</div>
+      <div class="market-card-footer">
+        <span class="market-card-stat">${s.downloads} downloads</span>
+        <span class="market-card-stat">${price}</span>
+        ${installed}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function marketFilter(cat) {
+  _marketCat = cat;
+  document.querySelectorAll('.market-cat').forEach(el => el.classList.toggle('active', el.dataset.cat === cat));
+  _marketLoaded = false;
+  marketSearch();
+  _marketLoaded = true;
+}
+
+async function marketShowDetail(slug) {
+  const detail = document.getElementById('marketDetail');
+  detail.style.display = 'block';
+  detail.innerHTML = '<div style="padding:20px;color:var(--text-tertiary)">Loading...</div>';
+  try {
+    const token = localStorage.getItem('xjd_token');
+    const headers = {'X-XJD-Request':'1'};
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    const res = await fetch('/api/admin/hub/skill/' + encodeURIComponent(slug), {headers});
+    const data = await res.json();
+    const s = data.skill;
+    if (!s) { detail.innerHTML = '<div style="padding:20px;color:var(--red)">Not found</div>'; return; }
+    const tags = (s.tags||[]).map(t => `<span class="market-tag">${_esc(t)}</span>`).join(' ');
+    const tools = (s.tools||[]).map(t => `<code class="market-tool">${_esc(t)}</code>`).join(' ');
+    const installed = s.installed ? '<span class="market-installed">Installed</span>' : '';
+    const installBtn = s.installed
+      ? '<button class="btn-primary" disabled>Installed</button>'
+      : `<button class="btn-primary" onclick="marketInstall('${_esc(s.slug||s.name)}')">Install</button>`;
+    const tryBtn = `<button class="btn-secondary" onclick="marketTryInChat('${_esc(s.name)}')">Try in Chat</button>`;
+    detail.innerHTML = `<div class="market-detail-inner">
+      <div class="market-detail-close" onclick="document.getElementById('marketDetail').style.display='none'">&times;</div>
+      <h3>${_esc(s.name)} <span style="color:var(--text-tertiary);font-size:13px">v${_esc(s.version)}</span> ${installed}</h3>
+      <p style="color:var(--text-secondary)">${_esc(s.description)}</p>
+      <div style="margin:8px 0">${tags}</div>
+      ${tools ? '<div style="margin:8px 0"><strong>Tools:</strong> ' + tools + '</div>' : ''}
+      <div style="margin:8px 0;color:var(--text-tertiary);font-size:13px">
+        Category: ${_esc(s.category)} | Downloads: ${s.downloads} | Rating: ${(s.rating_avg||0).toFixed(1)}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">${installBtn} ${tryBtn}</div>
+    </div>`;
+  } catch(e) {
+    detail.innerHTML = `<div style="padding:20px;color:var(--red)">Error: ${_esc(e.message)}</div>`;
+  }
+}
+
+async function marketInstall(name) {
+  if (!confirm('Install skill "' + name + '"?')) return;
+  try {
+    const token = localStorage.getItem('xjd_token');
+    const headers = {'Content-Type':'application/json','X-XJD-Request':'1'};
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    const res = await fetch('/api/admin/hub/install', {method:'POST', headers, body: JSON.stringify({name})});
+    const data = await res.json();
+    if (data.status === 'ok') {
+      alert('Installed: ' + (data.skill_id || name));
+      _marketLoaded = false;
+      loadMarket();
+    } else {
+      alert('Install failed: ' + (data.error || 'unknown'));
+    }
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+function marketTryInChat(name) {
+  switchTab('chat');
+  const input = document.getElementById('chatInput') || document.querySelector('textarea');
+  if (input) { input.value = name; input.focus(); }
 }
