@@ -23,7 +23,8 @@ TOOLSETS: dict[str, list[str]] = {
     "core": [
         "run_terminal", "read_file", "write_file", "edit_file", "list_directory",
         "web_search", "web_fetch", "execute_code", "grep_search",
-        "create_canvas", "update_canvas",
+        "create_canvas", "update_canvas", "list_canvas", "export_canvas",
+        "show_knowledge_canvas",
         "generate_ecommerce_image", "request_user_approval",
         "download_file", "git_command",
     ],
@@ -34,7 +35,7 @@ TOOLSETS: dict[str, list[str]] = {
         "image_generate", "text_to_speech", "screenshot",
     ],
     "data": ["database_query", "json_query", "pdf_extract", "template_render"],
-    "canvas": ["create_canvas", "update_canvas"],
+    "canvas": ["create_canvas", "update_canvas", "list_canvas", "export_canvas", "show_knowledge_canvas"],
     "skills": ["skills_list", "skill_view", "skill_manage"],
     "memory": ["memory_list", "memory_search", "memory_manage"],
     "system": ["system_info", "process_manager", "env_variable"],
@@ -426,6 +427,14 @@ class ToolRegistry:
         return [
             t.definition for t in self._tools.values()
             if t.name in combined and t.enabled
+        ]
+
+    def get_definitions_by_names(self, names: list[str]) -> list[ToolDefinition]:
+        """按工具名列表返回定义 (用于技能作用域 / 意图作用域)."""
+        name_set = set(names)
+        return [
+            t.definition for t in self._tools.values()
+            if t.name in name_set and t.enabled
         ]
 
     def get_definitions_by_toolset(self, toolset: str) -> list[ToolDefinition]:
