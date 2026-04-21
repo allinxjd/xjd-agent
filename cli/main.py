@@ -31,7 +31,7 @@ BANNER = """[bold cyan]
        ██╔██╗ ██   ██║██║  ██║
       ██╔╝ ██╗╚█████╔╝██████╔╝
       ╚═╝  ╚═╝ ╚════╝ ╚═════╝[/bold cyan]
-[dim]    小 巨 蛋 智 能 体  v0.3.0[/dim]
+[dim]    小 巨 蛋 智 能 体[/dim]
 [dim italic]   Your Personal AI Agent[/dim italic]
 """
 
@@ -848,7 +848,8 @@ async def _start_web(host: str, port: int) -> None:
 @cli.command()
 def version() -> None:
     """显示版本."""
-    console.print("xjd-agent v0.3.0")
+    from agent.core.updater import get_current_version
+    console.print(f"xjd-agent v{get_current_version()}")
 
 
 @cli.command("serve-api")
@@ -925,10 +926,11 @@ except ImportError:
     pass
 
 @cli.command()
-def update() -> None:
+@click.option("--auto", "auto", is_flag=True, help="自动更新")
+def update(auto: bool) -> None:
     """检查更新."""
     from cli.commands.subcommands import check_update
-    check_update()
+    check_update(auto=auto)
 
 @cli.command("serve-mcp")
 @click.option("--transport", "-t", default="stdio", type=click.Choice(["stdio"]), help="传输方式")
