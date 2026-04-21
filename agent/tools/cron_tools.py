@@ -38,6 +38,7 @@ def register_cron_tools(registry: Any, scheduler: Any) -> None:
             platform = kwargs.get("platform", "")
             chat_id = kwargs.get("chat_id", "")
             max_runs = int(kwargs.get("max_runs", 0))
+            skill_id = kwargs.get("skill_id", "")
 
             if not prompt:
                 return "错误: 必须提供 prompt (任务执行的指令)"
@@ -51,6 +52,7 @@ def register_cron_tools(registry: Any, scheduler: Any) -> None:
                     platform=platform,
                     chat_id=chat_id,
                     max_runs=max_runs,
+                    skill_id=skill_id,
                 )
                 next_run = datetime.fromtimestamp(task.next_run).strftime("%Y-%m-%d %H:%M") if task.next_run else "未知"
                 return (
