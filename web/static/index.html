@@ -597,6 +597,7 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
       <button class="ws-tab" data-tab="files" onclick="switchTab('files')"><span class="tab-icon">&#x1F4CC;</span> Context</button>
       <button class="ws-tab" data-tab="memory" onclick="switchTab('memory')"><span class="tab-icon">&#x1F9E0;</span> Memory</button>
       <button class="ws-tab" data-tab="skills" onclick="switchTab('skills')"><span class="tab-icon">&#x26A1;</span> Skills</button>
+      <button class="ws-tab" data-tab="market" onclick="switchTab('market')"><span class="tab-icon">&#x1F6D2;</span> Market</button>
       <button class="ws-tab" data-tab="inspector" onclick="switchTab('inspector')"><span class="tab-icon">&#x1F50D;</span> Inspector</button>
     </div>
 
@@ -818,6 +819,31 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
         <div class="skill-modal-footer">
           <button class="btn-secondary" onclick="closeSkillModal()">Cancel</button>
           <button class="btn-primary" onclick="saveSkill()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Market Panel -->
+    <div class="ws-panel" id="marketPanel">
+      <div class="market-container">
+        <div class="market-toolbar">
+          <input type="text" class="market-search" id="marketSearchInput" placeholder="Search skills..." onkeydown="if(event.key==='Enter')marketSearch()">
+          <button class="btn-primary" onclick="marketSearch()">Search</button>
+          <select class="market-sort" id="marketSort" onchange="marketSearch()">
+            <option value="downloads">Hot</option>
+            <option value="newest">New</option>
+            <option value="rating">Top Rated</option>
+            <option value="name">A-Z</option>
+          </select>
+        </div>
+        <div class="market-body">
+          <div class="market-sidebar" id="marketSidebar">
+            <div class="market-cat active" data-cat="" onclick="marketFilter('')">All</div>
+          </div>
+          <div class="market-main">
+            <div class="market-grid" id="marketGrid"></div>
+            <div class="market-detail" id="marketDetail" style="display:none"></div>
+          </div>
         </div>
       </div>
     </div>

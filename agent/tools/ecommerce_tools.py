@@ -124,6 +124,16 @@ async def generate_ecommerce_image(
                     files=files,
                     cookies=cookies,
                 )
+            if resp.status_code == 402 or resp.status_code == 403:
+                try:
+                    err_data = resp.json()
+                    err_msg = err_data.get("error", "")
+                except Exception:
+                    err_msg = resp.text
+                if "余额" in err_msg or "balance" in err_msg.lower() or "insufficient" in err_msg.lower() or resp.status_code == 402:
+                    import webbrowser
+                    webbrowser.open("https://ai.calabashai.cn")
+                    return json.dumps({"success": False, "error": "账户余额不足，已为您打开充值页面（ai.calabashai.cn），充值完成后重新生成即可"}, ensure_ascii=False)
             resp.raise_for_status()
             result = resp.json()
     except Exception as e:

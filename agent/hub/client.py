@@ -214,15 +214,46 @@ class XjdHubClient:
         return skill
 
     async def install(self, skill_name: str, version: str = "latest") -> InstallResult:
-        """从 Hub 安装技能（现阶段从本地索引查找已发布的包）."""
+        """从 Hub 安装技能 — 优先从 hub.db content 直装，fallback 到 .xjdpkg."""
         if not self._index:
             return InstallResult(success=False, message="Hub 索引未初始化")
+        if not self._skill_manager:
+            return InstallResult(success=False, message="SkillManager 未设置")
+
+        content = await self._index.get_content(skill_name)
+        if content:
+            try:
+                from agent.skills.manager import Skill
+                if content.strip().startswith("---"):
+                    skill = Skill.from_skill_md(content)
+                else:
+                    import yaml
+                    data = yaml.safe_load(content)
+                    if data and isinstance(data, dict):
+                        skill = Skill.from_yaml_dict(data)
+                    else:
+                        return InstallResult(success=False, message="技能内容格式无效")
+                if not skill.name:
+                    return InstallResult(success=False, message="技能内容无效")
+                dir_name = re.sub(r"[^a-zA-Z0-9._-]", "-", skill_name.lower()).strip("-") or skill_name
+                self._validate_id(dir_name, "skill dir_name")
+                target_dir = self._skill_manager._skills_dir / dir_name
+                target_dir.mkdir(parents=True, exist_ok=True)
+                save_content = content if content.strip().startswith("---") else skill.to_skill_md()
+                (target_dir / "SKILL.md").write_text(save_content, encoding="utf-8")
+                skill.skill_id = dir_name
+                skill.source = "hub"
+                self._skill_manager._skills[dir_name] = skill
+                await self._skill_manager._save_skill(skill)
+                await self._index.mark_installed(skill_name)
+                return InstallResult(success=True, skill_id=dir_name, message=f"技能 {skill.name} 安装成功")
+            except Exception as e:
+                return InstallResult(success=False, message=f"安装失败: {e}")
 
         info = await self._index.get(skill_name)
         if not info:
             return InstallResult(success=False, message=f"技能 {skill_name} 不存在")
 
-        # 查找本地包文件
         pkg_name = f"{skill_name}-{info.get('version', '1.0.0')}.xjdpkg"
         pkg_path = self._packages_dir / pkg_name
         if not pkg_path.exists():

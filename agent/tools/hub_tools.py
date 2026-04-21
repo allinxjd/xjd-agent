@@ -18,29 +18,34 @@ def register_hub_tools(registry: Any, hub_client: Any = None, skill_manager: Any
         _hub_client = hub_client
     else:
         try:
-            from agent.skills.marketplace import HubClient
-            _hub_client = HubClient()
+            from agent.hub.client import XjdHubClient
+            _hub_client = XjdHubClient(skill_manager=skill_manager)
         except Exception as e:
-            logger.debug("HubClient init failed: %s", e)
+            logger.debug("XjdHubClient init failed: %s", e)
     _skill_manager = skill_manager
 
     async def xjdhub_search(query: str = "", category: str = "", **kw) -> str:
         if not _hub_client:
             return "错误: Hub 客户端未初始化"
         try:
-            results = await _hub_client.search(query=query, category=category)
+            if not _hub_client._index:
+                await _hub_client.initialize()
+            results = await _hub_client._index.search(query=query, category=category)
         except Exception as e:
             return f"搜索失败: {e}"
         if not results:
             return f"未找到匹配「{query}」的技能。"
         lines = ["XjdHub 技能搜索结果:\n"]
         for r in results:
-            price_tag = f"¥{r.price}" if r.price > 0 else "免费"
+            price_tag = f"¥{r['price']}" if r.get('price', 0) > 0 else "免费"
+            tags = ', '.join(r.get('tags', []))
+            installed = " [已安装]" if r.get('installed') else ""
             lines.append(
-                f"- {r.name} v{r.version} ({price_tag})\n"
-                f"  {r.description}\n"
-                f"  下载: {r.downloads} | 标签: {', '.join(r.tags)}"
+                f"- {r['name']} v{r.get('version','?')} ({price_tag}){installed}\n"
+                f"  {r.get('description','')}\n"
+                f"  下载: {r.get('downloads',0)} | 分类: {r.get('category','')} | 标签: {tags}"
             )
+        lines.append(f"\n共 {len(results)} 个结果。使用 xjdhub_install 安装感兴趣的技能。")
         return "\n".join(lines)
 
     async def xjdhub_install(name: str, version: str = "latest", confirmed: bool = False, **kw) -> str:
@@ -74,14 +79,16 @@ def register_hub_tools(registry: Any, hub_client: Any = None, skill_manager: Any
         except Exception as e:
             return f"发布失败: {e}"
         if result.success:
-            return f"技能已发布到 XjdHub: {result.slug} (待审核)"
+            return f"技能已发布到 XjdHub: {skill_id} (待审核)"
         return f"发布失败: {result.message}"
 
     async def xjdhub_info(name: str, **kw) -> str:
         if not _hub_client:
             return "错误: Hub 客户端未初始化"
         try:
-            info = await _hub_client.get_skill(name)
+            if not _hub_client._index:
+                await _hub_client.initialize()
+            info = await _hub_client._index.get(name)
         except Exception as e:
             return f"查询失败: {e}"
         if not info:
