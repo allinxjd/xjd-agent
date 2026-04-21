@@ -692,8 +692,8 @@ async def _start_web(host: str, port: int) -> None:
         await hub_client.initialize()
         from agent.tools.hub_tools import register_hub_tools
         register_hub_tools(tool_registry, hub_client=hub_client, skill_manager=skill_manager)
-    except Exception as e:
-        logger.debug("XjdHub init failed: %s", e)
+    except Exception:
+        pass
 
     # 初始化 LearningLoop (连接 memory + skill + pin)
     from agent.skills.learning_loop import LearningLoop
