@@ -67,6 +67,7 @@ window.xjd={sendAction:function(a,p){window.parent.postMessage({type:"a2ui_actio
     body.innerHTML = `<pre style="margin:0;white-space:pre-wrap;">${_esc(comp.content || '')}</pre>`;
   }
   viewport.prepend(el);
+  viewport.scrollTop = 0;
 }
 
 // A2UI: 监听 Canvas iframe postMessage，转发到 WebSocket
@@ -92,7 +93,7 @@ async function loadCanvasHistory() {
     const res = await fetch('/api/workspace/canvas/list');
     const data = await res.json();
     if (!data.items || !data.items.length) return;
-    for (const item of data.items.slice(-20).reverse()) {
+    for (const item of data.items.slice(-20)) {
       try {
         const r = await fetch('/api/workspace/canvas/' + encodeURIComponent(item.artifact_id));
         const comp = await r.json();
