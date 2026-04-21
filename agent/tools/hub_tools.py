@@ -12,15 +12,25 @@ _hub_client = None
 _skill_manager = None
 
 
-def register_hub_tools(registry: Any, hub_client: Any, skill_manager: Any) -> None:
+def register_hub_tools(registry: Any, hub_client: Any = None, skill_manager: Any = None) -> None:
     global _hub_client, _skill_manager
-    _hub_client = hub_client
+    if hub_client:
+        _hub_client = hub_client
+    else:
+        try:
+            from agent.skills.marketplace import HubClient
+            _hub_client = HubClient()
+        except Exception as e:
+            logger.debug("HubClient init failed: %s", e)
     _skill_manager = skill_manager
 
     async def xjdhub_search(query: str = "", category: str = "", **kw) -> str:
         if not _hub_client:
             return "错误: Hub 客户端未初始化"
-        results = await _hub_client.search(query=query, category=category)
+        try:
+            results = await _hub_client.search(query=query, category=category)
+        except Exception as e:
+            return f"搜索失败: {e}"
         if not results:
             return f"未找到匹配「{query}」的技能。"
         lines = ["XjdHub 技能搜索结果:\n"]
@@ -29,7 +39,7 @@ def register_hub_tools(registry: Any, hub_client: Any, skill_manager: Any) -> No
             lines.append(
                 f"- {r.name} v{r.version} ({price_tag})\n"
                 f"  {r.description}\n"
-                f"  作者: {r.author} | 下载: {r.downloads} | 标签: {', '.join(r.tags)}"
+                f"  下载: {r.downloads} | 标签: {', '.join(r.tags)}"
             )
         return "\n".join(lines)
 
@@ -42,9 +52,12 @@ def register_hub_tools(registry: Any, hub_client: Any, skill_manager: Any) -> No
                 f"安装后该技能将可被 Agent 调用。\n"
                 f"请确认安装，再次调用 xjdhub_install 并设置 confirmed=true。"
             )
-        result = await _hub_client.install(name, version)
+        try:
+            result = await _hub_client.install(name)
+        except Exception as e:
+            return f"安装失败: {e}"
         if result.success:
-            return f"技能安装成功: {name} (ID: {result.skill_id})"
+            return f"技能安装成功: {name}"
         return f"安装失败: {result.message}"
 
     async def xjdhub_publish(skill_id: str, confirmed: bool = False, **kw) -> str:
@@ -56,15 +69,21 @@ def register_hub_tools(registry: Any, hub_client: Any, skill_manager: Any) -> No
                 f"发布后其他用户可以搜索和安装此技能。\n"
                 f"请确认发布，再次调用 xjdhub_publish 并设置 confirmed=true。"
             )
-        result = await _hub_client.publish(skill_id)
+        try:
+            result = await _hub_client.publish(skill_id)
+        except Exception as e:
+            return f"发布失败: {e}"
         if result.success:
-            return f"技能已发布到 XjdHub: {result.pkg_path}"
+            return f"技能已发布到 XjdHub: {result.slug} (待审核)"
         return f"发布失败: {result.message}"
 
     async def xjdhub_info(name: str, **kw) -> str:
-        if not _hub_client or not _hub_client._index:
+        if not _hub_client:
             return "错误: Hub 客户端未初始化"
-        info = await _hub_client._index.get(name)
+        try:
+            info = await _hub_client.get_skill(name)
+        except Exception as e:
+            return f"查询失败: {e}"
         if not info:
             return f"未找到技能: {name}"
         return json.dumps(info, ensure_ascii=False, indent=2)
@@ -90,7 +109,7 @@ def register_hub_tools(registry: Any, hub_client: Any, skill_manager: Any) -> No
         parameters={
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "技能名称"},
+                "name": {"type": "string", "description": "技能名称或 slug"},
                 "version": {"type": "string", "description": "版本号 (默认 latest)"},
                 "confirmed": {"type": "boolean", "description": "是否已确认安装"},
             },
@@ -106,7 +125,7 @@ def register_hub_tools(registry: Any, hub_client: Any, skill_manager: Any) -> No
         parameters={
             "type": "object",
             "properties": {
-                "skill_id": {"type": "string", "description": "要发布的技能 ID"},
+                "skill_id": {"type": "string", "description": "要发布的技能路径或 ID"},
                 "confirmed": {"type": "boolean", "description": "是否已确认发布"},
             },
             "required": ["skill_id"],
@@ -121,7 +140,7 @@ def register_hub_tools(registry: Any, hub_client: Any, skill_manager: Any) -> No
         parameters={
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "技能名称"},
+                "name": {"type": "string", "description": "技能名称或 slug"},
             },
             "required": ["name"],
         },
