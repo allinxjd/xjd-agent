@@ -201,6 +201,8 @@ async def retry_with_backoff(
                 or 'rate' in err_str
                 or 'timeout' in err_str
                 or 'overloaded' in err_str
+                or 'connection' in err_str
+                or 'connect' in err_str
                 or '429' in err_str
                 or '503' in err_str
             )

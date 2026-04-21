@@ -466,7 +466,10 @@ class GatewayServer:
         })
         _cron_start = time.time()
         async with self._engine_lock:
-            result = await self._engine.run_turn(task.prompt)
+            result = await self._engine.run_turn(
+                task.prompt,
+                skill_id=getattr(task, 'skill_id', '') or None,
+            )
         reply = result.content
         self._emit_inspector({
             "event_type": "cron_complete",
@@ -646,10 +649,47 @@ class GatewayServer:
             else:
                 logger.info("图片生成意图，交给主引擎处理: %s", message.content[:50])
 
+        # 构建平台上下文前缀
+        platform_name = message.platform.value
+        chat_type = message.chat.chat_type.value if hasattr(message.chat, 'chat_type') else "private"
+        sender_name = message.sender.display_name or message.sender.username or message.sender.user_id
+        platform_ctx = f"[来源: {platform_name} | 会话类型: {chat_type} | 发送者: {sender_name}]"
+        user_content = f"{platform_ctx}\n{message.content}"
+
+        # Canvas 跨平台广播回调 — 飞书/微信触发的 canvas 推送到 WebUI
+        def on_tool_result(name: str, result: str):
+            if name in ("create_canvas", "update_canvas") and result and '"__canvas_render__"' in result:
+                try:
+                    canvas_data = json.loads(result)
+                    if canvas_data.get("__canvas_render__"):
+                        web_server = getattr(self, '_web_server', None)
+                        if web_server:
+                            asyncio.ensure_future(
+                                web_server.broadcast_canvas(canvas_data, platform_name, sender_name)
+                            )
+                except Exception:
+                    logger.debug("Canvas broadcast failed", exc_info=True)
+            if name == "export_canvas" and result and '"__canvas_export__"' in result:
+                try:
+                    export_data = json.loads(result)
+                    if export_data.get("__canvas_export__"):
+                        import base64
+                        file_bytes = base64.b64decode(export_data["file_data"])
+                        filename = export_data.get("filename", "canvas_export")
+                        chat_id = message.chat.chat_id
+                        adapter = self.get_adapter(platform_name)
+                        if adapter:
+                            asyncio.ensure_future(
+                                adapter.send_file(chat_id, file_data=file_bytes, filename=filename)
+                            )
+                except Exception:
+                    logger.debug("Canvas export delivery failed", exc_info=True)
+
         # 调用 engine（传入 session 消息，不操作全局 messages）
         result = await self._engine.run_turn(
-            message.content,
+            user_content,
             session_messages=session_msgs,
+            on_tool_result=on_tool_result,
         )
 
         # 记录 assistant 回复到 session

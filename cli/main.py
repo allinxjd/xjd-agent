@@ -166,6 +166,10 @@ async def _chat_loop(
     from agent.tools.memory_tools import register_memory_tools
     register_memory_tools(tool_registry, memory_manager=memory_manager)
 
+    # 注册知识画布工具 (记忆/学习/技能可视化)
+    from agent.tools.knowledge_canvas import register_knowledge_canvas_tools
+    register_knowledge_canvas_tools(tool_registry, memory_manager=memory_manager, learning_loop=learning_loop)
+
     if allow_tools:
         tool_registry.apply_allow_list([t.strip() for t in allow_tools.split(",")])
     if deny_tools:
@@ -448,6 +452,9 @@ async def _start_gateway(host: str, port: int) -> None:
     from agent.tools.memory_tools import register_memory_tools
     register_memory_tools(tool_registry, memory_manager=memory_manager)
 
+    from agent.tools.knowledge_canvas import register_knowledge_canvas_tools
+    register_knowledge_canvas_tools(tool_registry, memory_manager=memory_manager, learning_loop=learning_loop)
+
     # 注册 XjdHub 工具
     try:
         from agent.hub.client import XjdHubClient
@@ -704,6 +711,10 @@ async def _start_web(host: str, port: int) -> None:
         pin_manager=pin_manager,
     )
 
+    # 注册知识画布工具 (需要 learning_loop)
+    from agent.tools.knowledge_canvas import register_knowledge_canvas_tools
+    register_knowledge_canvas_tools(tool_registry, memory_manager=memory_manager, learning_loop=learning_loop)
+
     # 初始化引擎 (传入 registry + 学习系统)
     engine = AgentEngine(
         router=router,
@@ -760,11 +771,13 @@ async def _start_web(host: str, port: int) -> None:
                 console.print(f"  [yellow]{ch_name}: {e}[/yellow]")
 
         server._gateway = gw
+        gw._web_server = server
     else:
         # 创建空 Gateway (供 API 动态添加渠道)
         from gateway.core.server import GatewayServer
         gw = GatewayServer(agent_engine=engine, config={}, inspector_callback=server.broadcast_inspector_event)
         server._gateway = gw
+        gw._web_server = server
 
     console.print(BANNER)
     console.print(Panel(
@@ -932,6 +945,122 @@ def serve_mcp(transport: str) -> None:
 
     server = MCPServer(tool_registry=registry)
     asyncio.run(server.start_stdio())
+
+
+# ── Hub 技能市场命令组 ──
+
+@cli.group()
+def hub() -> None:
+    """XjdHub 技能市场."""
+    pass
+
+
+@hub.command()
+@click.argument("username")
+@click.option("--password", "-p", prompt=True, hide_input=True, help="密码")
+def login(username: str, password: str) -> None:
+    """登录 Hub."""
+    from agent.skills.marketplace import HubClient
+    client = HubClient()
+    try:
+        token = asyncio.run(client.login(username, password))
+        click.echo(f"登录成功 (token: {token[:20]}...)")
+    except Exception as e:
+        click.echo(f"登录失败: {e}", err=True)
+
+
+@hub.command()
+@click.argument("username")
+@click.option("--email", "-e", required=True, help="邮箱")
+@click.option("--password", "-p", prompt=True, hide_input=True, confirmation_prompt=True, help="密码")
+def register(username: str, email: str, password: str) -> None:
+    """注册 Hub 账号."""
+    from agent.skills.marketplace import HubClient
+    client = HubClient()
+    try:
+        asyncio.run(client.register(username, email, password))
+        click.echo(f"注册成功: {username}")
+    except Exception as e:
+        click.echo(f"注册失败: {e}", err=True)
+
+
+@hub.command()
+@click.argument("query", default="")
+@click.option("--category", "-c", default="", help="分类过滤")
+def search(query: str, category: str) -> None:
+    """搜索技能市场."""
+    from agent.skills.marketplace import HubClient
+    client = HubClient()
+    results = asyncio.run(client.search(query=query, category=category))
+    if not results:
+        click.echo("未找到匹配的技能。")
+        return
+    for s in results:
+        price = f"¥{s.price}" if s.price > 0 else "免费"
+        click.echo(f"  {s.name} v{s.version} ({price}) ⬇{s.downloads}")
+        click.echo(f"    {s.description}")
+        if s.tags:
+            click.echo(f"    标签: {', '.join(s.tags)}")
+
+
+@hub.command()
+@click.argument("slug")
+def install(slug: str) -> None:
+    """从 Hub 安装技能."""
+    from agent.skills.marketplace import HubClient
+    client = HubClient()
+    result = asyncio.run(client.install(slug))
+    if result.success:
+        click.echo(f"安装成功: {slug}")
+    else:
+        click.echo(f"安装失败: {result.message}", err=True)
+
+
+@hub.command()
+@click.argument("path", type=click.Path(exists=True))
+def publish(path: str) -> None:
+    """发布技能到 Hub."""
+    from agent.skills.marketplace import HubClient
+    client = HubClient()
+    result = asyncio.run(client.publish(path))
+    if result.success:
+        click.echo(f"发布成功: {result.slug} (待审核)")
+    else:
+        click.echo(f"发布失败: {result.message}", err=True)
+
+
+@hub.command()
+def keygen() -> None:
+    """生成签名密钥对."""
+    from hub.signing import SkillSigner
+    signer = SkillSigner()
+    pubkey = signer.generate_keys()
+    click.echo(f"密钥对已生成。公钥: {pubkey}")
+    click.echo("请将公钥上传到 Hub 个人资料 (hub login → update profile)。")
+
+
+@hub.command()
+def me() -> None:
+    """查看当前登录信息."""
+    from agent.skills.marketplace import HubClient
+    client = HubClient()
+    if not client._token:
+        click.echo("未登录。请先运行: xjd-agent hub login")
+        return
+    click.echo(f"Hub: {client._hub_url}")
+    click.echo(f"用户: {client._config.get('username', '未知')}")
+
+
+@hub.command("serve")
+@click.option("--host", "-h", default="0.0.0.0", help="监听地址")
+@click.option("--port", "-p", default=8900, help="监听端口")
+@click.option("--jwt-secret", default="", help="JWT 密钥")
+def hub_serve(host: str, port: int, jwt_secret: str) -> None:
+    """启动 Hub 服务端."""
+    from hub.server import run_hub_server
+    click.echo(f"XjdHub server starting on {host}:{port}")
+    run_hub_server(host=host, port=port, jwt_secret=jwt_secret)
+
 
 def main() -> None:
     """CLI 入口点."""
