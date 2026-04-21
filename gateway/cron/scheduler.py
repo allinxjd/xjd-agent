@@ -36,6 +36,7 @@ class CronTask:
     user_id: str = ""
     platform: str = ""            # 来源平台
     chat_id: str = ""             # 发送结果的 chat_id
+    skill_id: str = ""            # 绑定技能 ID (跳过技能匹配)
     enabled: bool = True
     created_at: float = 0.0
     last_run: float = 0.0
@@ -53,6 +54,7 @@ class CronTask:
             "user_id": self.user_id,
             "platform": self.platform,
             "chat_id": self.chat_id,
+            "skill_id": self.skill_id,
             "enabled": self.enabled,
             "created_at": self.created_at,
             "last_run": self.last_run,
@@ -195,6 +197,7 @@ class CronScheduler:
         platform: str = "",
         chat_id: str = "",
         max_runs: int = 0,
+        skill_id: str = "",
     ) -> CronTask:
         """添加定时任务.
 
@@ -225,6 +228,7 @@ class CronScheduler:
             user_id=user_id,
             platform=platform,
             chat_id=chat_id,
+            skill_id=skill_id,
             max_runs=max_runs,
             created_at=time.time(),
         )
@@ -318,7 +322,9 @@ class CronScheduler:
 
             base = datetime.fromtimestamp(task.last_run) if task.last_run else datetime.now()
             cron = croniter(task.cron_expr, base)
-            task.next_run = cron.get_next(float)
+            # get_next(datetime).timestamp() 正确处理本地时区;
+            # get_next(float) 会把 naive datetime 当 UTC，导致 +8h 偏移
+            task.next_run = cron.get_next(datetime).timestamp()
         except Exception as e:
             logger.warning("Failed to calc next_run for %s: %s", task.task_id, e)
             task.next_run = 0
