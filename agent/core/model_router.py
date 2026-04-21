@@ -218,11 +218,16 @@ class ModelRouter:
                 attempts.append((prov, model, "failover"))
 
         last_error: Optional[Exception] = None
-        for provider, model, reason in attempts:
-            # Circuit breaker: skip providers in cooldown
+        for idx, (provider, model, reason) in enumerate(attempts):
+            # Circuit breaker: skip providers in cooldown (but never skip the last one)
+            is_last = (idx == len(attempts) - 1)
             provider_key = f"{provider.name}:{model}"
             cooldown_until = self._provider_cooldown.get(provider_key, 0.0)
-            if self._provider_failures.get(provider_key, 0) >= 3 and time.time() < cooldown_until:
+            if (
+                not is_last
+                and self._provider_failures.get(provider_key, 0) >= 3
+                and time.time() < cooldown_until
+            ):
                 logger.warning(
                     "Circuit breaker: skipping %s (in cooldown until %.0fs from now)",
                     provider_key, cooldown_until - time.time(),
