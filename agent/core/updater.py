@@ -97,23 +97,24 @@ async def check_latest_version() -> Optional[str]:
     except Exception as e:
         logger.debug("GitHub tags check failed: %s", e)
 
-    # 3. 检查 git remote
+    # 3. 检查 git remote (git clone 用户)
     try:
         from pathlib import Path
         repo_dir = Path(__file__).parent.parent.parent
+        if not (repo_dir / ".git").exists():
+            return None
+        subprocess.run(
+            ["git", "fetch", "--tags", "origin"],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(repo_dir),
+        )
         result = subprocess.run(
-            ["git", "fetch", "--dry-run"],
+            ["git", "describe", "--tags", "--abbrev=0", "origin/main"],
             capture_output=True, text=True, timeout=10,
             cwd=str(repo_dir),
         )
-        result2 = subprocess.run(
-            ["git", "log", "--oneline", "HEAD..origin/main"],
-            capture_output=True, text=True, timeout=10,
-            cwd=str(repo_dir),
-        )
-        if result2.stdout.strip():
-            commits = result2.stdout.strip().split("\n")
-            return f"{get_current_version()}+{len(commits)}commits"
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().lstrip("v")
     except Exception as e:
         logger.debug("Git check failed: %s", e)
 

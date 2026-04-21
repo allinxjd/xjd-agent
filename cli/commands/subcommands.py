@@ -364,18 +364,20 @@ def check_update(auto: bool = False):
         elif latest:
             console.print(f"  [green]已是最新版本 ({current})[/green]")
         else:
-            console.print("  [yellow]无法检查远程版本[/yellow]")
+            console.print("  [yellow]无法检查远程版本，请手动运行: git pull[/yellow]")
 
-        # 检查 git 状态
+        # 检查 git 状态 (fetch 已在 check_latest_version 中完成)
+        repo_dir = str(__import__("pathlib").Path(__file__).parent.parent.parent)
         result = subprocess.run(
             ["git", "log", "--oneline", "HEAD..origin/main"],
             capture_output=True, text=True, timeout=10,
-            cwd=str(__import__("pathlib").Path(__file__).parent.parent.parent),
+            cwd=repo_dir,
         )
         if result.returncode == 0 and result.stdout.strip():
             commits = result.stdout.strip().split("\n")
-            console.print(f"\n  [yellow]Git 有 {len(commits)} 个新提交[/yellow]")
+            console.print(f"\n  [yellow]Git 有 {len(commits)} 个新提交可拉取[/yellow]")
             console.print(f"  [dim]{result.stdout.strip()[:300]}[/dim]")
+            console.print("  运行 [bold]xjd-agent update --auto[/bold] 或 [bold]git pull[/bold] 更新")
 
     except Exception as e:
         console.print(f"  [red]检查失败: {e}[/red]")
