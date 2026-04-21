@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xjd-agent"
-version = "0.3.3"
+version = "0.3.4"
 description = "XJD Agent — Production-ready AI Agent platform with multi-provider support, 20+ messaging adapters, and extensible tool system"
 readme = "README.md"
 requires-python = ">=3.11"

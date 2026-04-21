@@ -30,11 +30,13 @@ function renderCanvasComponent(comp) {
 
   const el = document.createElement('div');
   el.className = 'canvas-component';
-  const typeLabel = comp.type || 'html';
+  const contentStr = (comp.content || '').trimStart();
+  const looksLikeHtml = /^<!doctype\s|^<html[\s>]/i.test(contentStr);
+  const typeLabel = looksLikeHtml ? 'html' : (comp.type || 'html');
   el.innerHTML = `<div class="canvas-component-header"><span>${typeLabel.toUpperCase()}</span></div><div class="canvas-component-body"></div>`;
   const body = el.querySelector('.canvas-component-body');
 
-  if (comp.type === 'html' || comp.type === 'react') {
+  if (comp.type === 'html' || comp.type === 'react' || looksLikeHtml) {
     const iframe = document.createElement('iframe');
     iframe.sandbox = 'allow-scripts';
     body.appendChild(iframe);
@@ -64,7 +66,7 @@ window.xjd={sendAction:function(a,p){window.parent.postMessage({type:"a2ui_actio
   } else {
     body.innerHTML = `<pre style="margin:0;white-space:pre-wrap;">${_esc(comp.content || '')}</pre>`;
   }
-  viewport.appendChild(el);
+  viewport.prepend(el);
 }
 
 // A2UI: 监听 Canvas iframe postMessage，转发到 WebSocket
