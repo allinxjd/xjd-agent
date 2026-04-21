@@ -237,6 +237,14 @@ class WebServer:
         app.router.add_post("/api/admin/hub/publish", self._hub_publish)
         app.router.add_get("/api/admin/hub/published", self._hub_published)
 
+        # Hub Remote (充值代理)
+        app.router.add_post("/api/admin/hub/account/register", self._hub_remote_register)
+        app.router.add_post("/api/admin/hub/account/login", self._hub_remote_login)
+        app.router.add_get("/api/admin/hub/account/balance", self._hub_remote_balance)
+        app.router.add_get("/api/admin/hub/recharge/packages", self._hub_remote_packages)
+        app.router.add_post("/api/admin/hub/recharge/create", self._hub_remote_recharge_create)
+        app.router.add_get("/api/admin/hub/recharge/status/{order_no}", self._hub_remote_recharge_status)
+
         # 静态文件
         app.router.add_static("/static", self._static_dir, show_index=False)
 
@@ -2684,6 +2692,78 @@ class WebServer:
                 for r in results
             ],
         })
+
+    # ── Hub Remote (充值代理) ────────────────────────────────────
+
+    async def _hub_remote_register(self, request):
+        from aiohttp import web
+        hub = self._get_hub_client()
+        if not hub or not hub._hub_url:
+            return web.json_response({"error": "Hub URL not configured"}, status=503)
+        try:
+            body = await request.json()
+            data = await hub.remote_register(body.get("username", ""), body.get("email", ""), body.get("password", ""))
+            return web.json_response(data)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def _hub_remote_login(self, request):
+        from aiohttp import web
+        hub = self._get_hub_client()
+        if not hub or not hub._hub_url:
+            return web.json_response({"error": "Hub URL not configured"}, status=503)
+        try:
+            body = await request.json()
+            data = await hub.remote_login(body.get("username", ""), body.get("password", ""))
+            return web.json_response(data)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def _hub_remote_balance(self, request):
+        from aiohttp import web
+        hub = self._get_hub_client()
+        if not hub or not hub._hub_url or not hub.has_remote_token:
+            return web.json_response({"error": "Not logged in to Hub"}, status=401)
+        try:
+            data = await hub.remote_balance()
+            return web.json_response(data)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def _hub_remote_packages(self, request):
+        from aiohttp import web
+        hub = self._get_hub_client()
+        if not hub or not hub._hub_url:
+            return web.json_response({"error": "Hub URL not configured"}, status=503)
+        try:
+            data = await hub.remote_recharge_packages()
+            return web.json_response(data)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def _hub_remote_recharge_create(self, request):
+        from aiohttp import web
+        hub = self._get_hub_client()
+        if not hub or not hub._hub_url or not hub.has_remote_token:
+            return web.json_response({"error": "Not logged in to Hub"}, status=401)
+        try:
+            body = await request.json()
+            data = await hub.remote_recharge_create(body.get("amount", 0), body.get("pay_type", "native"))
+            return web.json_response(data)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def _hub_remote_recharge_status(self, request):
+        from aiohttp import web
+        hub = self._get_hub_client()
+        if not hub or not hub._hub_url or not hub.has_remote_token:
+            return web.json_response({"error": "Not logged in to Hub"}, status=401)
+        try:
+            order_no = request.match_info["order_no"]
+            data = await hub.remote_recharge_status(order_no)
+            return web.json_response(data)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
 
     # ── Skill Version API ────────────────────────────────────────
 
