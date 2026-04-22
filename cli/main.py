@@ -378,11 +378,11 @@ def setup() -> None:
     setup_wizard()
 
 @cli.command()
-@click.option("--host", default="127.0.0.1", help="监听地址")
-@click.option("--port", default=18789, help="监听端口")
+@click.option("--host", default="0.0.0.0", help="监听地址")
+@click.option("--port", default=8080, help="监听端口")
 def gateway(host: str, port: int) -> None:
-    """启动消息网关 (WebSocket 控制面 + 消息渠道)."""
-    asyncio.run(_start_gateway(host=host, port=port))
+    """启动消息网关 (WebUI + 消息渠道)."""
+    asyncio.run(_start_web(host=host, port=port))
 
 async def _start_gateway(host: str, port: int) -> None:
     """启动 Gateway."""
@@ -557,6 +557,13 @@ async def _start_gateway(host: str, port: int) -> None:
             gw.register_adapter(MatrixAdapter(channels["matrix"]))
         except ImportError as e:
             console.print(f"  [yellow]Matrix: {e}[/yellow]")
+
+    if "wechat_clawbot" in channels:
+        try:
+            from gateway.platforms.wechat_clawbot import WeChatClawBotAdapter
+            gw.register_adapter(WeChatClawBotAdapter(channels["wechat_clawbot"]))
+        except ImportError as e:
+            console.print(f"  [yellow]微信 iLink: {e}[/yellow]")
 
     console.print(BANNER)
     console.print(Panel(
