@@ -360,11 +360,10 @@ class GatewayServer:
             except Exception as e:
                 logger.warning("CronScheduler 关闭失败: %s", e)
 
-        # 停止所有适配器
+        # 停止所有适配器 (无论 is_running 状态，确保后台 task 被 cancel)
         stop_tasks = []
         for name, adapter in self._adapters.items():
-            if adapter.is_running:
-                stop_tasks.append(adapter.stop())
+            stop_tasks.append(adapter.stop())
 
         if stop_tasks:
             await asyncio.gather(*stop_tasks, return_exceptions=True)
@@ -540,6 +539,14 @@ class GatewayServer:
             try:
                 reply_text = ""
                 audio_data = b""
+
+                # 发送"正在输入"状态
+                adapter = self._adapters.get(platform)
+                if adapter and adapter.is_running:
+                    try:
+                        await adapter.send_typing(message.chat.chat_id, "start")
+                    except Exception:
+                        pass
 
                 # 语音消息走语音管线
                 if message.message_type == MessageType.VOICE and self._voice_enabled:

@@ -123,14 +123,13 @@ PLATFORM_SCHEMAS: dict[str, dict] = {
         ],
     },
     "wechat_clawbot": {
-        "name": "微信 ClawBot",
-        "name_en": "WeChat ClawBot",
+        "name": "微信个人号",
+        "name_en": "WeChat Personal",
         "icon": "wechat",
+        "auth_mode": "qr_scan",
         "fields": [
-            {"key": "bot_token", "label": "Bot Token", "label_zh": "iLink Bot Token", "type": "password", "required": True,
-             "help": "微信扫码登录 ClawBot 后获取的 Token"},
-            {"key": "base_url", "label": "API Base URL", "label_zh": "API 地址", "type": "text", "required": False,
-             "default": "https://ilinkai.weixin.qq.com", "help": "iLink API 地址，一般无需修改"},
+            {"key": "account_id", "label": "Account ID", "label_zh": "账号 ID", "type": "text", "required": False,
+             "help": "扫码登录后自动填入，无需手动配置"},
         ],
     },
 }

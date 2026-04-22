@@ -206,6 +206,9 @@ class WebServer:
         app.router.add_delete("/api/admin/gateway/channels/{platform}", self._gw_delete_channel)
         app.router.add_post("/api/admin/gateway/channels/{platform}/start", self._gw_start_channel)
         app.router.add_post("/api/admin/gateway/channels/{platform}/stop", self._gw_stop_channel)
+        app.router.add_get("/api/admin/gateway/channels/{platform}/login-state", self._gw_channel_login_state)
+        app.router.add_get("/api/admin/gateway/channels/{platform}/contacts", self._gw_channel_contacts)
+        app.router.add_post("/api/admin/gateway/channels/{platform}/send", self._gw_channel_send)
         app.router.add_get("/api/admin/gateway/schemas", self._gw_schemas)
         app.router.add_get("/api/admin/gateway/voice", self._gw_get_voice)
         app.router.add_post("/api/admin/gateway/voice", self._gw_save_voice)
@@ -1498,6 +1501,7 @@ class WebServer:
                 "running": adapter.is_running if adapter else False,
                 "capabilities": adapter.capabilities if adapter else {},
                 "bot_user": adapter.bot_user.username if adapter and adapter.bot_user else None,
+                "login_state": adapter.login_state if adapter and hasattr(adapter, "login_state") else None,
             }
 
         return web.json_response({"channels": channels})
@@ -1594,6 +1598,60 @@ class WebServer:
         admin_name = user.username if user else "anonymous"
         self._audit(admin_name, "CHANNEL_STOP", platform, request.remote or "")
         return web.json_response({"status": "ok"})
+
+    async def _gw_channel_login_state(self, request):
+        """GET /api/admin/gateway/channels/{platform}/login-state — QR 扫码登录状态."""
+        from aiohttp import web
+        user, err = self._require_admin(request)
+        if err:
+            return err
+        platform = request.match_info["platform"]
+        if not self._gateway:
+            return web.json_response({"error": "Gateway not initialized"}, status=500)
+        adapter = self._gateway._adapters.get(platform)
+        if not adapter or not hasattr(adapter, "login_state"):
+            return web.json_response({"error": "Not supported"}, status=404)
+        return web.json_response(adapter.login_state)
+
+    async def _gw_channel_contacts(self, request):
+        """GET /api/admin/gateway/channels/{platform}/contacts — 已知联系人列表."""
+        from aiohttp import web
+        user, err = self._require_admin(request)
+        if err:
+            return err
+        platform = request.match_info["platform"]
+        if not self._gateway:
+            return web.json_response({"error": "Gateway not initialized"}, status=500)
+        adapter = self._gateway._adapters.get(platform)
+        if not adapter or not hasattr(adapter, "list_known_contacts"):
+            return web.json_response({"error": "Not supported"}, status=404)
+        contacts = adapter.list_known_contacts()
+        return web.json_response({"contacts": contacts})
+
+    async def _gw_channel_send(self, request):
+        """POST /api/admin/gateway/channels/{platform}/send — 主动发消息."""
+        from aiohttp import web
+        user, err = self._require_admin(request)
+        if err:
+            return err
+        platform = request.match_info["platform"]
+        if not self._gateway:
+            return web.json_response({"error": "Gateway not initialized"}, status=500)
+        adapter = self._gateway._adapters.get(platform)
+        if not adapter:
+            return web.json_response({"error": "Adapter not found"}, status=404)
+        if not adapter.is_running:
+            return web.json_response({"error": "Adapter not running"}, status=400)
+        body = await request.json()
+        chat_id = body.get("chat_id", "")
+        text = body.get("text", "")
+        if not chat_id or not text:
+            return web.json_response({"error": "chat_id and text required"}, status=400)
+        if hasattr(adapter, "send_to_contact"):
+            msg_id = await adapter.send_to_contact(chat_id, text)
+        else:
+            msg_id = await adapter.send_text(chat_id, text)
+        return web.json_response({"message_id": msg_id, "ok": bool(msg_id)})
 
     async def _gw_get_voice(self, request):
         """GET /api/admin/gateway/voice."""

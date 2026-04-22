@@ -498,6 +498,8 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 .channel-card-actions button:hover { background: var(--bg-hover); color: var(--text-primary); }
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
 .status-dot.running { background: #22c55e; }
+.status-dot.waiting { background: #f59e0b; animation: pulse-dot 1.5s infinite; }
+@keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 .status-dot.stopped { background: #9ca3af; }
 .status-dot.error { background: #ef4444; }
 
@@ -1943,14 +1945,35 @@ async function loadChannels() {
       const schema = schemas[ch.platform] || {};
       const name = curLang === 'zh' ? (schema.name || ch.platform) : (schema.name_en || ch.platform);
       const isRunning = ch.running;
-      const statusCls = isRunning ? 'running' : 'stopped';
-      const statusText = isRunning ? t('running') : t('stopped');
+      const ls = ch.login_state;
+      const isWaitingScan = ls && ls.status === 'waiting_scan';
+      const isConnected = ls && ls.status === 'connected';
+      let statusCls, statusText;
+      if (isWaitingScan) {
+        statusCls = 'waiting';
+        statusText = curLang === 'zh' ? '等待扫码' : 'Waiting for QR scan';
+      } else if (isConnected || (isRunning && !ls)) {
+        statusCls = 'running';
+        statusText = t('running');
+      } else {
+        statusCls = isRunning ? 'running' : 'stopped';
+        statusText = isRunning ? t('running') : t('stopped');
+      }
       const mode = ch.config?.mode || '';
       const modeLabel = mode ? ` (${mode})` : '';
+      const qrHtml = isWaitingScan && ls.qr_url
+        ? `<div style="margin-top:6px;"><a href="${ls.qr_url}" target="_blank" style="color:#3b82f6;font-size:12px;">${curLang==='zh'?'点击扫码连接微信':'Click to scan QR'}</a></div>`
+        : '';
+      const hasContacts = isConnected && ch.platform === 'wechat_clawbot';
+      const contactsHtml = hasContacts
+        ? `<div style="margin-top:6px;"><button onclick="showContacts('${ch.platform}')" style="font-size:12px;padding:2px 8px;">${curLang==='zh'?'联系人 / 主动发消息':'Contacts / Send'}</button></div>`
+        : '';
       return `<div class="channel-card">
         <div class="channel-card-info">
           <div class="channel-card-name">${name}${modeLabel}</div>
           <div class="channel-card-status"><span class="status-dot ${statusCls}"></span>${statusText}${ch.bot_user ? ' · ' + ch.bot_user : ''}</div>
+          ${qrHtml}
+          ${contactsHtml}
         </div>
         <div class="channel-card-actions">
           ${isRunning
@@ -1961,7 +1984,70 @@ async function loadChannels() {
         </div>
       </div>`;
     }).join('');
+    _startChannelPollIfNeeded(channels);
   } catch(e) { console.warn('loadChannels failed', e); }
+}
+
+let _channelPollTimer = null;
+function _startChannelPollIfNeeded(channels) {
+  const hasWaiting = channels.some(ch => ch.login_state && ch.login_state.status === 'waiting_scan');
+  if (hasWaiting && !_channelPollTimer) {
+    _channelPollTimer = setInterval(() => loadChannels(), 3000);
+  } else if (!hasWaiting && _channelPollTimer) {
+    clearInterval(_channelPollTimer);
+    _channelPollTimer = null;
+  }
+}
+
+async function showContacts(platform) {
+  try {
+    const data = await fetch(`/api/admin/gateway/channels/${platform}/contacts`, {headers: authHeaders()}).then(r => r.json());
+    const contacts = data.contacts || [];
+    const title = curLang === 'zh' ? '已知联系人' : 'Known Contacts';
+    const noContacts = curLang === 'zh' ? '暂无联系人 (需对方先发过消息)' : 'No contacts yet (they must message you first)';
+    const sendLabel = curLang === 'zh' ? '发送' : 'Send';
+    const placeholder = curLang === 'zh' ? '输入消息内容...' : 'Type a message...';
+    let html = `<div style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;" onclick="if(event.target===this)this.remove()">
+      <div style="background:var(--bg-primary);border-radius:12px;padding:20px;max-width:480px;width:90%;max-height:70vh;overflow-y:auto;" onclick="event.stopPropagation()">
+        <h3 style="margin:0 0 12px;">${title}</h3>`;
+    if (!contacts.length) {
+      html += `<div style="color:var(--text-tertiary);font-size:13px;">${noContacts}</div>`;
+    } else {
+      html += contacts.map(uid => {
+        const safe = uid.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+        const inputId = 'msg_' + uid.replace(/[^a-zA-Z0-9]/g,'_');
+        return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);">
+        <span style="flex:1;font-size:13px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;">${safe}</span>
+        <input id="${inputId}" data-uid="${safe}" data-platform="${platform}" placeholder="${placeholder}" style="flex:2;padding:4px 8px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);">
+        <button onclick="sendToContact(this.previousElementSibling)" style="font-size:12px;padding:4px 10px;">${sendLabel}</button>
+      </div>`;
+      }).join('');
+    }
+    html += `<div style="margin-top:12px;text-align:right;"><button onclick="this.closest('[style*=fixed]').remove()" style="font-size:12px;padding:4px 12px;">${curLang==='zh'?'关闭':'Close'}</button></div></div></div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+  } catch(e) { console.warn('showContacts failed', e); }
+}
+
+async function sendToContact(input) {
+  if (!input || !input.value.trim()) return;
+  const platform = input.dataset.platform;
+  const userId = input.dataset.uid;
+  const text = input.value.trim();
+  input.disabled = true;
+  try {
+    const res = await fetch(`/api/admin/gateway/channels/${encodeURIComponent(platform)}/send`, {
+      method: 'POST', headers: {...authHeaders(), 'Content-Type': 'application/json'},
+      body: JSON.stringify({chat_id: userId, text}),
+    }).then(r => r.json());
+    if (res.ok) {
+      input.value = '';
+      input.placeholder = curLang === 'zh' ? '已发送' : 'Sent!';
+      setTimeout(() => { input.placeholder = curLang === 'zh' ? '输入消息内容...' : 'Type a message...'; }, 2000);
+    } else {
+      alert(res.error || 'Send failed');
+    }
+  } catch(e) { alert('Send failed: ' + e.message); }
+  input.disabled = false;
 }
 
 async function showAddChannel() {

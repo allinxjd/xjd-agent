@@ -236,6 +236,10 @@ class BasePlatformAdapter(ABC):
             reply_to_id=reply_to,
         ))
 
+    async def send_typing(self, chat_id: str, action: str = "start") -> None:
+        """发送正在输入状态 (子类可覆盖实现)."""
+        pass
+
     async def send_image(
         self,
         chat_id: str,
