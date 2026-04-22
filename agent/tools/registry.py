@@ -1,6 +1,6 @@
 """工具注册表 — 统一管理所有工具的注册、查找、执行.
 
-参考 HermesAgent (Nous Research) 的 ToolRegistry 设计:
+ToolRegistry 设计:
 - 每个工具文件导出 register_*_tools(registry) 函数
 - discover_tools() 自动扫描并注册
 - TOOLSETS 按场景分组工具，可动态组合
@@ -18,7 +18,7 @@ from agent.providers.base import ToolDefinition
 
 logger = logging.getLogger(__name__)
 
-# ── 预定义 Toolset (参考 HermesAgent _HERMES_CORE_TOOLS + TOOLSETS) ──
+# ── 预定义 Toolset ──
 TOOLSETS: dict[str, list[str]] = {
     "core": [
         "run_terminal", "read_file", "write_file", "edit_file", "list_directory",
@@ -412,7 +412,7 @@ class ToolRegistry:
         """获取所有工具分类."""
         return sorted(set(t.category for t in self._tools.values()))
 
-    # ── Toolset 组合 (参考 HermesAgent compose 模式) ──
+    # ── Toolset 组合 ──
 
     def compose_toolsets(self, *names: str) -> list[ToolDefinition]:
         """组合多个 toolset，返回合并后的工具定义列表.
@@ -453,7 +453,7 @@ class ToolRegistry:
         扫描 package_path 下所有 *_tools.py 模块，
         调用其 register_*_tools(registry) 函数。
 
-        参考 HermesAgent 的 discover_builtin_tools() 设计。
+        自动发现并注册内置工具。
 
         Returns:
             注册的模块数量

@@ -85,6 +85,7 @@ class OpenAIProvider(BaseProvider):
             base_url=self._base_url,
             organization=organization,
             default_headers=extra_headers or None,
+            timeout=120.0,
         )
 
     @property
@@ -144,6 +145,7 @@ class OpenAIProvider(BaseProvider):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         thinking: Optional[str] = None,
+        api_key_override: Optional[str] = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         """发送请求并获取完整响应."""
@@ -157,8 +159,16 @@ class OpenAIProvider(BaseProvider):
         if tools:
             params["tools"] = self._convert_tools(tools)
 
+        client = self._client
+        if api_key_override:
+            client = AsyncOpenAI(
+                api_key=api_key_override,
+                base_url=self._base_url,
+                timeout=120.0,
+            )
+
         response = await retry_with_backoff(
-            lambda: self._client.chat.completions.create(**params)
+            lambda: client.chat.completions.create(**params)
         )
 
         choice = response.choices[0]
@@ -193,6 +203,7 @@ class OpenAIProvider(BaseProvider):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         thinking: Optional[str] = None,
+        api_key_override: Optional[str] = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """流式输出."""
@@ -207,8 +218,16 @@ class OpenAIProvider(BaseProvider):
         if tools:
             params["tools"] = self._convert_tools(tools)
 
+        client = self._client
+        if api_key_override:
+            client = AsyncOpenAI(
+                api_key=api_key_override,
+                base_url=self._base_url,
+                timeout=120.0,
+            )
+
         stream = await retry_with_backoff(
-            lambda: self._client.chat.completions.create(**params)
+            lambda: client.chat.completions.create(**params)
         )
 
         async for chunk in stream:  # type: ignore

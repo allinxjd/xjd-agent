@@ -249,7 +249,9 @@ class XJDClient:
             config = Config.load()
             config.apply_env_overrides()
 
-            router = ModelRouter()
+            from agent.core.model_router import build_credential_manager_from_config
+            cred_mgr = build_credential_manager_from_config(config)
+            router = ModelRouter(credential_manager=cred_mgr)
             primary = config.model.primary
             if primary.provider and primary.api_key:
                 provider = OpenAIProvider(

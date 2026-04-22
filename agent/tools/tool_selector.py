@@ -1,6 +1,6 @@
 """意图→工具集映射 — 零 LLM 调用的关键词匹配器.
 
-参考 Hermes Agent 的 toolset 动态过滤 + OpenClaw 的 sandbox-tool-policy，
+基于 toolset 动态过滤 + sandbox-tool-policy，
 在发送给模型之前裁剪工具列表，减少 token 消耗和错误工具调用。
 
 当无技能激活时，根据用户消息关键词选择相关 toolset，

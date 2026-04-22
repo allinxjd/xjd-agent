@@ -81,6 +81,7 @@ class AnthropicProvider(BaseProvider):
         self._client = AsyncAnthropic(
             api_key=api_key,
             base_url=base_url,
+            timeout=120.0,
         )
         self._available_models = dict(CLAUDE_MODELS)
 
@@ -160,6 +161,7 @@ class AnthropicProvider(BaseProvider):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         thinking: Optional[str] = None,
+        api_key_override: Optional[str] = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         """发送请求."""
@@ -188,8 +190,16 @@ class AnthropicProvider(BaseProvider):
                 "budget_tokens": budget_map.get(thinking, 8192),
             }
 
+        client = self._client
+        if api_key_override:
+            client = AsyncAnthropic(
+                api_key=api_key_override,
+                base_url=self._client.base_url,
+                timeout=120.0,
+            )
+
         response = await retry_with_backoff(
-            lambda: self._client.messages.create(**params)
+            lambda: client.messages.create(**params)
         )
 
         # 解析响应
@@ -242,6 +252,7 @@ class AnthropicProvider(BaseProvider):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         thinking: Optional[str] = None,
+        api_key_override: Optional[str] = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """流式输出."""
@@ -263,7 +274,15 @@ class AnthropicProvider(BaseProvider):
         if tool_defs:
             params["tools"] = tool_defs
 
-        async with self._client.messages.stream(**params) as stream:
+        client = self._client
+        if api_key_override:
+            client = AsyncAnthropic(
+                api_key=api_key_override,
+                base_url=self._client.base_url,
+                timeout=120.0,
+            )
+
+        async with client.messages.stream(**params) as stream:
             async for event in stream:
                 if hasattr(event, "type"):
                     if event.type == "content_block_delta":

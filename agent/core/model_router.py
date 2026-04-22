@@ -12,7 +12,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
 
 from agent.providers.base import (
     BaseProvider,
@@ -24,6 +24,9 @@ from agent.providers.base import (
     ToolDefinition,
     Usage,
 )
+
+if TYPE_CHECKING:
+    from agent.core.credential_manager import CredentialManager
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +40,21 @@ _COMPLEX_KEYWORDS = {
     "planning", "delegate", "subagent", "cron", "docker", "kubernetes",
     "代码", "调试", "分析", "部署", "架构", "设计", "重构", "优化",
 }
+
+_IMMEDIATE_FAIL_CODES = {401, 403, 404}
+_CIRCUIT_BREAKER_COOLDOWN = 300.0
+
+
+def _extract_status_code(exc: Exception) -> int:
+    """从异常中提取 HTTP 状态码."""
+    code = getattr(exc, 'status_code', None) or getattr(exc, 'status', None)
+    if isinstance(code, int):
+        return code
+    err_str = str(exc)
+    for c in (401, 403, 404, 429, 500, 502, 503):
+        if str(c) in err_str:
+            return c
+    return 0
 
 @dataclass
 class CredentialEntry:
@@ -84,9 +102,10 @@ class ModelRouter:
         response = await decision.provider.complete(messages, decision.model)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, credential_manager: Optional[CredentialManager] = None) -> None:
         self._providers: dict[str, BaseProvider] = {}
         self._credentials: dict[str, list[CredentialEntry]] = {}
+        self._credential_mgr = credential_manager
 
         # 路由配置
         self._primary_provider: Optional[str] = None
@@ -219,7 +238,6 @@ class ModelRouter:
 
         last_error: Optional[Exception] = None
         for idx, (provider, model, reason) in enumerate(attempts):
-            # Circuit breaker: skip providers in cooldown (but never skip the last one)
             is_last = (idx == len(attempts) - 1)
             provider_key = f"{provider.name}:{model}"
             cooldown_until = self._provider_cooldown.get(provider_key, 0.0)
@@ -234,27 +252,47 @@ class ModelRouter:
                 )
                 continue
 
+            # Credential pool: 获取当前可用 key
+            active_key = None
+            if self._credential_mgr:
+                active_key = self._credential_mgr.get_active_key(provider.name)
+
             try:
                 logger.info(
                     "Attempting %s:%s (reason=%s)", provider.name, model, reason
                 )
                 response = await provider.complete(
-                    messages=messages, model=model, tools=tools, **kwargs
+                    messages=messages, model=model, tools=tools,
+                    api_key_override=active_key, **kwargs,
                 )
                 if reason == "failover":
                     logger.warning(
                         "Failover succeeded: %s:%s (primary failed)", provider.name, model
                     )
-                # Reset circuit breaker on success
                 self._provider_failures.pop(provider_key, None)
                 self._provider_cooldown.pop(provider_key, None)
+                if active_key and self._credential_mgr:
+                    self._credential_mgr.report_success(provider.name, active_key)
                 return response
             except Exception as e:
                 last_error = e
-                # Track consecutive failures
+                status = _extract_status_code(e)
+
+                if active_key and self._credential_mgr:
+                    self._credential_mgr.report_error(provider.name, active_key, status)
+
+                if status in _IMMEDIATE_FAIL_CODES:
+                    logger.error(
+                        "Provider %s:%s auth/not-found error (HTTP %d), skipping immediately",
+                        provider.name, model, status,
+                    )
+                    self._provider_failures[provider_key] = 3
+                    self._provider_cooldown[provider_key] = time.time() + _CIRCUIT_BREAKER_COOLDOWN
+                    continue
+
                 self._provider_failures[provider_key] = self._provider_failures.get(provider_key, 0) + 1
                 if self._provider_failures[provider_key] >= 3:
-                    self._provider_cooldown[provider_key] = time.time() + 60.0
+                    self._provider_cooldown[provider_key] = time.time() + _CIRCUIT_BREAKER_COOLDOWN
                 logger.warning(
                     "Provider %s:%s failed (%d consecutive): %s, trying next...",
                     provider.name, model, self._provider_failures[provider_key], e,
@@ -284,16 +322,65 @@ class ModelRouter:
                 attempts.append((prov, model))
 
         last_error: Optional[Exception] = None
-        for provider, model in attempts:
+        for idx, (provider, model) in enumerate(attempts):
+            is_last = (idx == len(attempts) - 1)
+            provider_key = f"{provider.name}:{model}"
+            cooldown_until = self._provider_cooldown.get(provider_key, 0.0)
+            if (
+                not is_last
+                and self._provider_failures.get(provider_key, 0) >= 3
+                and time.time() < cooldown_until
+            ):
+                logger.warning(
+                    "Circuit breaker (stream): skipping %s", provider_key,
+                )
+                continue
+
+            active_key = None
+            if self._credential_mgr:
+                active_key = self._credential_mgr.get_active_key(provider.name)
+
             try:
                 async for chunk in provider.stream(
-                    messages=messages, model=model, tools=tools, **kwargs
+                    messages=messages, model=model, tools=tools,
+                    api_key_override=active_key, **kwargs,
                 ):
                     yield chunk
+                self._provider_failures.pop(provider_key, None)
+                self._provider_cooldown.pop(provider_key, None)
+                if active_key and self._credential_mgr:
+                    self._credential_mgr.report_success(provider.name, active_key)
                 return
             except Exception as e:
                 last_error = e
+                status = _extract_status_code(e)
+                if active_key and self._credential_mgr:
+                    self._credential_mgr.report_error(provider.name, active_key, status)
+                if status in _IMMEDIATE_FAIL_CODES:
+                    self._provider_failures[provider_key] = 3
+                    self._provider_cooldown[provider_key] = time.time() + _CIRCUIT_BREAKER_COOLDOWN
+                else:
+                    self._provider_failures[provider_key] = self._provider_failures.get(provider_key, 0) + 1
+                    if self._provider_failures[provider_key] >= 3:
+                        self._provider_cooldown[provider_key] = time.time() + _CIRCUIT_BREAKER_COOLDOWN
                 logger.warning("Stream %s:%s failed: %s", provider.name, model, e)
                 continue
 
         raise RuntimeError(f"All stream providers failed: {last_error}") from last_error
+
+
+def build_credential_manager_from_config(config: Any) -> Optional["CredentialManager"]:
+    """从 Config 构建 CredentialManager（如果有多 Key 配置）."""
+    from agent.core.credential_manager import CredentialManager
+
+    cm = CredentialManager()
+    has_keys = False
+
+    for pc in [config.model.primary, config.model.cheap] + (config.model.failover or []):
+        if pc and pc.provider and pc.api_keys:
+            cm.add_keys(pc.provider, pc.api_keys)
+            has_keys = True
+        if pc and pc.provider and pc.api_key:
+            cm.add_key(pc.provider, pc.api_key)
+
+    return cm if has_keys else None
