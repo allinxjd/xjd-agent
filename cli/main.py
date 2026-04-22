@@ -103,7 +103,9 @@ async def _chat_loop(
     config.apply_env_overrides()
 
     # 初始化 Router
-    router = ModelRouter()
+    from agent.core.model_router import build_credential_manager_from_config
+    cred_mgr = build_credential_manager_from_config(config)
+    router = ModelRouter(credential_manager=cred_mgr)
 
     # 注册 Provider
     primary = config.model.primary
@@ -399,7 +401,9 @@ async def _start_gateway(host: str, port: int) -> None:
     config.apply_env_overrides()
 
     # 初始化 Router
-    router = ModelRouter()
+    from agent.core.model_router import build_credential_manager_from_config
+    cred_mgr = build_credential_manager_from_config(config)
+    router = ModelRouter(credential_manager=cred_mgr)
     primary = config.model.primary
     if primary.provider and primary.api_key:
         provider = OpenAIProvider(
@@ -645,7 +649,9 @@ async def _start_web(host: str, port: int) -> None:
     config.apply_env_overrides()
 
     # 初始化 Router + Engine
-    router = ModelRouter()
+    from agent.core.model_router import build_credential_manager_from_config
+    cred_mgr = build_credential_manager_from_config(config)
+    router = ModelRouter(credential_manager=cred_mgr)
     primary = config.model.primary
     if primary.provider and primary.api_key:
         provider = OpenAIProvider(
@@ -875,7 +881,9 @@ async def _start_api(host: str, port: int, api_key: str) -> None:
     config = Config.load()
     config.apply_env_overrides()
 
-    router = ModelRouter()
+    from agent.core.model_router import build_credential_manager_from_config
+    cred_mgr = build_credential_manager_from_config(config)
+    router = ModelRouter(credential_manager=cred_mgr)
     primary = config.model.primary
     if primary.provider and primary.api_key:
         provider = OpenAIProvider(

@@ -1,4 +1,4 @@
-"""技能管理工具 — Agent 可自主浏览/管理技能 (参考 HermesAgent).
+"""技能管理工具 — Agent 可自主浏览/管理技能.
 
 三个工具:
 - skills_list: 列出所有技能 (tier 1 元数据)

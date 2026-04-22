@@ -944,6 +944,15 @@ class WebServer:
 
             except asyncio.CancelledError:
                 logger.info("run_turn cancelled for session %s (WS disconnected)", session_id)
+            except TimeoutError:
+                logger.warning("run_turn timeout for session %s (>300s)", session_id)
+                err_msg = "AI 响应超时，请稍后重试。如果问题持续出现，可能是上游模型服务不稳定。"
+                try:
+                    if not ws.closed:
+                        await asyncio.wait_for(ws.send_json({"type": "error", "message": err_msg}), timeout=5.0)
+                        await asyncio.wait_for(ws.send_json({"type": "complete", "content": err_msg, "thinking": "", "tool_calls": 0, "tokens": 0, "duration_ms": 0}), timeout=5.0)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.error("run_turn failed for session %s: %s", session_id, e, exc_info=True)
                 asyncio.get_event_loop().create_task(self.broadcast_inspector_event({

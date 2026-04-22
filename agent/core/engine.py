@@ -296,6 +296,7 @@ class AgentEngine:
         session_messages: Optional[list[Message]] = None,
         abort_check: Optional[Callable[[], bool]] = None,
         skill_id: Optional[str] = None,
+        deadline: Optional[float] = None,
     ) -> TurnResult:
         """执行一轮对话 (包含完整的 tool calling loop).
 
@@ -402,6 +403,17 @@ class AgentEngine:
             if abort_check and abort_check():
                 logger.info("run_turn aborted at round %d (client disconnected)", round_idx)
                 final = "连接已断开，任务中止。"
+                messages.append(Message(role="assistant", content=final))
+                self._active_skill = None
+                return TurnResult(
+                    content=final,
+                    tool_calls_made=total_tool_calls,
+                    total_usage=total_usage,
+                    duration_ms=(time.time() - start_time) * 1000,
+                )
+            if deadline and time.time() > deadline:
+                logger.warning("run_turn deadline exceeded at round %d", round_idx)
+                final = "处理超时，已返回当前结果。"
                 messages.append(Message(role="assistant", content=final))
                 self._active_skill = None
                 return TurnResult(

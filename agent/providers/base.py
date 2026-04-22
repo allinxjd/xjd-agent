@@ -133,6 +133,7 @@ class BaseProvider(ABC):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         thinking: Optional[str] = None,  # "off"|"low"|"medium"|"high"
+        api_key_override: Optional[str] = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         """发送请求并获取完整响应."""
@@ -146,6 +147,7 @@ class BaseProvider(ABC):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         thinking: Optional[str] = None,
+        api_key_override: Optional[str] = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """流式输出."""

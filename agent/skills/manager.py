@@ -1,4 +1,4 @@
-"""技能管理器 — SKILL.md 格式 (参考 HermesAgent / OpenClaw).
+"""技能管理器 — SKILL.md 格式.
 
 技能体系:
 1. 技能 = SKILL.md 文件 (YAML frontmatter + Markdown body)

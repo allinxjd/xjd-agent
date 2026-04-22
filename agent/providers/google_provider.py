@@ -201,10 +201,15 @@ class GoogleProvider(BaseProvider):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         thinking: Optional[str] = None,
+        api_key_override: Optional[str] = None,
         **kwargs: Any,
     ) -> CompletionResponse:
         """调用 Gemini API."""
-        client = self._ensure_client()
+        if api_key_override:
+            from google import genai
+            client = genai.Client(api_key=api_key_override)
+        else:
+            client = self._ensure_client()
         system_prompt, contents = self._convert_messages(messages)
 
         config: dict[str, Any] = {
@@ -280,10 +285,15 @@ class GoogleProvider(BaseProvider):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         thinking: Optional[str] = None,
+        api_key_override: Optional[str] = None,
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """流式输出."""
-        client = self._ensure_client()
+        if api_key_override:
+            from google import genai
+            client = genai.Client(api_key=api_key_override)
+        else:
+            client = self._ensure_client()
         system_prompt, contents = self._convert_messages(messages)
 
         config: dict[str, Any] = {
