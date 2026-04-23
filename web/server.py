@@ -97,6 +97,7 @@ class WebServer:
         self._ws_sessions: dict[str, Any] = {}  # ws_session_id → gateway Session
         self._ws_locks: dict[str, asyncio.Lock] = {}  # ws_session_id → 并发锁
         self._ws_active_tasks: dict[str, asyncio.Task] = {}  # ws_session_id → 当前 run_turn 任务
+        self._pending_results: dict[str, dict] = {}  # persistent_session_id → 后台完成的结果
 
         # 工作目录 (文件浏览沙箱)
         self._workspace_dir = self._config.get("workspace_dir", ".")
@@ -260,7 +261,11 @@ class WebServer:
 
         self._app = app
         self._runner = runner
-        logger.info("Web server started at http://%s:%d", host, port)
+        url = f"http://{host if host != '0.0.0.0' else 'localhost'}:{port}"
+        logger.info("Web server started at %s", url)
+
+        import webbrowser
+        webbrowser.open(url)
 
     async def stop(self):
         """优雅关闭服务器."""
@@ -648,6 +653,16 @@ class WebServer:
             ]
         await ws.send_json(welcome)
 
+        # 推送后台完成的待读结果
+        pending = self._pending_results.pop(gw_session.session_id, None)
+        if pending:
+            await ws.send_json({
+                "type": "bg_complete",
+                "content": pending["content"],
+                "tool_calls": pending["tool_calls"],
+                "tokens": pending["tokens"],
+            })
+
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
@@ -682,9 +697,25 @@ class WebServer:
                 elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
         finally:
-            # 取消正在跑的 run_turn 任务，避免 WS 断开后空转浪费 API 调用
+            # WS 断开后，让正在跑的任务继续在后台完成（而非取消浪费已有工作）
             active_task = self._ws_active_tasks.pop(session_id, None)
-            if active_task and not active_task.done():
+            gw_session_ref = self._ws_sessions.get(session_id)
+            persistent_sid = gw_session_ref.session_id if gw_session_ref else None
+            if active_task and not active_task.done() and persistent_sid:
+                logger.info("WS disconnected but task still running, continuing in background for session %s", persistent_sid)
+
+                async def _bg_finish(task, psid, gw_sess):
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception as e:
+                        logger.warning("Background task for %s failed: %s", psid, e)
+
+                bg = asyncio.create_task(_bg_finish(active_task, persistent_sid, gw_session_ref))
+                self._bg_tasks.add(bg)
+                bg.add_done_callback(self._bg_tasks.discard)
+            elif active_task and not active_task.done():
                 active_task.cancel()
             self._ws_connections.pop(session_id, None)
             self._ws_sessions.pop(session_id, None)
@@ -899,7 +930,7 @@ class WebServer:
                         on_tool_result=on_tool_result,
                         on_llm_event=on_llm_event,
                         session_messages=session_msgs,
-                        abort_check=lambda: ws.closed,
+                        abort_check=None,  # WS 断开后任务继续在后台完成
                     ),
                     timeout=600.0,  # 10 分钟超时保护 (技能创建等多轮工具调用需要更长时间)
                 )
@@ -911,6 +942,15 @@ class WebServer:
                     gw_session.tool_calls_count += result.tool_calls_made
                     gw_session.total_tokens += result.total_usage.total_tokens
                     await self._session_mgr._persist_session(gw_session)
+
+                # WS 已断开时，存储待推送结果 (用户重连后可看到)
+                if ws.closed and gw_session:
+                    self._pending_results[gw_session.session_id] = {
+                        "content": result.content,
+                        "tool_calls": result.tool_calls_made,
+                        "tokens": result.total_usage.total_tokens,
+                    }
+                    logger.info("Task completed in background for session %s, result pending", gw_session.session_id)
 
                 await _safe_send({
                     "type": "complete",

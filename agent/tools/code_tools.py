@@ -34,6 +34,10 @@ async def execute_code(
     Returns:
         执行输出 (stdout + stderr)
     """
+    from agent.tools.builtin import _BLOCKED_PATTERNS
+    if any(p.search(code) for p in _BLOCKED_PATTERNS):
+        return "Error: 代码被安全策略拦截 — 禁止执行可能关闭浏览器或破坏系统的操作"
+
     if language == "python":
         cmd = ["python3", "-c", code]
     elif language == "javascript":

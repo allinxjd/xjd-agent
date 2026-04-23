@@ -115,7 +115,7 @@ class AgentEngine:
         self,
         router: ModelRouter,
         system_prompt: Optional[str] = None,
-        max_tool_rounds: int = 10,
+        max_tool_rounds: int = 15,
         max_context_tokens: int = 100_000,
         memory_manager: Optional[Any] = None,
         skill_manager: Optional[Any] = None,
@@ -418,8 +418,11 @@ class AgentEngine:
 
         full_messages = [Message(role="system", content=system_content)] + messages
 
-        # Tool calling loop
-        for round_idx in range(effective_max_rounds):
+        # Agentic loop — 无硬性轮次上限，跑到模型返回最终回复为止
+        # 安全兜底: deadline (外层 timeout) + token 上限 + 绝对轮次上限
+        max_safety_rounds = 50
+        round_idx = 0
+        while round_idx < max_safety_rounds:
             if abort_check and abort_check():
                 logger.info("run_turn aborted at round %d (client disconnected)", round_idx)
                 final = "连接已断开，任务中止。"
@@ -548,7 +551,7 @@ class AgentEngine:
 
 
             tool_names = [tc["function"]["name"] for tc in response.tool_calls]
-            logger.info("Round %d/%d tool calls: %s", round_idx + 1, effective_max_rounds, tool_names)
+            logger.info("Round %d tool calls: %s", round_idx + 1, tool_names)
             # 如果模型在 tool call 同时输出了文本，也发给前端
             if response.content and on_stream:
                 on_stream(response.content)
@@ -609,8 +612,10 @@ class AgentEngine:
                 messages.append(tool_msg)
                 full_messages.append(tool_msg)
 
-        # 超过最大轮次
-        final_content = "已达到最大工具调用轮次限制。"
+            round_idx += 1
+
+        # 安全上限 (正常不应到达 — 模型会在任务完成时停止调用工具)
+        final_content = "已达到安全轮次上限，当前进度已保存。如需继续，请再次发送指令。"
         messages.append(Message(role="assistant", content=final_content))
         self._active_skill = None
 
