@@ -170,6 +170,31 @@ class ModelRouter:
         """添加故障转移候选."""
         self._failover_chain.append((provider_name, model))
 
+    def add_failover_from_config(self, failover_configs: list) -> None:
+        """从配置加载 failover providers 并注册."""
+        from agent.providers.openai_provider import OpenAIProvider
+        from agent.providers.base import ProviderType
+        for fc in failover_configs:
+            if not fc.provider:
+                continue
+            api_key = fc.api_key or ""
+            if not api_key and fc.provider == "ollama":
+                api_key = "ollama"
+            if not api_key:
+                logger.warning("Failover %s:%s skipped — no API key", fc.provider, fc.model)
+                continue
+            if fc.provider not in self._providers:
+                prov = OpenAIProvider(
+                    provider_type=ProviderType(fc.provider),
+                    api_key=api_key,
+                    base_url=fc.base_url or None,
+                )
+                self.register_provider(prov)
+            model = fc.model or _DEFAULT_MODELS.get(fc.provider, "")
+            if model:
+                self._failover_chain.append((fc.provider, model))
+                logger.info("Failover added from config: %s:%s", fc.provider, model)
+
     def _is_simple_message(self, text: str) -> bool:
         """判断是否是简单消息 (可用便宜模型处理)."""
         if not text.strip():

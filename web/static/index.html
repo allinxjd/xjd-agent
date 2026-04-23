@@ -968,6 +968,42 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
         </div>
         <button class="settings-save-btn" onclick="saveModelConfig()" data-i18n="saveModel">Save Model</button>
       </div>
+      <!-- Backup Models -->
+      <div class="settings-section">
+        <div class="settings-section-title">Backup Models (Failover)</div>
+        <div id="backupModelList" style="font-size:13px;margin-bottom:8px;"></div>
+        <div class="setting-row"><span class="setting-label">Provider</span>
+          <select id="backupProvider" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+            <option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option><option value="google">Google</option>
+            <option value="qwen">Qwen</option><option value="doubao">Doubao</option>
+            <option value="zhipu">Zhipu</option><option value="moonshot">Moonshot</option>
+            <option value="minimax">MiniMax</option><option value="ollama">Ollama</option>
+            <option value="custom">Custom</option>
+          </select>
+        </div>
+        <div class="setting-row"><span class="setting-label">Model</span>
+          <input type="text" id="backupModel" placeholder="model-id" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+        <div class="setting-row"><span class="setting-label">API Key</span>
+          <input type="password" id="backupApiKey" placeholder="sk-..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+        <div class="setting-row"><span class="setting-label">Base URL</span>
+          <input type="text" id="backupBaseUrl" placeholder="(optional)" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+        </div>
+        <button class="settings-save-btn" onclick="addBackupModel()">+ Add Backup</button>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Primary fails → try backups in order</div>
+      </div>
+      <!-- API Key Pool -->
+      <div class="settings-section">
+        <div class="settings-section-title">API Key Pool</div>
+        <div id="keyPoolList" style="font-size:13px;margin-bottom:8px;"></div>
+        <div class="setting-row">
+          <input type="password" id="newPoolKey" placeholder="sk-..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+          <button class="settings-save-btn" style="margin-left:8px;margin-top:0;" onclick="addApiKey()">+ Add</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;">Multiple keys for same provider auto-rotate to avoid rate limits</div>
+      </div>
       <div class="settings-section">
         <div class="settings-section-title" data-i18n="serverStats">Server Stats</div>
         <div class="setting-row"><span class="setting-label" data-i18n="uptime">Uptime</span><span class="setting-value" id="settingUptime">-</span></div>
@@ -1901,6 +1937,8 @@ async function loadSettings() {
     $('settingProviders').innerHTML = providers.length
       ? providers.map(p => `<div style="padding:4px 0;">\u2022 ${p}</div>`).join('')
       : t('noProviders');
+    loadBackupModels();
+    loadKeyPool();
   } catch(e) { console.warn('Settings load failed', e); }
 }
 
@@ -1931,6 +1969,76 @@ async function saveModelConfig() {
       $('settingApiKey').value = '';
     } else addSystemMsg(data.error || 'Save failed');
   } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+
+// ── Backup Models & Key Pool ──
+async function loadBackupModels() {
+  try {
+    const res = await fetch('/api/admin/models', {credentials:'include'});
+    const data = await res.json();
+    const list = $('backupModelList');
+    const failover = data.failover || [];
+    if (!failover.length) { list.innerHTML = '<div style="color:var(--text-secondary)">No backup models configured</div>'; return; }
+    list.innerHTML = failover.map((f, i) =>
+      `<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px;margin:2px 0;background:var(--bg-secondary);border-radius:6px;">
+        <span>${i+1}. ${f.provider} / ${f.model}</span>
+        <button onclick="removeBackupModel(${i})" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:12px;">Remove</button>
+      </div>`
+    ).join('');
+  } catch(e) { console.error('loadBackupModels:', e); }
+}
+async function addBackupModel() {
+  const provider = $('backupProvider').value;
+  const model = $('backupModel').value.trim();
+  const api_key = $('backupApiKey').value.trim();
+  const base_url = $('backupBaseUrl').value.trim();
+  if (!model) { addSystemMsg('Model name required'); return; }
+  try {
+    const res = await postJSON('/api/admin/model-backup', {action:'add', provider, model, api_key, base_url});
+    const data = await res.json();
+    if (data.status === 'ok') {
+      addSystemMsg('Backup added: ' + provider + '/' + model);
+      $('backupModel').value = ''; $('backupApiKey').value = ''; $('backupBaseUrl').value = '';
+      loadBackupModels();
+    } else addSystemMsg(data.error || 'Failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+async function removeBackupModel(idx) {
+  try {
+    const res = await postJSON('/api/admin/model-backup', {action:'remove', index: idx});
+    const data = await res.json();
+    if (data.status === 'ok') { addSystemMsg('Backup removed'); loadBackupModels(); }
+    else addSystemMsg(data.error || 'Failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+async function loadKeyPool() {
+  try {
+    const res = await postJSON('/api/admin/model-keys', {action:'list'});
+    const data = await res.json();
+    const list = $('keyPoolList');
+    const keys = data.keys || [];
+    if (!keys.length) { list.innerHTML = '<div style="color:var(--text-secondary)">No extra keys</div>'; return; }
+    list.innerHTML = keys.map(k =>
+      `<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px;margin:2px 0;background:var(--bg-secondary);border-radius:6px;">
+        <span style="font-family:monospace;">${k.key_masked}</span>
+        <span style="font-size:11px;color:${k.status==='active'?'#4caf50':'#ff9800'};margin:0 8px;">${k.status}${k.is_primary?' (primary)':''}</span>
+        ${k.is_primary?'':'<button onclick="removeApiKey(\''+k.key_masked+'\')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:12px;">Remove</button>'}
+      </div>`
+    ).join('');
+  } catch(e) { console.error('loadKeyPool:', e); }
+}
+async function addApiKey() {
+  const key = $('newPoolKey').value.trim();
+  if (!key) { addSystemMsg('API Key required'); return; }
+  try {
+    const res = await postJSON('/api/admin/model-keys', {action:'add', api_key: key});
+    const data = await res.json();
+    if (data.status === 'ok') { addSystemMsg('Key added'); $('newPoolKey').value = ''; loadKeyPool(); }
+    else addSystemMsg(data.error || 'Failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+async function removeApiKey(maskedKey) {
+  addSystemMsg('Key removal by masked key not supported — use config.yaml');
 }
 
 // ── Settings Tabs & Gateway Config ──
