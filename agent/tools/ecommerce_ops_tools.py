@@ -25,8 +25,8 @@ def _get_platform(platform: str) -> Any:
     cls = get_platform_class(platform)
     if not cls:
         return None
-    from agent.ecommerce.session import BrowserSessionManager
-    instance = cls(session_manager=BrowserSessionManager())
+    from agent.ecommerce.session import get_session_manager
+    instance = cls(session_manager=get_session_manager())
     _platform_instances[platform] = instance
     return instance
 

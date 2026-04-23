@@ -1,15 +1,11 @@
-"""浏览器会话管理 — 多平台多账号的 Playwright 会话池.
+"""浏览器会话管理 — 全局单例 + persistent profile.
 
-支持两种模式:
-1. CDP 连接模式 (推荐): 连接用户已打开的 Chrome，复用已有登录状态
-   启动 Chrome 时加 --remote-debugging-port=9222
-2. 独立实例模式: 启动新的 Chromium (headless)，需要重新登录
-
-电商模块使用独立的 BrowserContext pool，支持:
-- 每个 (platform, account) 一个隔离的 BrowserContext
-- Cookie 持久化 (避免频繁登录)
-- 会话健康检查 + 自动重连
-- Stealth 模式默认开启
+参考 browser-use / Skyvern 的最佳实践:
+1. 全局单例: 整个进程只有一个 BrowserSessionManager 和一个浏览器实例
+2. Persistent context: 用 user-data-dir 保持登录状态，重启后无需重新登录
+3. 复用 page: 同一平台同一账号始终复用同一个标签页，不开新窗口
+4. CDP 优先: 尝试连接用户已打开的 Chrome，连不上才用内置 Chromium
+5. 绝不关闭用户浏览器
 """
 
 from __future__ import annotations
@@ -20,6 +16,17 @@ from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# 全局单例
+_instance: Optional[BrowserSessionManager] = None
+
+
+def get_session_manager() -> BrowserSessionManager:
+    """获取全局单例 BrowserSessionManager."""
+    global _instance
+    if _instance is None:
+        _instance = BrowserSessionManager()
+    return _instance
 
 
 class BrowserSession:
@@ -44,43 +51,29 @@ class BrowserSession:
     async def close(self) -> None:
         if self.page and not self.page.is_closed():
             await self.page.close()
-        if self.context:
-            await self.context.close()
         self.page = None
-        self.context = None
 
 
 class BrowserSessionManager:
-    """管理多平台多账号的浏览器会话."""
+    """管理多平台多账号的浏览器会话 (全局单例)."""
 
-    def __init__(
-        self,
-        data_dir: Optional[str] = None,
-        cdp_url: str = "",
-    ) -> None:
-        if data_dir:
-            self._data_dir = Path(data_dir)
-        else:
-            from agent.core.config import get_home
-            self._data_dir = get_home() / "ecommerce"
+    def __init__(self) -> None:
+        from agent.core.config import get_home
+        self._data_dir = get_home() / "ecommerce"
+        self._profile_dir = get_home() / "browser-profile"
+        self._profile_dir.mkdir(parents=True, exist_ok=True)
 
-        self._cdp_url = cdp_url or "http://localhost:9222"
         self._sessions: dict[str, BrowserSession] = {}
         self._playwright: Any = None
         self._browser: Any = None
+        self._context: Any = None
         self._cdp_connected = False
 
-    def _cookie_path(self, platform: str, account: str) -> Path:
-        p = self._data_dir / platform / account
-        p.mkdir(parents=True, exist_ok=True)
-        return p / "cookies.json"
+    # APPEND_REST
 
     async def _ensure_browser(self) -> None:
-        """懒加载浏览器: 优先 CDP 连接用户 Chrome，失败则用 Playwright 内置 Chromium.
-
-        绝不关闭、重启用户浏览器。CDP 连不上就静默切换到内置 Chromium。
-        """
-        if self._browser:
+        """懒加载浏览器 (只创建一次). CDP 优先 → persistent context."""
+        if self._browser or self._context:
             return
         try:
             from playwright.async_api import async_playwright
@@ -92,27 +85,45 @@ class BrowserSessionManager:
             )
         self._playwright = await async_playwright().start()
 
-        # 优先尝试 CDP 连接已运行的 Chrome (多端口探测)
-        cdp_ports = [9222, 9223, 9224]
-        for port in cdp_ports:
+        # 1. CDP 连接用户已打开的 Chrome
+        for port in (9222, 9223, 9224):
             try:
                 url = f"http://localhost:{port}"
-                self._browser = await self._playwright.chromium.connect_over_cdp(url, timeout=3000)
+                self._browser = await self._playwright.chromium.connect_over_cdp(
+                    url, timeout=3000,
+                )
                 self._cdp_connected = True
-                logger.info("CDP 连接成功: %s (复用用户浏览器)", url)
+                if self._browser.contexts:
+                    self._context = self._browser.contexts[0]
+                else:
+                    self._context = await self._browser.new_context()
+                logger.info("CDP 连接成功: %s", url)
                 return
             except Exception:
                 continue
 
-        # Fallback: 用 Playwright 内置 Chromium (独立进程，不影响用户浏览器)
-        logger.info("CDP 未就绪，自动使用 Playwright 内置 Chromium (不影响用户浏览器)")
-        self._browser = await self._playwright.chromium.launch(
+        # 2. Persistent context — 用 user-data-dir 保持登录
+        from agent.tools.browser import STEALTH_SCRIPTS
+        logger.info("CDP 未就绪，使用 persistent context: %s", self._profile_dir)
+        self._context = await self._playwright.chromium.launch_persistent_context(
+            str(self._profile_dir),
             headless=False,
+            viewport={"width": 1280, "height": 720},
+            locale="zh-CN",
+            timezone_id="Asia/Shanghai",
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
             args=["--disable-blink-features=AutomationControlled"],
         )
+        for script in STEALTH_SCRIPTS:
+            await self._context.add_init_script(script)
         self._cdp_connected = False
 
-    # 平台域名映射 — 用于 CDP 模式下匹配已打开的标签页
+    # APPEND_SESSIONS
+
     _PLATFORM_DOMAINS: dict[str, list[str]] = {
         "pdd": ["mms.pinduoduo.com"],
         "taobao": ["myseller.taobao.com", "seller.taobao.com"],
@@ -123,7 +134,7 @@ class BrowserSessionManager:
     async def get_session(
         self, platform: str, account: str = "default",
     ) -> BrowserSession:
-        """获取或创建浏览器会话."""
+        """获取或创建浏览器会话 (复用已有 page，不开新窗口)."""
         key = f"{platform}:{account}"
         session = self._sessions.get(key)
         if session and session.page and not session.page.is_closed():
@@ -131,82 +142,52 @@ class BrowserSessionManager:
 
         await self._ensure_browser()
 
-        # CDP 模式: 在已有标签页中查找目标平台
+        # CDP 模式: 查找已打开的目标平台标签页
         if self._cdp_connected:
             domains = self._PLATFORM_DOMAINS.get(platform, [])
-            for ctx in self._browser.contexts:
-                for page in ctx.pages:
-                    try:
-                        page_url = page.url or ""
-                        if any(d in page_url for d in domains):
-                            session = BrowserSession(platform, account, ctx, page)
-                            self._sessions[key] = session
-                            logger.info("CDP: 复用已有标签页 %s", page_url[:80])
-                            return session
-                    except Exception:
-                        continue
+            for page in self._context.pages:
+                try:
+                    page_url = page.url or ""
+                    if any(d in page_url for d in domains):
+                        session = BrowserSession(platform, account, self._context, page)
+                        self._sessions[key] = session
+                        logger.info("CDP: 复用已有标签页 %s", page_url[:80])
+                        return session
+                except Exception:
+                    continue
 
-            # 没找到已有标签页，在用户浏览器中新开一个
-            ctx = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
-            page = await ctx.new_page()
-            session = BrowserSession(platform, account, ctx, page)
-            self._sessions[key] = session
-            return session
-
-        # 独立实例模式: 创建新 context + page
-        from agent.tools.browser import STEALTH_SCRIPTS
-
-        context = await self._browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            locale="zh-CN",
-            timezone_id="Asia/Shanghai",
-        )
-        for script in STEALTH_SCRIPTS:
-            await context.add_init_script(script)
-
-        # 恢复 cookies
-        cookie_file = self._cookie_path(platform, account)
-        if cookie_file.exists():
-            try:
-                cookies = json.loads(cookie_file.read_text())
-                await context.add_cookies(cookies)
-                logger.info("Restored cookies for %s", key)
-            except Exception as e:
-                logger.warning("Failed to restore cookies for %s: %s", key, e)
-
-        page = await context.new_page()
-        session = BrowserSession(platform, account, context, page)
+        # 复用已有空白页 or 新开一个 (在同一个 context 里，不开新窗口)
+        page = None
+        for p in self._context.pages:
+            if p.url in ("about:blank", "chrome://newtab/", ""):
+                page = p
+                break
+        if not page:
+            page = await self._context.new_page()
+        session = BrowserSession(platform, account, self._context, page)
         self._sessions[key] = session
         return session
 
     async def save_cookies(self, platform: str, account: str = "default") -> None:
-        """持久化当前会话的 cookies."""
-        key = f"{platform}:{account}"
-        session = self._sessions.get(key)
-        if not session or not session.context:
-            return
-        cookies = await session.context.cookies()
-        cookie_file = self._cookie_path(platform, account)
-        cookie_file.write_text(json.dumps(cookies, ensure_ascii=False, indent=2))
-        logger.debug("Saved %d cookies for %s", len(cookies), key)
-
-    async def close_session(self, platform: str, account: str = "default") -> None:
-        """关闭指定会话."""
-        key = f"{platform}:{account}"
-        session = self._sessions.pop(key, None)
-        if session:
-            await session.close()
+        """持久化 cookies (persistent context 自动保存，此方法仅用于 CDP 模式)."""
+        if self._cdp_connected:
+            key = f"{platform}:{account}"
+            session = self._sessions.get(key)
+            if session and session.context:
+                cookies = await session.context.cookies()
+                cookie_dir = self._data_dir / platform / account
+                cookie_dir.mkdir(parents=True, exist_ok=True)
+                cookie_file = cookie_dir / "cookies.json"
+                cookie_file.write_text(json.dumps(cookies, ensure_ascii=False, indent=2))
 
     async def close_all(self) -> None:
         """关闭所有会话和浏览器."""
         for session in self._sessions.values():
             await session.close()
         self._sessions.clear()
+        if self._context and not self._cdp_connected:
+            await self._context.close()
+        self._context = None
         if self._browser:
             await self._browser.close()
             self._browser = None
