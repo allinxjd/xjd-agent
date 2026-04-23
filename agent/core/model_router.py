@@ -41,7 +41,7 @@ _COMPLEX_KEYWORDS = {
     "代码", "调试", "分析", "部署", "架构", "设计", "重构", "优化",
 }
 
-_IMMEDIATE_FAIL_CODES = {401, 403, 404}
+_IMMEDIATE_FAIL_CODES = {401, 403, 404, 429}
 _CONNECTION_ERROR_TYPES = ("ConnectError", "ConnectionError", "Connection error", "connection attempts failed")
 _CIRCUIT_BREAKER_COOLDOWN = 300.0
 
@@ -334,8 +334,15 @@ class ModelRouter:
                 )
                 continue
 
+        err_str = str(last_error) if last_error else ""
+        if "429" in err_str or "余额" in err_str or "quota" in err_str.lower():
+            hint = "当前模型余额不足。请在 WebUI 设置中切换到其他模型，或充值后重试。"
+        elif any(str(c) in err_str for c in (401, 403)):
+            hint = "API Key 无效或已过期。请在 WebUI 设置中更新 API Key。"
+        else:
+            hint = "请检查网络连接，或在 WebUI 设置中配置备用模型。"
         raise RuntimeError(
-            f"All providers failed. Last error: {last_error}"
+            f"{hint}\n(原始错误: {last_error})"
         ) from last_error
 
     async def stream_with_failover(
@@ -406,7 +413,14 @@ class ModelRouter:
                 logger.warning("Stream %s:%s failed: %s", provider.name, model, e)
                 continue
 
-        raise RuntimeError(f"All stream providers failed: {last_error}") from last_error
+        err_str = str(last_error) if last_error else ""
+        if "429" in err_str or "余额" in err_str or "quota" in err_str.lower():
+            hint = "当前模型余额不足。请在 WebUI 设置中切换到其他模型，或充值后重试。"
+        elif any(str(c) in err_str for c in (401, 403)):
+            hint = "API Key 无效或已过期。请在 WebUI 设置中更新 API Key。"
+        else:
+            hint = "请检查网络连接，或在 WebUI 设置中配置备用模型。"
+        raise RuntimeError(f"{hint}\n(原始错误: {last_error})") from last_error
 
 
 def build_credential_manager_from_config(config: Any) -> Optional["CredentialManager"]:
