@@ -168,6 +168,20 @@ async def _create_promotion(platform: str, promo_data: str) -> str:
     return _result_json(await p.create_promotion(data))
 
 
+async def _list_promotions(platform: str) -> str:
+    p = _get_platform(platform)
+    if not p:
+        return _no_platform(platform)
+    return _result_json(await p.list_promotions())
+
+
+async def _get_product_stats(platform: str, product_id: str) -> str:
+    p = _get_platform(platform)
+    if not p:
+        return _no_platform(platform)
+    return _result_json(await p.get_product_stats(product_id))
+
+
 async def _list_platforms_handler() -> str:
     from agent.ecommerce.platforms import list_platforms
     return json.dumps({"platforms": list_platforms()}, ensure_ascii=False)
@@ -379,6 +393,35 @@ def register_ecommerce_ops_tools(registry: ToolRegistry) -> None:
     )
 
     registry.register(
+        name="ecommerce_list_promotions",
+        description="查看店铺营销活动列表",
+        parameters={
+            "type": "object",
+            "properties": {
+                "platform": _PLATFORM_PARAM,
+            },
+            "required": ["platform"],
+        },
+        handler=_list_promotions,
+        category="ecommerce_ops",
+    )
+
+    registry.register(
+        name="ecommerce_get_product_stats",
+        description="查看单品数据统计 (流量/转化/销量)",
+        parameters={
+            "type": "object",
+            "properties": {
+                "platform": _PLATFORM_PARAM,
+                "product_id": {"type": "string", "description": "商品 ID"},
+            },
+            "required": ["platform", "product_id"],
+        },
+        handler=_get_product_stats,
+        category="ecommerce_ops",
+    )
+
+    registry.register(
         name="ecommerce_list_platforms",
         description="列出所有已支持的电商平台",
         parameters={"type": "object", "properties": {}},
@@ -386,4 +429,4 @@ def register_ecommerce_ops_tools(registry: ToolRegistry) -> None:
         category="ecommerce_ops",
     )
 
-    logger.info("电商运营工具已注册: 12 个工具")
+    logger.info("电商运营工具已注册: 14 个工具")

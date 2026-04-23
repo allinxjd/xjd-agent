@@ -139,6 +139,30 @@ class ShopStats:
 
 
 @dataclass
+class Message:
+    """客服消息数据模型."""
+
+    msg_id: str = ""
+    sender: str = ""
+    content: str = ""
+    timestamp: float = 0.0
+    status: str = ""
+    platform: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "msg_id": self.msg_id,
+            "sender": self.sender,
+            "content": self.content,
+            "timestamp": self.timestamp,
+            "status": self.status,
+            "platform": self.platform,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
 class OperationResult:
     """统一操作结果 — 所有平台操作都返回此类型.
 

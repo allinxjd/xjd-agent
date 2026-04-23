@@ -402,15 +402,15 @@ class AgentEngine:
             scoped_names = select_tool_names_for_message(user_message)
         turn_tools = self._resolve_scoped_tools(self._active_skill, scoped_names) or None
 
-        # 第一轮强制调用工具 (防止模型跳过工具直接编造数据)
-        # 条件: 1) 技能匹配且声明了 tools  2) 意图明确的特定工具
-        force_tool_round0 = False
+        # 技能匹配时强制调用工具的轮次数 (防止模型跳过工具直接编造数据)
+        # 技能有 tools 声明 → 前 N 轮都强制 tool_choice="required"
+        force_tool_rounds = 0
         if turn_tools:
             if self._active_skill and getattr(self._active_skill, 'tools', None):
-                force_tool_round0 = True
+                force_tool_rounds = 4
             elif (scoped_names and len(turn_tools) <= 8
                   and any(t.name in ("send_to_contact", "generate_ecommerce_image") for t in turn_tools)):
-                force_tool_round0 = True
+                force_tool_rounds = 1
 
         # cron 执行时排除 scheduled_task，防止模型在定时任务中创建新的定时任务
         if skill_id and turn_tools:
@@ -462,7 +462,7 @@ class AgentEngine:
                 tools=turn_tools,
                 temperature=temperature,
                 thinking=thinking,
-                tool_choice="required" if (round_idx == 0 and force_tool_round0) else None,
+                tool_choice="required" if (round_idx < force_tool_rounds) else None,
             )
 
             # Validate tool_calls structure
