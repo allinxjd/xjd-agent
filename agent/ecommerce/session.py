@@ -76,7 +76,10 @@ class BrowserSessionManager:
         return p / "cookies.json"
 
     async def _ensure_browser(self) -> None:
-        """懒加载浏览器: 优先 CDP 连接用户 Chrome，失败则用 Playwright 内置 Chromium."""
+        """懒加载浏览器: 优先 CDP 连接用户 Chrome，失败则用 Playwright 内置 Chromium.
+
+        绝不关闭、重启用户浏览器。CDP 连不上就静默切换到内置 Chromium。
+        """
         if self._browser:
             return
         try:
@@ -89,17 +92,20 @@ class BrowserSessionManager:
             )
         self._playwright = await async_playwright().start()
 
-        # 优先尝试 CDP 连接已运行的 Chrome (用户需手动开启 --remote-debugging-port=9222)
-        try:
-            self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
-            self._cdp_connected = True
-            logger.info("CDP 连接成功: %s (复用用户浏览器)", self._cdp_url)
-            return
-        except Exception:
-            pass
+        # 优先尝试 CDP 连接已运行的 Chrome (多端口探测)
+        cdp_ports = [9222, 9223, 9224]
+        for port in cdp_ports:
+            try:
+                url = f"http://localhost:{port}"
+                self._browser = await self._playwright.chromium.connect_over_cdp(url, timeout=3000)
+                self._cdp_connected = True
+                logger.info("CDP 连接成功: %s (复用用户浏览器)", url)
+                return
+            except Exception:
+                continue
 
         # Fallback: 用 Playwright 内置 Chromium (独立进程，不影响用户浏览器)
-        logger.info("CDP 未就绪，使用 Playwright 内置 Chromium (不影响用户浏览器)")
+        logger.info("CDP 未就绪，自动使用 Playwright 内置 Chromium (不影响用户浏览器)")
         self._browser = await self._playwright.chromium.launch(
             headless=False,
             args=["--disable-blink-features=AutomationControlled"],
