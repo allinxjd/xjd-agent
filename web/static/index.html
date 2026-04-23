@@ -1974,7 +1974,7 @@ async function saveModelConfig() {
 // ── Backup Models & Key Pool ──
 async function loadBackupModels() {
   try {
-    const res = await fetch('/api/admin/models', {credentials:'include'});
+    const res = await fetch('/api/admin/models', {headers: authHeaders()});
     const data = await res.json();
     const list = $('backupModelList');
     const failover = data.failover || [];
@@ -2018,11 +2018,11 @@ async function loadKeyPool() {
     const list = $('keyPoolList');
     const keys = data.keys || [];
     if (!keys.length) { list.innerHTML = '<div style="color:var(--text-secondary)">No extra keys</div>'; return; }
-    list.innerHTML = keys.map(k =>
+    list.innerHTML = keys.map((k, i) =>
       `<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px;margin:2px 0;background:var(--bg-secondary);border-radius:6px;">
         <span style="font-family:monospace;">${k.key_masked}</span>
         <span style="font-size:11px;color:${k.status==='active'?'#4caf50':'#ff9800'};margin:0 8px;">${k.status}${k.is_primary?' (primary)':''}</span>
-        ${k.is_primary?'':'<button onclick="removeApiKey(\''+k.key_masked+'\')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:12px;">Remove</button>'}
+        ${k.is_primary?'':'<button onclick="removeApiKey('+i+')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:12px;">Remove</button>'}
       </div>`
     ).join('');
   } catch(e) { console.error('loadKeyPool:', e); }
@@ -2037,8 +2037,13 @@ async function addApiKey() {
     else addSystemMsg(data.error || 'Failed');
   } catch(e) { addSystemMsg('Error: ' + e.message); }
 }
-async function removeApiKey(maskedKey) {
-  addSystemMsg('Key removal by masked key not supported — use config.yaml');
+async function removeApiKey(idx) {
+  try {
+    const res = await postJSON('/api/admin/model-keys', {action:'remove', index: idx});
+    const data = await res.json();
+    if (data.status === 'ok') { addSystemMsg('Key removed'); loadKeyPool(); }
+    else addSystemMsg(data.error || 'Failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
 }
 
 // ── Settings Tabs & Gateway Config ──

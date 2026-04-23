@@ -1239,11 +1239,15 @@ class WebServer:
             self._save_config()
             return web.json_response({"status": "ok", "action": "added"})
         elif action == "remove":
-            api_key = data.get("api_key", "")
-            if not api_key:
-                return web.json_response({"error": "api_key required"}, status=400)
+            idx = data.get("index", -1)
             if provider == self._global_config.model.primary.provider:
-                self._global_config.model.primary.api_keys = [k for k in self._global_config.model.primary.api_keys if k != api_key]
+                keys = self._global_config.model.primary.api_keys
+                has_primary = bool(self._global_config.model.primary.api_key)
+                pool_idx = idx - (1 if has_primary else 0)
+                if 0 <= pool_idx < len(keys):
+                    keys.pop(pool_idx)
+                else:
+                    return web.json_response({"error": "invalid index"}, status=400)
             self._save_config()
             return web.json_response({"status": "ok", "action": "removed"})
         return web.json_response({"error": f"unknown action: {action}"}, status=400)
