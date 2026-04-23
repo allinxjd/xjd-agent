@@ -1,33 +1,26 @@
-"""浏览器会话管理 — 全局单例 + 多策略连接.
+"""浏览器会话管理 — 全局单例.
 
 连接优先级:
-1. CDP 连接已有 Chromium/Chrome (port 9333, 9222-9224)
-2. macOS: AppleScript 检测用户 Chrome 是否已打开目标平台页面
-   → 如果是，提取 Chrome cookies 注入 Playwright persistent context
-3. 启动新的 persistent context Chromium (带 CDP port，下次可复用)
+1. CDP 连接已有 Chromium (port 9333, 9222-9224)
+2. 启动 persistent context Chromium (带 CDP port，下次可复用)
 
-绝不关闭用户浏览器。
+首次启动时用户需手动登录一次，之后 Chromium 持久运行，
+下次通过 CDP 直接复用已登录的会话。
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import platform
-import shutil
-import sqlite3
-import subprocess
-import tempfile
-from hashlib import pbkdf2_hmac
 from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-_instance: Optional[BrowserSessionManager] = None
+_instance: Optional["BrowserSessionManager"] = None
 
 
-def get_session_manager() -> BrowserSessionManager:
+def get_session_manager() -> "BrowserSessionManager":
     """获取全局单例 BrowserSessionManager."""
     global _instance
     if _instance is None:
@@ -60,158 +53,21 @@ class BrowserSession:
         self.page = None
 
 
-# ── macOS Chrome cookie 提取 ──────────────────────────────────────
-
-def _is_macos() -> bool:
-    return platform.system() == "Darwin"
-
-
-def _detect_chrome_tabs() -> list[str]:
-    """macOS: 用 AppleScript 获取 Chrome 所有标签页 URL."""
-    if not _is_macos():
-        return []
-    try:
-        result = subprocess.run(
-            ["osascript", "-e", """
-tell application "System Events"
-    if not (exists process "Google Chrome") then return ""
-end tell
-tell application "Google Chrome"
-    set allURLs to {}
-    repeat with w in windows
-        repeat with t in tabs of w
-            set end of allURLs to URL of t
-        end repeat
-    end repeat
-    return allURLs
-end tell
-"""],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return [u.strip() for u in result.stdout.strip().split(", ") if u.strip()]
-    except Exception as e:
-        logger.debug("AppleScript Chrome 检测失败: %s", e)
-    return []
-
-
-def _chrome_has_platform_page(platform_name: str, domains: list[str]) -> bool:
-    """检测用户 Chrome 是否已打开目标平台页面."""
-    urls = _detect_chrome_tabs()
-    for url in urls:
-        if any(d in url for d in domains):
-            logger.info("检测到 Chrome 已打开 %s 页面: %s", platform_name, url[:80])
-            return True
-    return False
-
-
-def _extract_chrome_cookies(domains: list[str]) -> list[dict]:
-    """从 Chrome cookie 数据库提取指定域名的 cookies (macOS).
-
-    需要 cryptography 库。首次调用时 macOS 可能弹出 Keychain 授权弹窗。
-    """
-    if not _is_macos():
-        return []
-
-    chrome_cookie_db = Path.home() / "Library/Application Support/Google/Chrome/Default/Cookies"
-    if not chrome_cookie_db.exists():
-        return []
-
-    try:
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        from cryptography.hazmat.backends import default_backend
-    except ImportError:
-        logger.debug("cryptography 未安装，跳过 Chrome cookie 提取")
-        return []
-
-    # 从 Keychain 获取 Chrome 加密密钥
-    try:
-        result = subprocess.run(
-            ["security", "find-generic-password", "-w",
-             "-s", "Chrome Safe Storage", "-a", "Chrome"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            logger.debug("无法获取 Chrome Keychain 密钥")
-            return []
-        password = result.stdout.strip()
-    except Exception:
-        return []
-
-    key = pbkdf2_hmac("sha1", password.encode("utf-8"), b"saltysalt", 1003, dklen=16)
-
-    def _decrypt(encrypted_value: bytes) -> str:
-        if not encrypted_value or len(encrypted_value) < 4:
-            return ""
-        if encrypted_value[:3] == b"v10":
-            try:
-                iv = b" " * 16
-                cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
-                decryptor = cipher.decryptor()
-                decrypted = decryptor.update(encrypted_value[3:]) + decryptor.finalize()
-                padding_len = decrypted[-1]
-                if 0 < padding_len <= 16:
-                    text = decrypted[:-padding_len].decode("utf-8", errors="replace")
-                    # 过滤掉解密失败产生的乱码
-                    if "\ufffd" in text:
-                        return ""
-                    return text
-            except Exception:
-                pass
-        return ""
-
-    # 复制 DB 避免锁冲突
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".db")
-    tmp_db = Path(tmp_path)
-    try:
-        import os as _os
-        _os.close(tmp_fd)
-        shutil.copy2(str(chrome_cookie_db), str(tmp_db))
-        conn = sqlite3.connect(str(tmp_db))
-
-        # 参数化查询避免 SQL 注入
-        placeholders = " OR ".join("host_key LIKE ?" for _ in domains)
-        params = [f"%{d}%" for d in domains]
-        cur = conn.execute(
-            f"SELECT host_key, name, encrypted_value, path, is_secure, "
-            f"is_httponly, expires_utc, samesite "
-            f"FROM cookies WHERE {placeholders}",
-            params,
-        )
-
-        cookies = []
-        for row in cur:
-            value = _decrypt(row[2])
-            if not value:
-                continue
-            cookie: dict[str, Any] = {
-                "name": row[1],
-                "value": value,
-                "domain": row[0],
-                "path": row[3],
-                "secure": bool(row[4]),
-                "httpOnly": bool(row[5]),
-            }
-            if row[6] and row[6] > 0:
-                # Chrome epoch: microseconds since 1601-01-01
-                chrome_epoch_offset = 11644473600
-                cookie["expires"] = (row[6] / 1_000_000) - chrome_epoch_offset
-            samesite_map = {0: "None", 1: "Lax", 2: "Strict", -1: "None"}
-            cookie["sameSite"] = samesite_map.get(row[7], "None")
-            cookies.append(cookie)
-
-        conn.close()
-        logger.info("从 Chrome 提取了 %d 个 cookies", len(cookies))
-        return cookies
-    except Exception as e:
-        logger.warning("Chrome cookie 提取失败: %s", e)
-        return []
-    finally:
-        tmp_db.unlink(missing_ok=True)
-
-
 class BrowserSessionManager:
-    """管理多平台多账号的浏览器会话 (全局单例)."""
+    """管理多平台多账号的浏览器会话 (全局单例).
+
+    首次启动 Chromium 后保持运行 (CDP port 9333)，
+    用户手动登录一次，之后每次通过 CDP 直接复用。
+    """
+
+    _OUR_CDP_PORT = 9333
+
+    _PLATFORM_DOMAINS: dict[str, list[str]] = {
+        "pdd": ["mms.pinduoduo.com", "pinduoduo.com"],
+        "taobao": ["myseller.taobao.com", "seller.taobao.com"],
+        "jd": ["shop.jd.com", "sz.jd.com"],
+        "douyin": ["buyin.jinritemai.com", "fxg.jinritemai.com"],
+    }
 
     def __init__(self) -> None:
         from agent.core.config import get_home
@@ -224,25 +80,12 @@ class BrowserSessionManager:
         self._browser: Any = None
         self._context: Any = None
         self._cdp_connected = False
-        self._cookies_injected_for: set[str] = set()
+        self._our_chromium_launched = False
 
-    _OUR_CDP_PORT = 9333
-
-    _PLATFORM_DOMAINS: dict[str, list[str]] = {
-        "pdd": ["mms.pinduoduo.com", "pinduoduo.com"],
-        "taobao": ["myseller.taobao.com", "seller.taobao.com"],
-        "jd": ["shop.jd.com", "sz.jd.com"],
-        "douyin": ["buyin.jinritemai.com", "fxg.jinritemai.com"],
-    }
+    # PLACEHOLDER_METHODS
 
     async def _ensure_browser(self) -> None:
-        """懒加载浏览器 — 多策略连接.
-
-        优先级:
-        1. CDP 连接已有 Chromium/Chrome (port 9333, 9222-9224)
-        2. 启动 persistent context + 注入 Chrome cookies (如果检测到已登录)
-        3. 启动 persistent context (干净状态)
-        """
+        """懒加载浏览器: CDP 探测 → 启动 persistent context."""
         if self._browser or self._context:
             return
         try:
@@ -255,7 +98,7 @@ class BrowserSessionManager:
             )
         self._playwright = await async_playwright().start()
 
-        # Strategy 1: CDP — 先连我们的 Chromium (9333)，再连用户 Chrome (9222-9224)
+        # CDP 探测: 先连我们的 Chromium (9333)，再试常见端口
         for port in (self._OUR_CDP_PORT, 9222, 9223, 9224):
             try:
                 url = f"http://localhost:{port}"
@@ -272,11 +115,12 @@ class BrowserSessionManager:
             except Exception:
                 continue
 
-        # Strategy 2 & 3: 启动 persistent context
+        # CDP 连不上 → 启动 persistent context
         await self._launch_persistent_context()
+        self._our_chromium_launched = True
 
     async def _launch_persistent_context(self) -> None:
-        """启动 persistent context Chromium，带 CDP 端口供下次复用."""
+        """启动 Chromium，带 CDP 端口供下次复用，只保留一个标签页."""
         from agent.tools.browser import STEALTH_SCRIPTS
         logger.info(
             "启动 Chromium (CDP port=%d, profile=%s)",
@@ -302,39 +146,21 @@ class BrowserSessionManager:
             await self._context.add_init_script(script)
         self._cdp_connected = False
 
-    async def _try_inject_chrome_cookies(self, platform: str) -> bool:
-        """检测用户 Chrome 是否已登录目标平台，如果是则注入 cookies."""
-        if platform in self._cookies_injected_for:
-            return True
-        if self._cdp_connected:
-            return False
+        # 关闭 profile 恢复的多余标签页，只保留一个
+        pages = self._context.pages
+        if len(pages) > 1:
+            for p in pages[1:]:
+                try:
+                    await p.close()
+                except Exception:
+                    pass
 
-        domains = self._PLATFORM_DOMAINS.get(platform, [])
-        if not domains:
-            return False
-
-        if not _chrome_has_platform_page(platform, domains):
-            return False
-
-        # Chrome 有目标页面 → 提取 cookies 注入
-        cookies = _extract_chrome_cookies(domains)
-        if not cookies:
-            logger.info("Chrome 有 %s 页面但无法提取 cookies", platform)
-            return False
-
-        try:
-            await self._context.add_cookies(cookies)
-            self._cookies_injected_for.add(platform)
-            logger.info("已注入 %d 个 Chrome cookies (%s)", len(cookies), platform)
-            return True
-        except Exception as e:
-            logger.warning("Cookie 注入失败: %s", e)
-            return False
+    # PLACEHOLDER_SESSION
 
     async def get_session(
         self, platform: str, account: str = "default",
     ) -> BrowserSession:
-        """获取或创建浏览器会话."""
+        """获取或创建浏览器会话 — 始终复用同一个标签页."""
         key = f"{platform}:{account}"
         session = self._sessions.get(key)
         if session and session.page and not session.page.is_closed():
@@ -356,17 +182,8 @@ class BrowserSessionManager:
                 except Exception:
                     continue
 
-        # 非 CDP: 尝试注入 Chrome cookies (仅首次)
-        await self._try_inject_chrome_cookies(platform)
-
-        # 复用空白页 or 新开
-        page = None
-        for p in self._context.pages:
-            if p.url in ("about:blank", "chrome://newtab/", ""):
-                page = p
-                break
-        if not page:
-            page = await self._context.new_page()
+        # 复用已有的第一个标签页，绝不新开标签
+        page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         session = BrowserSession(platform, account, self._context, page)
         self._sessions[key] = session
         return session
@@ -384,17 +201,45 @@ class BrowserSessionManager:
                 cookie_file.write_text(json.dumps(cookies, ensure_ascii=False, indent=2))
 
     async def close_all(self) -> None:
-        """关闭所有会话和浏览器."""
+        """关闭会话，但保持我们启动的 Chromium 运行以便下次 CDP 复用."""
         for session in self._sessions.values():
             await session.close()
         self._sessions.clear()
-        self._cookies_injected_for.clear()
+
+        if self._our_chromium_launched:
+            logger.info("保持 Chromium 运行 (CDP port=%d)，下次可直接复用", self._OUR_CDP_PORT)
+            self._context = None
+            self._browser = None
+        else:
+            if self._context and not self._cdp_connected:
+                await self._context.close()
+            self._context = None
+            if self._browser:
+                await self._browser.close()
+                self._browser = None
+
+        if self._playwright:
+            await self._playwright.stop()
+            self._playwright = None
+
+    async def force_close_all(self) -> None:
+        """强制关闭所有浏览器（包括我们启动的 Chromium）."""
+        for session in self._sessions.values():
+            await session.close()
+        self._sessions.clear()
         if self._context and not self._cdp_connected:
-            await self._context.close()
+            try:
+                await self._context.close()
+            except Exception:
+                pass
         self._context = None
         if self._browser:
-            await self._browser.close()
+            try:
+                await self._browser.close()
+            except Exception:
+                pass
             self._browser = None
         if self._playwright:
             await self._playwright.stop()
             self._playwright = None
+        self._our_chromium_launched = False
