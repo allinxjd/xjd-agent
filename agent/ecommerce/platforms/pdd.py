@@ -68,13 +68,21 @@ class PddPlatform(EcommercePlatform):
             page = await self._get_page()
             if await self.check_session():
                 await self._session.save_cookies("pdd")
-                mode = "CDP (复用用户浏览器)" if self._session._cdp_connected else "内置 Chromium"
+                if self._session._cdp_connected:
+                    mode = "CDP (复用用户浏览器)"
+                elif self._session._cookies_injected:
+                    mode = "已同步 Chrome 登录态"
+                else:
+                    mode = "内置 Chromium"
                 return OperationResult.ok("login", {"message": f"已登录拼多多商家后台 [{mode}]"})
             if not await self._safe_goto(page, LOGIN_URL):
                 return OperationResult.fail("login", "无法访问登录页", ErrorCode.NETWORK_ERROR)
-            mode = "CDP (复用用户浏览器)" if self._session._cdp_connected else "内置 Chromium (已自动打开新窗口)"
+            mode = "CDP (复用用户浏览器)" if self._session._cdp_connected else "内置 Chromium"
+            hint = "请在浏览器中扫码或输入账号密码登录"
+            if self._session._cookies_injected:
+                hint = "已同步 Chrome cookies，正在验证登录态..."
             return OperationResult.ok("login", {
-                "message": f"已打开拼多多登录页 [{mode}]，请在浏览器中扫码或输入账号密码登录",
+                "message": f"已打开拼多多登录页 [{mode}]，{hint}",
                 "url": LOGIN_URL,
                 "status": "waiting_for_user",
             })
