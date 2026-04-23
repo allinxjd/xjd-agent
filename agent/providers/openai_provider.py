@@ -158,6 +158,7 @@ class OpenAIProvider(BaseProvider):
             params["max_tokens"] = max_tokens
         if tools:
             params["tools"] = self._convert_tools(tools)
+            params["tool_choice"] = kwargs.pop("tool_choice", None) or "auto"
 
         client = self._client
         if api_key_override:
@@ -172,6 +173,9 @@ class OpenAIProvider(BaseProvider):
         )
 
         choice = response.choices[0]
+        logger.debug("API response: finish_reason=%s, has_tool_calls=%s, content_len=%d",
+                     choice.finish_reason, bool(choice.message.tool_calls),
+                     len(choice.message.content or ""))
         tool_calls_data = []
         if choice.message.tool_calls:
             tool_calls_data = [
@@ -217,6 +221,7 @@ class OpenAIProvider(BaseProvider):
             params["max_tokens"] = max_tokens
         if tools:
             params["tools"] = self._convert_tools(tools)
+            params["tool_choice"] = kwargs.pop("tool_choice", None) or "auto"
 
         client = self._client
         if api_key_override:

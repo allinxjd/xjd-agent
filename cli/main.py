@@ -821,6 +821,18 @@ async def _start_web(host: str, port: int) -> None:
                     )
                     break
 
+        # 注册 Gateway 消息工具 (主动发消息给联系人)
+        from agent.tools.gateway_tools import register_gateway_tools
+        register_gateway_tools(tool_registry, server._gateway)
+        for tool in tool_registry.list_tools():
+            if tool.name in ("send_to_contact", "list_contacts", "set_contact_nickname"):
+                engine.register_tool(
+                    name=tool.name,
+                    description=tool.description,
+                    parameters=tool.parameters,
+                    handler=tool.handler,
+                )
+
     # 用 signal handler 实现一次 Ctrl+C 干净退出
     import signal
     stop_event = asyncio.Event()
