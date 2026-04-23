@@ -35,6 +35,7 @@ import asyncio
 import json
 import logging
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -464,9 +465,19 @@ class GatewayServer:
             "timestamp": time.time(),
         })
         _cron_start = time.time()
+
+        prompt = task.prompt
+        if task.platform and task.chat_id:
+            prompt = (
+                f"[定时任务 | 平台: {task.platform} | 目标: {task.chat_id}]\n"
+                f"注意：你的回复会自动发送到目标渠道，不需要调用 send_to_contact 或 list_contacts 等工具来发送。"
+                f"直接输出最终内容即可，不要包含任何工具调用说明、推送状态或内部提示。\n\n"
+                f"{prompt}"
+            )
+
         async with self._engine_lock:
             result = await self._engine.run_turn(
-                task.prompt,
+                prompt,
                 skill_id=getattr(task, 'skill_id', '') or None,
             )
         reply = result.content
@@ -691,6 +702,25 @@ class GatewayServer:
                             )
                 except Exception:
                     logger.debug("Canvas export delivery failed", exc_info=True)
+            if name == "generate_ecommerce_image" and result:
+                try:
+                    data = json.loads(result)
+                    if data.get("success") and data.get("images"):
+                        chat_id = message.chat.chat_id
+                        adapter = self.get_adapter(platform_name)
+                        if adapter and adapter.capabilities.get("image"):
+                            for img_info in data["images"]:
+                                img_path = img_info.get("path", "")
+                                if img_path:
+                                    try:
+                                        img_bytes = Path(img_path).read_bytes()
+                                        asyncio.ensure_future(
+                                            adapter.send_image(chat_id, image_data=img_bytes)
+                                        )
+                                    except Exception:
+                                        logger.debug("Image delivery failed: %s", img_path)
+                except Exception:
+                    logger.debug("Ecommerce image delivery failed", exc_info=True)
 
         # 调用 engine（传入 session 消息，不操作全局 messages）
         result = await self._engine.run_turn(

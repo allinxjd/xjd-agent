@@ -12,11 +12,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import tempfile
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Optional
 
 from gateway.platforms.base import (
@@ -52,6 +54,7 @@ class WeChatClawBotAdapter(BasePlatformAdapter):
         self._running: bool = False
         self._qr_url: str = ""
         self._login_status: str = "idle"
+        self._nickname_store: dict[str, str] = {}  # user_id → display_name
 
     @property
     def name(self) -> str:
@@ -98,6 +101,7 @@ class WeChatClawBotAdapter(BasePlatformAdapter):
 
         # 恢复 get_updates_buf 游标
         self._restore_sync_buf()
+        self._load_nicknames()
 
         if self._account_id:
             data = load_weixin_account(self._account_id)
@@ -143,6 +147,31 @@ class WeChatClawBotAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.debug("持久化 sync_buf 失败: %s", e)
 
+    def _nickname_file(self) -> Path:
+        from wechat_clawbot.auth.accounts import resolve_accounts_dir
+        return resolve_accounts_dir() / f"{self._account_id}.nicknames.json"
+
+    def _load_nicknames(self) -> None:
+        if not self._account_id:
+            return
+        try:
+            path = self._nickname_file()
+            if path.exists():
+                self._nickname_store = json.loads(path.read_text("utf-8"))
+                logger.info("已恢复 %d 个联系人昵称", len(self._nickname_store))
+        except Exception as e:
+            logger.warning("加载昵称失败: %s", e)
+
+    def _save_nicknames(self) -> None:
+        if not self._account_id:
+            return
+        try:
+            path = self._nickname_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._nickname_store, ensure_ascii=False), "utf-8")
+        except Exception as e:
+            logger.debug("保存昵称失败: %s", e)
+
     async def _qr_login_flow(self) -> None:
         from wechat_clawbot.auth.accounts import (
             register_weixin_account_id,
@@ -187,6 +216,7 @@ class WeChatClawBotAdapter(BasePlatformAdapter):
                 )
                 register_weixin_account_id(self._account_id)
                 self._restore_sync_buf()
+                self._load_nicknames()
 
             logger.info("微信登录成功! account=%s", self._account_id)
             self._begin_poll()
@@ -478,19 +508,37 @@ class WeChatClawBotAdapter(BasePlatformAdapter):
 
     # ── 主动发消息 + 联系人 ────────────────────────────────────
 
-    def list_known_contacts(self) -> list[str]:
-        """返回所有已知联系人 user_id (曾发过消息的用户)."""
+    def list_known_contacts(self) -> list[dict[str, str]]:
+        """返回所有已知联系人 [{user_id, nickname}]."""
         if not self._account_id:
             return []
         try:
             from wechat_clawbot.messaging.inbound import _context_token_store
             prefix = f"{self._account_id}:"
-            return [
-                k[len(prefix):] for k in _context_token_store
-                if k.startswith(prefix)
-            ]
+            contacts = []
+            for k in _context_token_store:
+                if k.startswith(prefix):
+                    uid = k[len(prefix):]
+                    contacts.append({
+                        "user_id": uid,
+                        "nickname": self._nickname_store.get(uid, ""),
+                    })
+            return contacts
         except Exception:
             return []
+
+    def set_contact_nickname(self, user_id: str, nickname: str) -> bool:
+        """设置联系人昵称，持久化到磁盘."""
+        self._nickname_store[user_id] = nickname
+        self._save_nicknames()
+        return True
+
+    def get_contact_by_nickname(self, nickname: str) -> Optional[str]:
+        """按昵称模糊匹配联系人，返回 user_id."""
+        for uid, name in self._nickname_store.items():
+            if name and nickname in name:
+                return uid
+        return None
 
     async def send_to_contact(self, user_id: str, text: str) -> str:
         """主动给已知联系人发送文本消息."""

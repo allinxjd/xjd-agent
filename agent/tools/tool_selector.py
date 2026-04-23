@@ -62,12 +62,23 @@ _INTENT_RULES: list[tuple[set[str], list[str], set[str]]] = [
         ["memory"],
         set(),
     ),
+    # 消息/联系人
+    (
+        {"发消息", "发送消息", "联系人", "好友", "contact", "send_to", "转告", "通知",
+         "发个消息", "发条消息", "告诉他", "告诉她", "帮我发", "消息", "发微信",
+         "昵称", "备注", "nickname", "发给", "发表情"},
+        [],
+        {"send_to_contact", "list_contacts", "set_contact_nickname"},
+    ),
 ]
 
 _ALWAYS_INCLUDE: set[str] = {
     "request_user_approval",
     "read_file",
     "list_directory",
+    "send_to_contact",
+    "list_contacts",
+    "set_contact_nickname",
 }
 
 

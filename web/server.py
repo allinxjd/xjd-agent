@@ -217,6 +217,8 @@ class WebServer:
         app.router.add_post("/api/admin/gateway/ecommerce", self._gw_save_ecommerce)
         app.router.add_get("/api/admin/gateway/calabash", self._gw_get_calabash)
         app.router.add_post("/api/admin/gateway/calabash", self._gw_save_calabash)
+        app.router.add_get("/api/admin/gateway/cron/tasks", self._gw_cron_list)
+        app.router.add_post("/api/admin/gateway/cron/tasks/{task_id}/run", self._gw_cron_run)
         app.router.add_get("/api/admin/skill-secrets", self._skill_secrets_list)
         app.router.add_get("/api/admin/skill-secrets/{skill_id}", self._skill_secrets_get)
         app.router.add_post("/api/admin/skill-secrets/{skill_id}", self._skill_secrets_save)
@@ -1835,6 +1837,33 @@ class WebServer:
         if updates:
             store.set_bulk("ecommerce-image-pipeline", updates)
         return web.json_response({"status": "ok"})
+
+    async def _gw_cron_list(self, request):
+        """GET /api/admin/gateway/cron/tasks — 列出所有定时任务."""
+        from aiohttp import web
+        _, err = self._require_admin(request)
+        if err:
+            return err
+        gw = self._gateway
+        if not gw or not getattr(gw, '_scheduler', None):
+            return web.json_response({"tasks": []})
+        tasks = await gw._scheduler.list_tasks()
+        return web.json_response({"tasks": [t.to_dict() for t in tasks]})
+
+    async def _gw_cron_run(self, request):
+        """POST /api/admin/gateway/cron/tasks/{task_id}/run — 手动触发定时任务."""
+        from aiohttp import web
+        _, err = self._require_admin(request)
+        if err:
+            return err
+        task_id = request.match_info["task_id"]
+        gw = self._gateway
+        if not gw or not getattr(gw, '_scheduler', None):
+            return web.json_response({"error": "scheduler not available"}, status=503)
+        ok = await gw._scheduler.run_task_now(task_id)
+        if ok:
+            return web.json_response({"status": "triggered", "task_id": task_id})
+        return web.json_response({"error": "task not found or already running"}, status=404)
 
     async def _skill_secrets_list(self, request):
         """GET /api/admin/skill-secrets — 列出所有有 secrets 声明的技能."""

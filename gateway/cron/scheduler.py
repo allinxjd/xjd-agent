@@ -340,6 +340,17 @@ class CronScheduler:
         )
         await self._db.commit()
 
+    async def run_task_now(self, task_id: str) -> bool:
+        """手动立即执行一个任务（不影响 next_run）."""
+        task = self._tasks.get(task_id)
+        if not task:
+            return False
+        if task.task_id in self._running_tasks:
+            return False
+        self._running_tasks.add(task.task_id)
+        asyncio.create_task(self._execute_task(task))
+        return True
+
     async def close(self) -> None:
         if self._db:
             await self._db.close()
