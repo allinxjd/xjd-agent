@@ -402,13 +402,15 @@ class AgentEngine:
             scoped_names = select_tool_names_for_message(user_message)
         turn_tools = self._resolve_scoped_tools(self._active_skill, scoped_names) or None
 
-        # 意图明确且工具少时，第一轮强制调用工具 (防止模型跳过)
-        force_tool_round0 = bool(
-            scoped_names
-            and turn_tools
-            and len(turn_tools) <= 8
-            and any(t.name in ("send_to_contact", "generate_ecommerce_image") for t in turn_tools)
-        )
+        # 第一轮强制调用工具 (防止模型跳过工具直接编造数据)
+        # 条件: 1) 技能匹配且声明了 tools  2) 意图明确的特定工具
+        force_tool_round0 = False
+        if turn_tools:
+            if self._active_skill and getattr(self._active_skill, 'tools', None):
+                force_tool_round0 = True
+            elif (scoped_names and len(turn_tools) <= 8
+                  and any(t.name in ("send_to_contact", "generate_ecommerce_image") for t in turn_tools)):
+                force_tool_round0 = True
 
         # cron 执行时排除 scheduled_task，防止模型在定时任务中创建新的定时任务
         if skill_id and turn_tools:
