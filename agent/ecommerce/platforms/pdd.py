@@ -34,8 +34,8 @@ class PddPlatform(EcommercePlatform):
 
     async def _get_page(self):
         if not self._session:
-            from agent.ecommerce.session import BrowserSessionManager
-            self._session = BrowserSessionManager()
+            from agent.ecommerce.session import get_session_manager
+            self._session = get_session_manager()
         session = await self._session.get_session("pdd")
         return session.page
 
