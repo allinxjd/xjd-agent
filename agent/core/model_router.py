@@ -155,7 +155,12 @@ class ModelRouter:
         self._primary_provider = provider_name
         self._primary_model = model
         existing = {(p, m) for p, m in self._failover_chain}
-        for prov_name, prov in self._providers.items():
+        # 优先把 deepseek 排在 failover 前面
+        sorted_providers = sorted(
+            self._providers.items(),
+            key=lambda x: (0 if x[0] == "deepseek" else 1),
+        )
+        for prov_name, prov in sorted_providers:
             if prov_name == provider_name:
                 continue
             fallback_model = _DEFAULT_MODELS.get(prov_name)
@@ -262,9 +267,13 @@ class ModelRouter:
                     reason="primary",
                 )
 
-        # 3. 回退到第一个可用 Provider (使用其默认模型)
-        for name, provider in self._providers.items():
-            fallback_model = _DEFAULT_MODELS.get(name, "")
+        # 3. 回退: 优先 deepseek，否则第一个可用 Provider
+        providers_to_try = sorted(
+            self._providers.items(),
+            key=lambda x: (0 if x[0] == "deepseek" else 1),
+        )
+        for name, provider in providers_to_try:
+            fallback_model = _DEFAULT_MODELS.get(name, "deepseek-chat")
             logger.warning("No primary model configured, falling back to provider: %s model: %s", name, fallback_model)
             return RouteDecision(
                 provider=provider,
