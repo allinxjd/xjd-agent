@@ -179,7 +179,7 @@ async def retry_with_backoff(
     coro_factory,
     max_retries: int = 3,
     base_delay: float = 1.0,
-    retryable_status: tuple = (429, 500, 502, 503, 529),
+    retryable_status: tuple = (500, 502, 503, 529),
 ):
     """带指数退避的异步重试.
 
@@ -195,17 +195,23 @@ async def retry_with_backoff(
             return await coro_factory()
         except Exception as e:
             last_err = e
-            # 检查是否可重试
             status = getattr(e, 'status_code', None) or getattr(e, 'status', None)
             err_str = str(e).lower()
+
+            # 429 余额不足/配额耗尽 → 不重试，直接抛给 model_router 做 failover
+            if status == 429 or '429' in err_str:
+                raise
+
+            # 401/403/404 认证/权限错误 → 不重试
+            if status in (401, 403, 404):
+                raise
+
             is_retryable = (
                 (status and status in retryable_status)
-                or 'rate' in err_str
                 or 'timeout' in err_str
                 or 'overloaded' in err_str
                 or 'connection' in err_str
                 or 'connect' in err_str
-                or '429' in err_str
                 or '503' in err_str
             )
             if not is_retryable or attempt >= max_retries:
