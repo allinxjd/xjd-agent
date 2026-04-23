@@ -407,6 +407,29 @@ class SkillManager:
 
         self._loaded = True
         logger.info("Loaded %d skills from %s", count, self._skills_dir)
+
+        # 3. 加载项目内置技能: <project>/skills/*/SKILL.md (不覆盖用户同名技能)
+        builtin_dir = Path(__file__).resolve().parent.parent.parent / "skills"
+        if builtin_dir.is_dir():
+            builtin_count = 0
+            for skill_dir in builtin_dir.iterdir():
+                if not skill_dir.is_dir():
+                    continue
+                skill_md = skill_dir / "SKILL.md"
+                if not skill_md.exists():
+                    continue
+                try:
+                    text = skill_md.read_text(encoding="utf-8")
+                    skill = Skill.from_skill_md(text, skill_id=skill_dir.name)
+                    if skill.skill_id not in self._skills:
+                        self._skills[skill.skill_id] = skill
+                        builtin_count += 1
+                except (OSError, yaml.YAMLError, ValueError) as e:
+                    logger.warning("Failed to load builtin skill %s: %s", skill_dir.name, e)
+            if builtin_count:
+                logger.info("Loaded %d builtin skills from %s", builtin_count, builtin_dir)
+                count += builtin_count
+
         return count
 
     async def _migrate_yaml_to_md(self, skill: Skill, yaml_path: Path) -> None:
