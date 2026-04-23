@@ -7,13 +7,12 @@
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any, Optional
 
 from agent.ecommerce.base import EcommercePlatform
 from agent.ecommerce.platforms import register_platform
 from agent.ecommerce.protocol import (
-    ErrorCode, OperationResult, Order, OrderStatus, Product, ShopStats,
+    ErrorCode, OperationResult, Order, Product,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,7 +69,7 @@ class PddPlatform(EcommercePlatform):
                 await self._session.save_cookies("pdd")
                 if self._session._cdp_connected:
                     mode = "CDP (复用用户浏览器)"
-                elif self._session._cookies_injected:
+                elif "pdd" in self._session._cookies_injected_for:
                     mode = "已同步 Chrome 登录态"
                 else:
                     mode = "内置 Chromium"
@@ -80,7 +79,7 @@ class PddPlatform(EcommercePlatform):
             mode = "CDP (复用用户浏览器)" if self._session._cdp_connected else "内置 Chromium"
             hint = "请在浏览器中扫码或输入账号密码登录"
             if self._session._cookies_injected:
-                hint = "已同步 Chrome cookies，正在验证登录态..."
+                hint = "已同步 Chrome cookies 但登录态已失效，请在浏览器中重新登录"
             return OperationResult.ok("login", {
                 "message": f"已打开拼多多登录页 [{mode}]，{hint}",
                 "url": LOGIN_URL,

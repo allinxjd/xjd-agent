@@ -161,18 +161,22 @@ def _extract_chrome_cookies(domains: list[str]) -> list[dict]:
         return ""
 
     # 复制 DB 避免锁冲突
-    tmp_db = Path(tempfile.mktemp(suffix=".db"))
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".db")
+    tmp_db = Path(tmp_path)
     try:
+        import os as _os
+        _os.close(tmp_fd)
         shutil.copy2(str(chrome_cookie_db), str(tmp_db))
         conn = sqlite3.connect(str(tmp_db))
 
-        host_clauses = " OR ".join(
-            f"host_key LIKE '%{d}%'" for d in domains
-        )
+        # 参数化查询避免 SQL 注入
+        placeholders = " OR ".join("host_key LIKE ?" for _ in domains)
+        params = [f"%{d}%" for d in domains]
         cur = conn.execute(
             f"SELECT host_key, name, encrypted_value, path, is_secure, "
             f"is_httponly, expires_utc, samesite "
-            f"FROM cookies WHERE {host_clauses}"
+            f"FROM cookies WHERE {placeholders}",
+            params,
         )
 
         cookies = []
@@ -220,7 +224,7 @@ class BrowserSessionManager:
         self._browser: Any = None
         self._context: Any = None
         self._cdp_connected = False
-        self._cookies_injected = False
+        self._cookies_injected_for: set[str] = set()
 
     _OUR_CDP_PORT = 9333
 
@@ -300,7 +304,7 @@ class BrowserSessionManager:
 
     async def _try_inject_chrome_cookies(self, platform: str) -> bool:
         """检测用户 Chrome 是否已登录目标平台，如果是则注入 cookies."""
-        if self._cookies_injected:
+        if platform in self._cookies_injected_for:
             return True
         if self._cdp_connected:
             return False
@@ -320,7 +324,7 @@ class BrowserSessionManager:
 
         try:
             await self._context.add_cookies(cookies)
-            self._cookies_injected = True
+            self._cookies_injected_for.add(platform)
             logger.info("已注入 %d 个 Chrome cookies (%s)", len(cookies), platform)
             return True
         except Exception as e:
@@ -384,6 +388,7 @@ class BrowserSessionManager:
         for session in self._sessions.values():
             await session.close()
         self._sessions.clear()
+        self._cookies_injected_for.clear()
         if self._context and not self._cdp_connected:
             await self._context.close()
         self._context = None
