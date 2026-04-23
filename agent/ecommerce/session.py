@@ -69,10 +69,16 @@ class BrowserSessionManager:
         self._context: Any = None
         self._cdp_connected = False
 
-    # APPEND_REST
+    _OUR_CDP_PORT = 9333
 
     async def _ensure_browser(self) -> None:
-        """懒加载浏览器 (只创建一次). CDP 优先 → persistent context."""
+        """懒加载浏览器 (只创建一次).
+
+        优先级:
+        1. CDP 连接我们之前启动的 Chromium (port 9333)
+        2. CDP 连接用户的 Chrome (port 9222-9224)
+        3. 启动新的 persistent context Chromium (带 --remote-debugging-port=9333)
+        """
         if self._browser or self._context:
             return
         try:
@@ -85,8 +91,8 @@ class BrowserSessionManager:
             )
         self._playwright = await async_playwright().start()
 
-        # 1. CDP 连接用户已打开的 Chrome
-        for port in (9222, 9223, 9224):
+        # 1. CDP: 先连我们自己的 Chromium (9333)，再连用户 Chrome (9222-9224)
+        for port in (self._OUR_CDP_PORT, 9222, 9223, 9224):
             try:
                 url = f"http://localhost:{port}"
                 self._browser = await self._playwright.chromium.connect_over_cdp(
@@ -97,14 +103,17 @@ class BrowserSessionManager:
                     self._context = self._browser.contexts[0]
                 else:
                     self._context = await self._browser.new_context()
-                logger.info("CDP 连接成功: %s", url)
+                logger.info("CDP 连接成功: %s (复用已有浏览器)", url)
                 return
             except Exception:
                 continue
 
-        # 2. Persistent context — 用 user-data-dir 保持登录
+        # 2. 没有可连接的浏览器 → 启动新的 (带 CDP 端口，下次可连回来)
         from agent.tools.browser import STEALTH_SCRIPTS
-        logger.info("CDP 未就绪，使用 persistent context: %s", self._profile_dir)
+        logger.info(
+            "启动 Chromium (CDP port=%d, profile=%s)",
+            self._OUR_CDP_PORT, self._profile_dir,
+        )
         self._context = await self._playwright.chromium.launch_persistent_context(
             str(self._profile_dir),
             headless=False,
@@ -116,13 +125,14 @@ class BrowserSessionManager:
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/120.0.0.0 Safari/537.36"
             ),
-            args=["--disable-blink-features=AutomationControlled"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                f"--remote-debugging-port={self._OUR_CDP_PORT}",
+            ],
         )
         for script in STEALTH_SCRIPTS:
             await self._context.add_init_script(script)
         self._cdp_connected = False
-
-    # APPEND_SESSIONS
 
     _PLATFORM_DOMAINS: dict[str, list[str]] = {
         "pdd": ["mms.pinduoduo.com"],
