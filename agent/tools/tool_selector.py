@@ -62,6 +62,14 @@ _INTENT_RULES: list[tuple[set[str], list[str], set[str]]] = [
         ["memory"],
         set(),
     ),
+    # 电商运营 (卖家/商家)
+    (
+        {"店铺", "上架", "下架", "发货", "售后", "推广", "活动",
+         "优惠券", "运营", "电商运营", "拼多多", "淘宝", "京东",
+         "ecommerce", "shop", "product listing", "order fulfillment"},
+        ["ecommerce_ops"],
+        set(),
+    ),
     # 消息/联系人
     (
         {"发消息", "发送消息", "联系人", "好友", "contact", "send_to", "转告", "通知",
