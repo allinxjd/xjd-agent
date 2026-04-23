@@ -164,7 +164,7 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
   position: absolute; top: calc(100% + 6px); left: 0; min-width: 320px;
   background: var(--bg-secondary); border: 1px solid var(--border);
   border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
-  z-index: 200; display: none; overflow: hidden;
+  z-index: 200; display: none; overflow-y: auto; max-height: 420px;
 }
 .model-dropdown.show { display: block; animation: dropIn 0.15s ease-out; }
 @keyframes dropIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
@@ -944,6 +944,21 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
         </div>
         <div class="setting-row"><span class="setting-label" data-i18n="primaryModel">Model</span>
           <input type="text" id="settingModelName" placeholder="deepseek-chat" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+          <script>
+          (function(){
+            const _modelHints = {
+              deepseek:'deepseek-chat', openai:'gpt-4o', anthropic:'claude-sonnet-4-20250514',
+              google:'gemini-2.0-flash', zhipu:'glm-4-plus', qwen:'qwen-max',
+              doubao:'doubao-1.5-pro-256k', moonshot:'moonshot-v1-128k', minimax:'MiniMax-Text-01',
+              mistral:'mistral-large-latest', openrouter:'openai/gpt-4o', ollama:'llama3', custom:'your-model-id',
+            };
+            document.getElementById('settingProvider').addEventListener('change', function(){
+              const inp = document.getElementById('settingModelName');
+              inp.placeholder = _modelHints[this.value] || 'model-id';
+              if (!inp.value) inp.value = '';
+            });
+          })();
+          </script>
         </div>
         <div class="setting-row"><span class="setting-label">API Key</span>
           <input type="password" id="settingApiKey" placeholder="sk-..." style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
@@ -1207,8 +1222,12 @@ const MODEL_PRESETS = {
   openai:    { icon: '\uD83E\uDDE0', models: [{id:'gpt-4o', name:'GPT-4o', desc:'Most capable'},{id:'gpt-4o-mini', name:'GPT-4o Mini', desc:'Fast & cheap'}]},
   anthropic: { icon: '\uD83E\uDDCA', models: [{id:'claude-sonnet-4-20250514', name:'Claude Sonnet 4', desc:'Balanced'},{id:'claude-3-5-haiku-20241022', name:'Claude 3.5 Haiku', desc:'Fast'}]},
   google:    { icon: '\uD83D\uDD2E', models: [{id:'gemini-2.0-flash', name:'Gemini 2.0 Flash', desc:'Fast multimodal'},{id:'gemini-1.5-pro', name:'Gemini 1.5 Pro', desc:'Advanced reasoning'}]},
+  zhipu:     { icon: '\uD83D\uDD25', models: [{id:'glm-4-plus', name:'GLM-4 Plus', desc:'Zhipu flagship'},{id:'glm-4-flash', name:'GLM-4 Flash', desc:'Fast & free'}]},
   qwen:      { icon: '\uD83C\uDF19', models: [{id:'qwen-max', name:'Qwen Max', desc:'Alibaba flagship'},{id:'qwen-turbo', name:'Qwen Turbo', desc:'Fast'}]},
   doubao:    { icon: '\uD83C\uDF31', models: [{id:'doubao-1.5-pro-256k', name:'Doubao 1.5 Pro', desc:'ByteDance flagship'}]},
+  moonshot:  { icon: '\uD83C\uDF1B', models: [{id:'moonshot-v1-128k', name:'Moonshot v1 128K', desc:'Long context'},{id:'moonshot-v1-8k', name:'Moonshot v1 8K', desc:'Fast'}]},
+  minimax:   { icon: '\uD83D\uDC8E', models: [{id:'MiniMax-Text-01', name:'MiniMax Text 01', desc:'MiniMax flagship'}]},
+  ollama:    { icon: '\uD83E\uDD99', models: [{id:'llama3', name:'Llama 3', desc:'Local model'},{id:'qwen2', name:'Qwen 2', desc:'Local model'}]},
 };
 
 // ── DOM refs ──
@@ -1404,6 +1423,11 @@ function handleMessage(data) {
     case 'error':
       addSystemMsg('\u274C ' + data.message);
       streaming = false; sendBtn.disabled = false; stopStreamCounter(); removeTyping();
+      break;
+    case 'bg_complete':
+      addSystemMsg('\u2705 后台任务已完成 (浏览器断开期间)');
+      addBotMsg(data.content || '');
+      if (data.tokens) addStats(data.tokens, 0, data.tool_calls);
       break;
     case 'canvas_render':
       renderCanvasComponent(data.component || data);
@@ -1862,6 +1886,7 @@ async function loadSettings() {
       fetch('/api/admin/system-prompt', hdrs).then(r => r.json()).catch(() => ({ prompt: '' })),
     ]);
     $('settingProvider').value = modelsRes.primary?.provider || 'deepseek';
+    $('settingProvider').dispatchEvent(new Event('change'));
     $('settingModelName').value = modelsRes.primary?.model || '';
     $('settingBaseUrl').value = modelsRes.primary?.base_url || '';
     if (statsRes.uptime_seconds !== undefined) {

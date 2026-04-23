@@ -1,6 +1,10 @@
 """浏览器会话管理 — 多平台多账号的 Playwright 会话池.
 
-独立于 agent/tools/browser.py 的全局单例，
+支持两种模式:
+1. CDP 连接模式 (推荐): 连接用户已打开的 Chrome，复用已有登录状态
+   启动 Chrome 时加 --remote-debugging-port=9222
+2. 独立实例模式: 启动新的 Chromium (headless)，需要重新登录
+
 电商模块使用独立的 BrowserContext pool，支持:
 - 每个 (platform, account) 一个隔离的 BrowserContext
 - Cookie 持久化 (避免频繁登录)
@@ -49,16 +53,22 @@ class BrowserSession:
 class BrowserSessionManager:
     """管理多平台多账号的浏览器会话."""
 
-    def __init__(self, data_dir: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        data_dir: Optional[str] = None,
+        cdp_url: str = "",
+    ) -> None:
         if data_dir:
             self._data_dir = Path(data_dir)
         else:
             from agent.core.config import get_home
             self._data_dir = get_home() / "ecommerce"
 
+        self._cdp_url = cdp_url or "http://localhost:9222"
         self._sessions: dict[str, BrowserSession] = {}
         self._playwright: Any = None
         self._browser: Any = None
+        self._cdp_connected = False
 
     def _cookie_path(self, platform: str, account: str) -> Path:
         p = self._data_dir / platform / account
@@ -66,7 +76,7 @@ class BrowserSessionManager:
         return p / "cookies.json"
 
     async def _ensure_browser(self) -> None:
-        """懒加载 Playwright + Chromium."""
+        """懒加载浏览器: 优先 CDP 连接用户 Chrome，失败则用 Playwright 内置 Chromium."""
         if self._browser:
             return
         try:
@@ -78,10 +88,31 @@ class BrowserSessionManager:
                 "  playwright install chromium"
             )
         self._playwright = await async_playwright().start()
+
+        # 优先尝试 CDP 连接已运行的 Chrome (用户需手动开启 --remote-debugging-port=9222)
+        try:
+            self._browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
+            self._cdp_connected = True
+            logger.info("CDP 连接成功: %s (复用用户浏览器)", self._cdp_url)
+            return
+        except Exception:
+            pass
+
+        # Fallback: 用 Playwright 内置 Chromium (独立进程，不影响用户浏览器)
+        logger.info("CDP 未就绪，使用 Playwright 内置 Chromium (不影响用户浏览器)")
         self._browser = await self._playwright.chromium.launch(
-            headless=True,
+            headless=False,
             args=["--disable-blink-features=AutomationControlled"],
         )
+        self._cdp_connected = False
+
+    # 平台域名映射 — 用于 CDP 模式下匹配已打开的标签页
+    _PLATFORM_DOMAINS: dict[str, list[str]] = {
+        "pdd": ["mms.pinduoduo.com"],
+        "taobao": ["myseller.taobao.com", "seller.taobao.com"],
+        "jd": ["shop.jd.com", "sz.jd.com"],
+        "douyin": ["buyin.jinritemai.com", "fxg.jinritemai.com"],
+    }
 
     async def get_session(
         self, platform: str, account: str = "default",
@@ -94,6 +125,29 @@ class BrowserSessionManager:
 
         await self._ensure_browser()
 
+        # CDP 模式: 在已有标签页中查找目标平台
+        if self._cdp_connected:
+            domains = self._PLATFORM_DOMAINS.get(platform, [])
+            for ctx in self._browser.contexts:
+                for page in ctx.pages:
+                    try:
+                        page_url = page.url or ""
+                        if any(d in page_url for d in domains):
+                            session = BrowserSession(platform, account, ctx, page)
+                            self._sessions[key] = session
+                            logger.info("CDP: 复用已有标签页 %s", page_url[:80])
+                            return session
+                    except Exception:
+                        continue
+
+            # 没找到已有标签页，在用户浏览器中新开一个
+            ctx = self._browser.contexts[0] if self._browser.contexts else await self._browser.new_context()
+            page = await ctx.new_page()
+            session = BrowserSession(platform, account, ctx, page)
+            self._sessions[key] = session
+            return session
+
+        # 独立实例模式: 创建新 context + page
         from agent.tools.browser import STEALTH_SCRIPTS
 
         context = await self._browser.new_context(

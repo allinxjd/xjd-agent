@@ -11,7 +11,23 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+import re
+
 logger = logging.getLogger(__name__)
+
+# 禁止执行的危险命令模式 (参考 HermesAgent 安全策略)
+# 1. 禁止关闭/杀死用户桌面进程 (浏览器、应用等)
+# 2. 禁止系统级破坏操作
+_BLOCKED_PATTERNS = [
+    re.compile(r'\b(kill|killall|pkill|xkill)\b', re.I),
+    re.compile(r'\bosascript\b.*\b(quit|close|terminate|activate)\b', re.I),
+    re.compile(r'\bwmctrl\b.*-c\b', re.I),
+    re.compile(r'\bshutdown\b|\breboot\b|\bhalt\b|\binit\s+[06]\b', re.I),
+    re.compile(r'\brm\s+(-[a-z]*r[a-z]*\s+)?\s*/', re.I),
+    re.compile(r'\bmkfs\b|\bdd\s+.*of=/', re.I),
+    re.compile(r'\b:(){ :\|:& };:', re.I),  # fork bomb
+]
+
 
 async def run_terminal(
     command: str,
@@ -29,6 +45,10 @@ async def run_terminal(
         命令输出 (stdout + stderr)
     """
     cwd = workdir or os.getcwd()
+
+    for pattern in _BLOCKED_PATTERNS:
+        if pattern.search(command):
+            return f"Error: 命令被安全策略拦截 — 禁止执行可能关闭浏览器或破坏系统的命令: {command[:80]}"
 
     try:
         proc = await asyncio.create_subprocess_shell(

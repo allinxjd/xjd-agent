@@ -42,7 +42,21 @@ _COMPLEX_KEYWORDS = {
 }
 
 _IMMEDIATE_FAIL_CODES = {401, 403, 404}
+_CONNECTION_ERROR_TYPES = ("ConnectError", "ConnectionError", "Connection error", "connection attempts failed")
 _CIRCUIT_BREAKER_COOLDOWN = 300.0
+
+# 每个 provider 的默认模型 — 用于自动构建 failover chain
+_DEFAULT_MODELS: dict[str, str] = {
+    "deepseek": "deepseek-chat",
+    "openai": "gpt-4o-mini",
+    "anthropic": "claude-3-5-haiku-20241022",
+    "google": "gemini-2.0-flash",
+    "zhipu": "glm-4-flash",
+    "qwen": "qwen-turbo",
+    "doubao": "doubao-1.5-pro-256k",
+    "moonshot": "moonshot-v1-8k",
+    "minimax": "MiniMax-Text-01",
+}
 
 
 def _extract_status_code(exc: Exception) -> int:
@@ -133,9 +147,18 @@ class ModelRouter:
         return self._providers.get(name)
 
     def set_primary(self, provider_name: str, model: str) -> None:
-        """设置主模型."""
+        """设置主模型，并自动从已注册 provider 构建 failover chain."""
         self._primary_provider = provider_name
         self._primary_model = model
+        self._failover_chain = []
+        for prov_name, prov in self._providers.items():
+            if prov_name == provider_name:
+                continue
+            fallback_model = _DEFAULT_MODELS.get(prov_name)
+            if fallback_model:
+                self._failover_chain.append((prov_name, fallback_model))
+        if self._failover_chain:
+            logger.info("Auto failover chain: %s", [(p, m) for p, m in self._failover_chain])
 
     def set_cheap(self, provider_name: str, model: str) -> None:
         """设置便宜模型 (简单问题自动降级)."""
@@ -277,9 +300,21 @@ class ModelRouter:
             except Exception as e:
                 last_error = e
                 status = _extract_status_code(e)
+                err_str = str(e)
 
                 if active_key and self._credential_mgr:
                     self._credential_mgr.report_error(provider.name, active_key, status)
+
+                # 连接错误 → 立即跳到下一个 provider (HermesAgent 模式)
+                is_conn_error = any(t in err_str for t in _CONNECTION_ERROR_TYPES)
+                if is_conn_error:
+                    logger.warning(
+                        "Provider %s:%s connection error, skipping to next provider",
+                        provider.name, model,
+                    )
+                    self._provider_failures[provider_key] = 3
+                    self._provider_cooldown[provider_key] = time.time() + 60.0
+                    continue
 
                 if status in _IMMEDIATE_FAIL_CODES:
                     logger.error(
@@ -354,9 +389,14 @@ class ModelRouter:
             except Exception as e:
                 last_error = e
                 status = _extract_status_code(e)
+                err_str = str(e)
                 if active_key and self._credential_mgr:
                     self._credential_mgr.report_error(provider.name, active_key, status)
-                if status in _IMMEDIATE_FAIL_CODES:
+                is_conn_error = any(t in err_str for t in _CONNECTION_ERROR_TYPES)
+                if is_conn_error:
+                    self._provider_failures[provider_key] = 3
+                    self._provider_cooldown[provider_key] = time.time() + 60.0
+                elif status in _IMMEDIATE_FAIL_CODES:
                     self._provider_failures[provider_key] = 3
                     self._provider_cooldown[provider_key] = time.time() + _CIRCUIT_BREAKER_COOLDOWN
                 else:

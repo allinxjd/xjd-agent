@@ -702,7 +702,7 @@ class SkillManager:
                 best_score = score
                 best_match = skill
 
-        if best_score >= 3:
+        if best_score >= 2:
             logger.info("Keyword matched skill: %s (score=%d)",
                         best_match.name if best_match else "?", best_score)
             return best_match
