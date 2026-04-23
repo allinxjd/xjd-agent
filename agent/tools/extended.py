@@ -23,6 +23,7 @@ _SUB_MODULES = [
     ("agent.tools.network_tools", "register_network_tools"),
     ("agent.tools.canvas_tools", "register_canvas_tools"),
     ("agent.tools.ecommerce_tools", "register_ecommerce_tools"),
+    ("agent.tools.ecommerce_ops_tools", "register_ecommerce_ops_tools"),
     ("agent.tools.misc_tools", "register_misc_tools"),
 ]
 

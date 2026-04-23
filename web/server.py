@@ -901,7 +901,7 @@ class WebServer:
                         session_messages=session_msgs,
                         abort_check=lambda: ws.closed,
                     ),
-                    timeout=300.0,  # 5 分钟超时保护
+                    timeout=600.0,  # 10 分钟超时保护 (技能创建等多轮工具调用需要更长时间)
                 )
 
                 # 持久化本轮消息
@@ -950,7 +950,7 @@ class WebServer:
             except asyncio.CancelledError:
                 logger.info("run_turn cancelled for session %s (WS disconnected)", session_id)
             except TimeoutError:
-                logger.warning("run_turn timeout for session %s (>300s)", session_id)
+                logger.warning("run_turn timeout for session %s (>600s)", session_id)
                 err_msg = "AI 响应超时，请稍后重试。如果问题持续出现，可能是上游模型服务不稳定。"
                 try:
                     if not ws.closed:

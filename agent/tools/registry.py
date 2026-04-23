@@ -39,6 +39,14 @@ TOOLSETS: dict[str, list[str]] = {
     "skills": ["skills_list", "skill_view", "skill_manage"],
     "memory": ["memory_list", "memory_search", "memory_manage"],
     "system": ["system_info", "process_manager", "env_variable"],
+    "ecommerce_ops": [
+        "ecommerce_login", "ecommerce_list_products", "ecommerce_get_product",
+        "ecommerce_create_product", "ecommerce_update_product", "ecommerce_toggle_product",
+        "ecommerce_list_orders", "ecommerce_ship_order",
+        "ecommerce_shop_stats", "ecommerce_list_messages",
+        "ecommerce_reply_message", "ecommerce_create_promotion",
+        "ecommerce_list_platforms",
+    ],
 }
 
 @dataclass
