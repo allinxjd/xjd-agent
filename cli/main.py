@@ -128,6 +128,8 @@ async def _chat_loop(
     )
     router.register_provider(provider)
     router.set_primary(primary.provider, primary.model)
+    if config.model.failover:
+        router.add_failover_from_config(config.model.failover)
 
     # cheap 路由
     if config.model.cheap:
@@ -413,6 +415,8 @@ async def _start_gateway(host: str, port: int) -> None:
         )
         router.register_provider(provider)
         router.set_primary(primary.provider, primary.model)
+        if config.model.failover:
+            router.add_failover_from_config(config.model.failover)
 
     # 初始化 SkillManager + LearningLoop
     skill_manager = SkillManager()
@@ -668,6 +672,8 @@ async def _start_web(host: str, port: int) -> None:
         )
         router.register_provider(provider)
         router.set_primary(primary.provider, primary.model)
+        if config.model.failover:
+            router.add_failover_from_config(config.model.failover)
 
     # 初始化 SkillManager
     from agent.skills.manager import SkillManager
@@ -912,6 +918,8 @@ async def _start_api(host: str, port: int, api_key: str) -> None:
         )
         router.register_provider(provider)
         router.set_primary(primary.provider, primary.model)
+        if config.model.failover:
+            router.add_failover_from_config(config.model.failover)
 
     engine = AgentEngine(router=router)
 

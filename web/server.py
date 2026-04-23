@@ -166,6 +166,8 @@ class WebServer:
         app.router.add_get("/api/admin/stats", self._admin_stats)
         app.router.add_get("/api/admin/models", self._admin_models)
         app.router.add_post("/api/admin/model-config", self._admin_set_model)
+        app.router.add_post("/api/admin/model-backup", self._admin_model_backup)
+        app.router.add_post("/api/admin/model-keys", self._admin_model_keys)
         app.router.add_get("/api/admin/tools", self._admin_tools)
         app.router.add_get("/api/admin/memory", self._admin_memory)
         app.router.add_get("/api/admin/sessions", self._admin_sessions)
@@ -1170,6 +1172,81 @@ class WebServer:
         admin_name = user.username if user else "anonymous"
         self._audit(admin_name, "MODEL_SET", f"{provider_name}:{model_name}", request.remote or "")
         return web.json_response({"status": "ok", "provider": provider_name, "model": model_name})
+
+    async def _admin_model_backup(self, request):
+        from aiohttp import web
+        user, err = self._require_admin(request)
+        if err:
+            return err
+        data = await request.json()
+        action = data.get("action", "add")
+        if not self._global_config:
+            return web.json_response({"error": "no config"}, status=500)
+        if action == "add":
+            from agent.core.config import ProviderConfig
+            fc = ProviderConfig(
+                provider=data.get("provider", ""),
+                model=data.get("model", ""),
+                api_key=data.get("api_key", ""),
+                base_url=data.get("base_url", ""),
+            )
+            if not fc.provider or not fc.model:
+                return web.json_response({"error": "provider and model required"}, status=400)
+            self._global_config.model.failover.append(fc)
+            if self._engine and hasattr(self._engine, '_router'):
+                self._engine._router.add_failover_from_config([fc])
+            self._save_config()
+            return web.json_response({"status": "ok", "action": "added", "provider": fc.provider, "model": fc.model})
+        elif action == "remove":
+            idx = data.get("index", -1)
+            if 0 <= idx < len(self._global_config.model.failover):
+                removed = self._global_config.model.failover.pop(idx)
+                self._save_config()
+                return web.json_response({"status": "ok", "action": "removed", "provider": removed.provider, "model": removed.model})
+            return web.json_response({"error": "invalid index"}, status=400)
+        return web.json_response({"error": f"unknown action: {action}"}, status=400)
+
+    async def _admin_model_keys(self, request):
+        from aiohttp import web
+        user, err = self._require_admin(request)
+        if err:
+            return err
+        data = await request.json()
+        action = data.get("action", "list")
+        provider = data.get("provider", "")
+        if not self._global_config:
+            return web.json_response({"error": "no config"}, status=500)
+        if not provider:
+            provider = self._global_config.model.primary.provider
+        if action == "list":
+            keys = list(self._global_config.model.primary.api_keys) if provider == self._global_config.model.primary.provider else []
+            main_key = self._global_config.model.primary.api_key if provider == self._global_config.model.primary.provider else ""
+            result = []
+            if main_key:
+                result.append({"key_masked": main_key[:6] + "****" + main_key[-4:] if len(main_key) > 10 else "****", "status": "active", "is_primary": True})
+            for k in keys:
+                result.append({"key_masked": k[:6] + "****" + k[-4:] if len(k) > 10 else "****", "status": "active", "is_primary": False})
+            return web.json_response({"provider": provider, "keys": result})
+        elif action == "add":
+            api_key = data.get("api_key", "")
+            if not api_key:
+                return web.json_response({"error": "api_key required"}, status=400)
+            if provider == self._global_config.model.primary.provider:
+                if api_key not in self._global_config.model.primary.api_keys:
+                    self._global_config.model.primary.api_keys.append(api_key)
+            if self._engine and hasattr(self._engine, '_router') and self._engine._router._credential_mgr:
+                self._engine._router._credential_mgr.add_key(provider, api_key)
+            self._save_config()
+            return web.json_response({"status": "ok", "action": "added"})
+        elif action == "remove":
+            api_key = data.get("api_key", "")
+            if not api_key:
+                return web.json_response({"error": "api_key required"}, status=400)
+            if provider == self._global_config.model.primary.provider:
+                self._global_config.model.primary.api_keys = [k for k in self._global_config.model.primary.api_keys if k != api_key]
+            self._save_config()
+            return web.json_response({"status": "ok", "action": "removed"})
+        return web.json_response({"error": f"unknown action: {action}"}, status=400)
 
     async def _admin_tools(self, request):
         from aiohttp import web

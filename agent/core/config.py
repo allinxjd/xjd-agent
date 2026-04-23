@@ -170,6 +170,7 @@ class Config:
                         provider=p.get("provider", ""),
                         model=p.get("model", ""),
                         api_key=p.get("api_key", ""),
+                        api_keys=p.get("api_keys", []),
                         base_url=p.get("base_url", ""),
                     )
                 if "cheap" in m:
@@ -182,6 +183,15 @@ class Config:
                     )
                 config.model.temperature = m.get("temperature", 0.7)
                 config.model.max_tokens = m.get("max_tokens", 4096)
+                if "failover" in m:
+                    for fc in m["failover"]:
+                        config.model.failover.append(ProviderConfig(
+                            provider=fc.get("provider", ""),
+                            model=fc.get("model", ""),
+                            api_key=fc.get("api_key", ""),
+                            api_keys=fc.get("api_keys", []),
+                            base_url=fc.get("base_url", ""),
+                        ))
 
             # 解析 gateway 配置
             if "gateway" in data:
@@ -242,6 +252,8 @@ class Config:
                 }
         if self.model.primary.api_key:
             primary_data["api_key"] = self.model.primary.api_key
+        if self.model.primary.api_keys:
+            primary_data["api_keys"] = self.model.primary.api_keys
         if self.model.primary.base_url:
             primary_data["base_url"] = self.model.primary.base_url
 
@@ -293,6 +305,17 @@ class Config:
             if self.model.cheap.base_url:
                 cheap_data["base_url"] = self.model.cheap.base_url
             data["model"]["cheap"] = cheap_data
+
+        if self.model.failover:
+            failover_list = []
+            for fc in self.model.failover:
+                fd: dict[str, Any] = {"provider": fc.provider, "model": fc.model}
+                if fc.api_key:
+                    fd["api_key"] = fc.api_key
+                if fc.base_url:
+                    fd["base_url"] = fc.base_url
+                failover_list.append(fd)
+            data["model"]["failover"] = failover_list
 
         if self.model.max_tokens != 4096:
             data["model"]["max_tokens"] = self.model.max_tokens
