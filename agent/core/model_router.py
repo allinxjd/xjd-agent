@@ -147,18 +147,26 @@ class ModelRouter:
         return self._providers.get(name)
 
     def set_primary(self, provider_name: str, model: str) -> None:
-        """设置主模型，并自动从已注册 provider 构建 failover chain."""
+        """设置主模型，并自动从已注册 provider 构建 failover chain.
+
+        保留已有的手动 failover 条目 (add_failover / add_failover_from_config)，
+        只追加尚未存在的自动 failover。
+        """
         self._primary_provider = provider_name
         self._primary_model = model
-        self._failover_chain = []
+        existing = {(p, m) for p, m in self._failover_chain}
         for prov_name, prov in self._providers.items():
             if prov_name == provider_name:
                 continue
             fallback_model = _DEFAULT_MODELS.get(prov_name)
-            if fallback_model:
+            if fallback_model and (prov_name, fallback_model) not in existing:
                 self._failover_chain.append((prov_name, fallback_model))
+        # 同 provider 的默认模型也加入 failover（如 primary=glm-5.1 → failover glm-4-flash）
+        default_for_primary = _DEFAULT_MODELS.get(provider_name)
+        if default_for_primary and default_for_primary != model and (provider_name, default_for_primary) not in existing:
+            self._failover_chain.append((provider_name, default_for_primary))
         if self._failover_chain:
-            logger.info("Auto failover chain: %s", [(p, m) for p, m in self._failover_chain])
+            logger.info("Failover chain: %s", [(p, m) for p, m in self._failover_chain])
 
     def set_cheap(self, provider_name: str, model: str) -> None:
         """设置便宜模型 (简单问题自动降级)."""
@@ -256,10 +264,11 @@ class ModelRouter:
 
         # 3. 回退到第一个可用 Provider (使用其默认模型)
         for name, provider in self._providers.items():
-            logger.warning("No primary model configured, falling back to provider: %s", name)
+            fallback_model = _DEFAULT_MODELS.get(name, "")
+            logger.warning("No primary model configured, falling back to provider: %s model: %s", name, fallback_model)
             return RouteDecision(
                 provider=provider,
-                model=getattr(provider, "default_model", ""),
+                model=fallback_model,
                 reason="fallback",
             )
 

@@ -86,6 +86,7 @@ class OpenAIProvider(BaseProvider):
             organization=organization,
             default_headers=extra_headers or None,
             timeout=120.0,
+            max_retries=0,
         )
 
     @property
@@ -166,6 +167,7 @@ class OpenAIProvider(BaseProvider):
                 api_key=api_key_override,
                 base_url=self._base_url,
                 timeout=120.0,
+                max_retries=0,
             )
 
         response = await retry_with_backoff(
@@ -229,6 +231,7 @@ class OpenAIProvider(BaseProvider):
                 api_key=api_key_override,
                 base_url=self._base_url,
                 timeout=120.0,
+                max_retries=0,
             )
 
         stream = await retry_with_backoff(

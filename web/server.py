@@ -1139,7 +1139,31 @@ class WebServer:
         if not provider_name or not model_name:
             return web.json_response({"error": "provider and model required"}, status=400)
 
-        # 更新 config
+        # 确定 effective key: 新传入 > config 中已有（同 provider 时复用）
+        effective_key = api_key
+        if not effective_key and self._global_config:
+            if provider_name == self._global_config.model.primary.provider:
+                effective_key = self._global_config.model.primary.api_key
+        if not effective_key:
+            return web.json_response({"error": "API key required (new provider needs a key)"}, status=400)
+
+        # 热更新 router（先验证再改 config）
+        if self._engine and hasattr(self._engine, '_router'):
+            router = self._engine._router
+            try:
+                from agent.providers.openai_provider import OpenAIProvider
+                from agent.providers.base import ProviderType
+                new_provider = OpenAIProvider(
+                    provider_type=ProviderType(provider_name),
+                    api_key=effective_key,
+                    base_url=base_url or None,
+                )
+                router.register_provider(new_provider)
+                router.set_primary(provider_name, model_name)
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        # router 更新成功后再持久化 config
         if self._global_config:
             self._global_config.model.primary.provider = provider_name
             self._global_config.model.primary.model = model_name
@@ -1148,26 +1172,6 @@ class WebServer:
             if base_url:
                 self._global_config.model.primary.base_url = base_url
             self._save_config()
-
-        # 热更新 router: 注册/替换 provider + 设置 primary
-        if self._engine and hasattr(self._engine, '_router'):
-            router = self._engine._router
-            try:
-                from agent.providers.openai_provider import OpenAIProvider
-                from agent.providers.base import ProviderType
-                effective_key = api_key or (self._global_config.model.primary.api_key if self._global_config else "")
-                if effective_key:
-                    new_provider = OpenAIProvider(
-                        provider_type=ProviderType(provider_name),
-                        api_key=effective_key,
-                        base_url=base_url or None,
-                    )
-                    router.register_provider(new_provider)
-                    router.set_primary(provider_name, model_name)
-                else:
-                    return web.json_response({"error": "API key required"}, status=400)
-            except Exception as e:
-                return web.json_response({"error": str(e)}, status=500)
 
         admin_name = user.username if user else "anonymous"
         self._audit(admin_name, "MODEL_SET", f"{provider_name}:{model_name}", request.remote or "")
