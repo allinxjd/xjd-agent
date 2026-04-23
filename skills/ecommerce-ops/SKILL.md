@@ -71,8 +71,19 @@ examples:
 - 绝对禁止关闭、重启、kill 用户的浏览器 (Chrome/Firefox/Safari 等)
 - 绝对禁止执行 pkill、killall、osascript quit 等关闭浏览器的命令
 - 绝对禁止建议用户关闭浏览器再重新打开
+- 绝对禁止建议用户以调试模式重启浏览器
+- 绝对禁止检测 CDP 端口、检查 chrome://version、检查 --remote-debugging-port
 - 不要使用 execute_code 或 run_terminal 来操作浏览器进程
-- 浏览器会话管理由系统自动处理 (CDP 连接或 Playwright 内置浏览器)，你不需要干预
+- 浏览器会话管理由系统自动处理，你不需要干预
+
+## 浏览器连接规则
+
+系统会自动处理浏览器连接，你不需要关心 CDP 端口或调试模式:
+1. 系统自动尝试 CDP 连接用户已打开的 Chrome
+2. 如果 CDP 连不上，系统自动启动 Playwright 内置 Chromium（独立窗口，不影响用户 Chrome）
+3. 无论哪种模式，你只需要调用 ecommerce 工具即可，不需要做任何浏览器配置
+4. 如果工具返回"未登录"，告诉用户在弹出的浏览器窗口中登录即可
+5. 绝不要建议用户修改 Chrome 启动参数、关闭浏览器、或做任何浏览器配置操作
 
 ## 注意事项
 
