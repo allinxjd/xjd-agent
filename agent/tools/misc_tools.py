@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
+from agent.core.workspace_files import workspace_tmp
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ async def _calendar_event(
         if end:
             ics += f"DTEND:{end.replace('-', '').replace(':', '').replace(' ', 'T')}\n"
         ics += "END:VEVENT\nEND:VCALENDAR"
-        out = tempfile.mktemp(suffix=".ics", prefix="event_")
+        out = str(workspace_tmp(".ics", "event_"))
         Path(out).write_text(ics)
         return f"日历事件已创建: {out}"
     elif action == "parse":

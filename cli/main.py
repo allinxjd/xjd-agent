@@ -161,6 +161,7 @@ async def _chat_loop(
     tool_registry = ToolRegistry()
     register_builtin_tools(tool_registry)
     register_extended_tools(tool_registry)
+    learning_loop._tool_registry = tool_registry
 
     # 注册技能管理工具 (Agent 可自主浏览/管理技能)
     from agent.tools.skill_tools import register_skill_tools
@@ -453,6 +454,8 @@ async def _start_gateway(host: str, port: int) -> None:
     tool_registry = ToolRegistry()
     register_builtin_tools(tool_registry)
     register_extended_tools(tool_registry)
+    if learning_loop:
+        learning_loop._tool_registry = tool_registry
 
     from agent.tools.skill_tools import register_skill_tools
     register_skill_tools(tool_registry, skill_manager=skill_manager)
@@ -728,6 +731,7 @@ async def _start_web(host: str, port: int) -> None:
         memory_manager=memory_manager,
         skill_manager=skill_manager,
         pin_manager=pin_manager,
+        tool_registry=tool_registry,
     )
 
     # 注册知识画布工具 (需要 learning_loop)

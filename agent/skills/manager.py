@@ -94,6 +94,10 @@ class Skill:
     failure_count: int = 0
     deprecated: bool = False
 
+    # 条件激活 (借鉴 Hermes Agent)
+    requires_tools: list[str] = field(default_factory=list)   # 需要这些工具才激活
+    fallback_for_tools: list[str] = field(default_factory=list)  # 这些工具可用时不激活
+
     # XjdHub / 状态管理
     status: str = "active"              # draft / active / deprecated
     source: str = "manual"              # manual / chat / hub / auto_extracted
@@ -212,6 +216,8 @@ class Skill:
         """从 SKILL.md 内容解析 (兼容 AgentSkills 标准)."""
         fm, body = _parse_frontmatter(text)
         meta = fm.get("metadata", {})
+        if not isinstance(meta, dict):
+            meta = {}
         # tools 可以在顶层或 metadata 里
         tools = fm.get("tools", meta.get("tools", []))
         raw_secrets = fm.get("secrets", [])
@@ -219,6 +225,8 @@ class Skill:
             SkillSecret(key=s.get("key", ""), description=s.get("description", ""), default=s.get("default", ""))
             for s in raw_secrets if isinstance(s, dict)
         ]
+        # 条件激活 (兼容 Hermes metadata.hermes.* 格式)
+        hermes = meta.get("hermes", {}) if isinstance(meta.get("hermes"), dict) else {}
         return cls(
             skill_id=skill_id or fm.get("name", str(uuid.uuid4())[:8]),
             name=fm.get("name", ""),
@@ -235,6 +243,8 @@ class Skill:
             metadata=meta,
             use_count=meta.get("use_count", 0),
             success_rate=meta.get("success_rate", 1.0),
+            requires_tools=hermes.get("requires_tools", []),
+            fallback_for_tools=hermes.get("fallback_for_tools", []),
             status=fm.get("status", "active"),
             source=fm.get("source", "manual"),
             author=fm.get("author", ""),
@@ -335,6 +345,15 @@ SKILL_MATCHING_PROMPT = """用户的请求:
 {{"matched_skill_id": "xxx" 或 null, "confidence": 0.0-1.0, "reason": "匹配原因"}}"""
 
 
+_TRIVIAL_PATTERNS = re.compile(
+    r"^[，,、。.!！\s]*"
+    r"(ok|好的?|是的?|对的?|嗯+|行|可以|继续|下一步|没问题|确认|go|yes|sure|yeah|yep|done|next)"
+    r"([，,、。.!！\s]*(ok|好的?|是的?|对的?|嗯+|行|可以|继续|下一步|没问题|确认|go|yes|sure|yeah|yep|done|next))*"
+    r"[，,、。.!！\s]*$",
+    re.IGNORECASE,
+)
+
+
 class SkillManager:
     """技能管理器 — 支持 SKILL.md 格式 + 旧 YAML 兼容.
 
@@ -345,6 +364,14 @@ class SkillManager:
         ├── deploy-server/
         │   └── SKILL.md
         └── old-skill-id.yaml  (旧格式，启动时自动迁移)
+
+    匹配管线 (借鉴 OpenClaw Intent Router):
+        L1 learn_cache  — 精确 prompt → skill (跨 session 持久化)
+        L2 exact_name   — 用户消息包含技能名称
+        L3 trivial_fast — 短消息 ("好的"/"继续") 继承上一轮技能
+        L4 keyword_sat  — 饱和曲线加权关键词 (防宽泛触发词霸占)
+        L5 prior_intent — 低置信度时继承上一轮技能
+        L6 llm_semantic — LLM 语义匹配 (confidence >= 0.85)
     """
 
     def __init__(self, skills_dir: Optional[str] = None) -> None:
@@ -359,6 +386,49 @@ class SkillManager:
         self._last_loaded: float = 0.0
         self._lock = asyncio.Lock()  # 并发安全
         self._procedural_bridge: Optional[Any] = None
+
+        # 匹配管线状态
+        self._learn_cache: dict[str, str] = {}  # normalized_prompt → skill_id
+        self._last_matched_skill: Optional[str] = None  # 上一轮匹配的 skill_id
+        self._last_match_time: float = 0.0  # 上一轮匹配时间 (用于 L5 时间衰减)
+        self._learn_cache_path = self._skills_dir / "_learn_cache.json"
+        self._load_learn_cache()
+
+    def _load_learn_cache(self) -> None:
+        try:
+            if self._learn_cache_path.exists():
+                self._learn_cache = json.loads(
+                    self._learn_cache_path.read_text(encoding="utf-8"),
+                )
+        except (json.JSONDecodeError, OSError):
+            self._learn_cache = {}
+
+    def _save_learn_cache(self) -> None:
+        try:
+            self._skills_dir.mkdir(parents=True, exist_ok=True)
+            # 限制缓存大小: 最多 500 条，LRU 淘汰最旧的
+            if len(self._learn_cache) > 500:
+                keys = list(self._learn_cache.keys())
+                for k in keys[:len(keys) - 400]:
+                    del self._learn_cache[k]
+            self._learn_cache_path.write_text(
+                json.dumps(self._learn_cache, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as e:
+            logger.debug("Failed to save learn cache: %s", e)
+
+    @staticmethod
+    def _normalize_prompt(text: str) -> str:
+        """归一化 prompt 用于 learn cache 查找."""
+        return re.sub(r"\s+", " ", text.strip().lower())[:200]
+
+    def record_match(self, user_message: str, skill_id: str) -> None:
+        """记录成功匹配到 learn cache (由 engine 在技能执行成功后调用)."""
+        key = self._normalize_prompt(user_message)
+        if key and skill_id:
+            self._learn_cache[key] = skill_id
+            self._save_learn_cache()
 
     def set_procedural_bridge(self, bridge: Any) -> None:
         """设置程序记忆桥接器."""
@@ -691,46 +761,143 @@ class SkillManager:
                         resources[f"{subdir}/{f.name}"] = f"(binary file, {f.stat().st_size} bytes)"
         return resources
 
-    # ── 匹配 ──
+    # ── 匹配 (6 层管线) ──
+
+    @staticmethod
+    def _saturation_score(raw: float, k: float = 0.4) -> float:
+        """饱和曲线: 防止宽泛触发词列表通过堆量取胜.
+
+        OpenClaw 公式: 1 - 1/(1 + raw * k)
+        raw=1 → 0.29, raw=3 → 0.55, raw=5 → 0.67, raw=10 → 0.80
+        """
+        return 1.0 - 1.0 / (1.0 + raw * k)
 
     async def match_skill(
         self,
         user_message: str,
         model_router: Optional[Any] = None,
+        available_tools: Optional[set[str]] = None,
     ) -> Optional[Skill]:
-        """匹配最合适的技能 (关键词 → LLM 语义)."""
+        """6 层匹配管线 (借鉴 OpenClaw Intent Router + Hermes Skills).
+
+        L1 learn_cache  → L2 exact_name → L3 trivial_fast →
+        L4 keyword_sat  → L5 prior_intent → L6 llm_semantic
+        """
         await self._ensure_loaded()
         if not self._skills:
             return None
 
-        lower_msg = user_message.lower()
-        best_match: Optional[Skill] = None
-        best_score = 0
+        lower_msg = user_message.lower().strip()
+        norm = self._normalize_prompt(user_message)
 
+        # ── L1: Learn Cache — 精确 prompt 命中 (跨 session 持久化) ──
+        cached_id = self._learn_cache.get(norm)
+        if cached_id and cached_id in self._skills:
+            skill = self._skills[cached_id]
+            logger.info("L1 learn_cache hit: %s", skill.name)
+            self._last_matched_skill = cached_id
+            self._last_match_time = time.time()
+            return skill
+
+        # ── L2: Exact Name — 用户消息包含技能全名 ──
         for skill in self._skills.values():
-            score = 0
+            if skill.name and skill.name in user_message:
+                logger.info("L2 exact_name matched: %s", skill.name)
+                self._last_matched_skill = skill.skill_id
+                self._last_match_time = time.time()
+                return skill
+
+        # ── L3: Trivial Fast-Path — 短消息继承上一轮技能 ──
+        if _TRIVIAL_PATTERNS.match(lower_msg) and self._last_matched_skill:
+            skill = self._skills.get(self._last_matched_skill)
+            if skill:
+                logger.info("L3 trivial_fast inherited: %s", skill.name)
+                return skill
+
+        # ── L4: Keyword Saturation Scoring ──
+        scored: list[tuple[float, Skill]] = []
+        for skill in self._skills.values():
+            # 条件激活过滤 (借鉴 Hermes)
+            if skill.requires_tools and available_tools is not None:
+                if not all(t in available_tools for t in skill.requires_tools):
+                    continue
+            if skill.fallback_for_tools and available_tools is not None:
+                if any(t in available_tools for t in skill.fallback_for_tools):
+                    continue
+            raw = 0.0
             trigger_words = skill.trigger.lower().split()
             for word in trigger_words:
                 min_len = 1 if any('\u4e00' <= c <= '\u9fff' for c in word) else 3
                 if len(word) > min_len and word in lower_msg:
-                    score += 1
+                    raw += 1.0
             for tag in skill.tags:
                 if tag.lower() in lower_msg:
-                    score += 2
+                    raw += 2.5
             for example in skill.examples:
-                if any(w in lower_msg for w in example.lower().split()
-                       if len(w) > (1 if any('\u4e00' <= c <= '\u9fff' for c in w) else 2)):
-                    score += 1
-            if score > best_score:
-                best_score = score
-                best_match = skill
+                matched_words = sum(
+                    1 for w in example.lower().split()
+                    if len(w) > (1 if any('\u4e00' <= c <= '\u9fff' for c in w) else 2)
+                    and w in lower_msg
+                )
+                if matched_words:
+                    raw += matched_words * 0.8
+            if raw > 0:
+                sat = self._saturation_score(raw)
+                scored.append((sat, skill))
 
-        if best_score >= 2:
-            logger.info("Keyword matched skill: %s (score=%d)",
-                        best_match.name if best_match else "?", best_score)
-            return best_match
+        scored.sort(key=lambda x: x[0], reverse=True)
 
-        # LLM 语义匹配
+        # 无关消息逃逸: 所有技能得分都很低 → 消息和技能无关
+        if not scored or scored[0][0] < 0.35:
+            self._last_matched_skill = None
+            return None
+
+        if scored:
+            best_sat, best_skill = scored[0]
+            # 有多个候选时，检查第一名是否显著领先第二名
+            if len(scored) >= 2:
+                second_sat = scored[1][0]
+                gap = best_sat - second_sat
+                if best_sat >= 0.45 and gap >= 0.08:
+                    logger.info("L4 keyword_sat matched: %s (sat=%.2f, gap=%.2f)",
+                                best_skill.name, best_sat, gap)
+                    self._last_matched_skill = best_skill.skill_id
+                    self._last_match_time = time.time()
+                    return best_skill
+                # 差距太小 → 不确定，跳到 L5/L6
+                if best_sat >= 0.45 and gap < 0.08:
+                    logger.debug("L4 ambiguous: %s(%.2f) vs %s(%.2f)",
+                                 best_skill.name, best_sat, scored[1][1].name, second_sat)
+            elif best_sat >= 0.45:
+                logger.info("L4 keyword_sat matched: %s (sat=%.2f)",
+                            best_skill.name, best_sat)
+                self._last_matched_skill = best_skill.skill_id
+                self._last_match_time = time.time()
+                return best_skill
+
+        # ── L5: Prior-Intent Inheritance — 时间衰减 + 话题切换检测 ──
+        if self._last_matched_skill and scored:
+            best_sat, best_skill = scored[0]
+            elapsed = time.time() - self._last_match_time
+
+            # 超过 5 分钟不再继承
+            if elapsed > 300:
+                self._last_matched_skill = None
+            # 话题切换: 当前最高分技能 ≠ 上一轮，且有一定置信度 → 切换
+            elif best_skill.skill_id != self._last_matched_skill and best_sat >= 0.35:
+                self._last_matched_skill = best_skill.skill_id
+                self._last_match_time = time.time()
+                logger.info("L5 topic_switch: %s (sat=%.2f)", best_skill.name, best_sat)
+                return best_skill
+            # 低置信度继承上一轮
+            elif best_sat < 0.55:
+                prior = self._skills.get(self._last_matched_skill)
+                if prior:
+                    logger.info("L5 prior_intent inherited: %s (best_sat=%.2f < 0.55)",
+                                prior.name, best_sat)
+                    return prior
+
+        # ── L6: LLM Semantic Fallback ──
         if model_router and self._skills:
             try:
                 skills_desc = "\n".join(
@@ -756,11 +923,15 @@ class SkillManager:
                 if matched_id and confidence >= 0.85:
                     skill = self._skills.get(matched_id)
                     if skill:
-                        logger.info("LLM matched skill: %s (confidence=%.2f)", skill.name, confidence)
+                        logger.info("L6 llm_semantic matched: %s (confidence=%.2f)",
+                                    skill.name, confidence)
+                        self._last_matched_skill = skill.skill_id
+                        self._last_match_time = time.time()
                         return skill
             except (ValueError, json.JSONDecodeError, KeyError) as e:
-                logger.debug("LLM skill matching failed: %s", e)
+                logger.debug("L6 LLM skill matching failed: %s", e)
 
+        self._last_matched_skill = None
         return None
 
     # ── 使用记录 ──

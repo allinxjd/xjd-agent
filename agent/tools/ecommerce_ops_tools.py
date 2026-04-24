@@ -247,7 +247,7 @@ def register_ecommerce_ops_tools(registry: ToolRegistry) -> None:
 
     registry.register(
         name="ecommerce_create_product",
-        description="发布新商品到店铺",
+        description="发布新商品到店铺 (支持 images 字段上传图片，传本地路径列表)",
         parameters={
             "type": "object",
             "properties": {
@@ -263,7 +263,7 @@ def register_ecommerce_ops_tools(registry: ToolRegistry) -> None:
 
     registry.register(
         name="ecommerce_update_product",
-        description="编辑已有商品信息",
+        description="编辑已有商品信息 (支持 images 字段上传图片，传本地路径列表)",
         parameters={
             "type": "object",
             "properties": {

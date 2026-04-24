@@ -40,6 +40,14 @@
   color: var(--text-tertiary); border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
 }
+.canvas-actions { display: flex; gap: 6px; }
+.canvas-action-btn {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--text-tertiary); font-size: 11px; padding: 2px 8px;
+  border-radius: var(--radius-sm); cursor: pointer; line-height: 1.4;
+}
+.canvas-action-btn:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.canvas-delete-btn:hover { color: var(--red); border-color: var(--red); }
 .canvas-component-body { padding: 0; }
 .canvas-component-body iframe {
   width: 100%; border: none; min-height: 600px; background: #fff;

@@ -563,6 +563,20 @@ class GatewayServer:
                 if message.message_type == MessageType.VOICE and self._voice_enabled:
                     reply_text, audio_data = await self._process_voice_message(session, message)
                 else:
+                    # 媒体消息落盘到本地 inbox
+                    if message.media_data and message.message_type in (
+                        MessageType.IMAGE, MessageType.FILE, MessageType.VIDEO,
+                    ):
+                        try:
+                            from gateway.media.channel_files import get_channel_file_manager
+                            cfm = get_channel_file_manager()
+                            saved_path = cfm.save_incoming(
+                                message.media_data, message.message_type.value, message.platform.value,
+                            )
+                            message.metadata["local_file_path"] = saved_path
+                        except Exception as e:
+                            logger.warning("媒体文件落盘失败: %s", e)
+
                     # 文本/其他消息走 Agent Engine
                     reply_text = await self._process_with_engine(session, message)
 
@@ -653,10 +667,10 @@ class GatewayServer:
         # 记录用户消息到 session
         session.add_message("user", message.content)
 
-        # 电商模式: 走协调器 (图片生成类请求交给主引擎)
+        # 电商模式: 电商意图走协调器，做图/非电商请求交给主引擎
         if self._ecommerce_mode and self._ecommerce_coordinator:
             intents = self._ecommerce_coordinator._classify_intent(message.content)
-            if "image_generation" not in intents:
+            if "image_generation" not in intents and "non_ecommerce" not in intents:
                 reply = await self._ecommerce_coordinator.handle_message(
                     message.content,
                     session_id=session.session_id,
@@ -665,7 +679,7 @@ class GatewayServer:
                 await self._session_manager._persist_session(session)
                 return reply
             else:
-                logger.info("图片生成意图，交给主引擎处理: %s", message.content[:50])
+                logger.info("非电商协调器意图 %s，交给主引擎: %s", intents, message.content[:50])
 
         # 构建平台上下文前缀
         platform_name = message.platform.value
@@ -673,6 +687,11 @@ class GatewayServer:
         sender_name = message.sender.display_name or message.sender.username or message.sender.user_id
         platform_ctx = f"[来源: {platform_name} | 会话类型: {chat_type} | 发送者: {sender_name}]"
         user_content = f"{platform_ctx}\n{message.content}"
+
+        # 媒体文件路径注入 — agent 可直接用于 generate_ecommerce_image 等工具
+        local_path = message.metadata.get("local_file_path", "")
+        if local_path:
+            user_content += f"\n[用户发送的文件已保存到本地: {local_path}]"
 
         # Canvas 跨平台广播回调 — 飞书/微信触发的 canvas 推送到 WebUI
         def on_tool_result(name: str, result: str):

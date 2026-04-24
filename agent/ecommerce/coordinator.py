@@ -144,7 +144,7 @@ class ECommerceCoordinator(MultiAgentManager):
             if any(kw in lower for kw in keywords):
                 intents.append(intent)
 
-        return intents or ["general"]
+        return intents or ["non_ecommerce"]
 
     def _aggregate_results(self, results: list[SubAgentResult]) -> str:
         """聚合多个 Agent 的结果."""

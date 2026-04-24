@@ -1,6 +1,6 @@
 """浏览器自动化工具 — Playwright 异步 API.
 
-支持 7 种操作: navigate, click, type, screenshot, extract_text, evaluate_js, wait_for_selector.
+支持 8 种操作: navigate, click, type, screenshot, extract_text, evaluate_js, wait_for_selector, upload_file.
 Playwright 为可选依赖，首次调用时懒加载。
 
 用法:
@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import tempfile
+from agent.core.workspace_files import workspace_tmp
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -151,7 +152,7 @@ async def _browser_action(
         return f"已输入 '{text[:50]}' 到 {selector}"
 
     elif action == "screenshot":
-        path = tempfile.mktemp(suffix=".png", prefix="browser_")
+        path = str(workspace_tmp(".png", "browser_"))
         await page.screenshot(path=path, full_page=bool(kwargs.get("full_page")))
         return f"截图已保存: {path}"
 
@@ -188,8 +189,19 @@ async def _browser_action(
         await page.wait_for_selector(selector, timeout=timeout)
         return f"元素已出现: {selector}"
 
+    elif action == "upload_file":
+        file_path = kwargs.get("file_path", "")
+        if not selector or not file_path:
+            return "错误: upload_file 需要 selector (文件输入框) 和 file_path (本地文件路径) 参数"
+        from pathlib import Path
+        fp = Path(file_path).expanduser()
+        if not fp.exists():
+            return f"错误: 文件不存在: {fp}"
+        await page.set_input_files(selector, str(fp), timeout=timeout)
+        return f"已上传文件: {fp.name} → {selector}"
+
     else:
-        return f"未知操作: {action}。支持: navigate, click, type, screenshot, extract_text, evaluate_js, wait_for_selector"
+        return f"未知操作: {action}。支持: navigate, click, type, screenshot, extract_text, evaluate_js, wait_for_selector, upload_file"
 
 async def close_browser() -> None:
     """关闭浏览器 (清理资源)."""
@@ -205,14 +217,15 @@ def register_browser_tools(registry) -> None:
     registry.register(
         name="browser_action",
         description=(
-            "浏览器自动化操作。支持 7 种 action:\n"
+            "浏览器自动化操作。支持 8 种 action:\n"
             "- navigate: 导航到 URL\n"
             "- click: 点击元素 (CSS selector)\n"
             "- type: 在输入框中输入文本\n"
             "- screenshot: 截取页面截图\n"
             "- extract_text: 提取页面或元素文本\n"
             "- evaluate_js: 执行 JavaScript\n"
-            "- wait_for_selector: 等待元素出现"
+            "- wait_for_selector: 等待元素出现\n"
+            "- upload_file: 上传本地文件到 file input 元素"
         ),
         parameters={
             "type": "object",
@@ -221,12 +234,13 @@ def register_browser_tools(registry) -> None:
                     "type": "string",
                     "description": "操作类型",
                     "enum": ["navigate", "click", "type", "screenshot",
-                             "extract_text", "evaluate_js", "wait_for_selector"],
+                             "extract_text", "evaluate_js", "wait_for_selector", "upload_file"],
                 },
                 "url": {"type": "string", "description": "目标 URL (navigate 时必填)"},
                 "selector": {"type": "string", "description": "CSS 选择器"},
                 "text": {"type": "string", "description": "输入文本 (type 时必填)"},
                 "script": {"type": "string", "description": "JavaScript 代码 (evaluate_js 时必填)"},
+                "file_path": {"type": "string", "description": "本地文件路径 (upload_file 时必填)"},
                 "timeout": {"type": "integer", "description": "超时毫秒数", "default": 30000},
                 "stealth": {"type": "boolean", "description": "启用反检测模式 (隐藏自动化特征)", "default": False},
             },

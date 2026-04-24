@@ -42,6 +42,50 @@ def get_workspace_dir() -> Path:
     d.mkdir(exist_ok=True)
     return d
 
+def get_canvas_dir() -> Path:
+    d = get_workspace_dir() / "canvas"
+    d.mkdir(exist_ok=True)
+    old = get_home() / "canvas"
+    if old.exists() and old.is_dir() and not (d / ".migrated").exists():
+        import shutil
+        for item in old.iterdir():
+            dest = d / item.name
+            if not dest.exists():
+                shutil.move(str(item), str(dest))
+        (d / ".migrated").touch()
+    return d
+
+def get_exports_dir() -> Path:
+    d = get_workspace_dir() / "exports"
+    d.mkdir(exist_ok=True)
+    old = get_home() / "exports"
+    if old.exists() and old.is_dir() and not (d / ".migrated").exists():
+        import shutil
+        for item in old.iterdir():
+            dest = d / item.name
+            if not dest.exists():
+                shutil.move(str(item), str(dest))
+        (d / ".migrated").touch()
+    return d
+
+def get_tmp_dir() -> Path:
+    d = get_workspace_dir() / "tmp"
+    d.mkdir(exist_ok=True)
+    return d
+
+def get_inbox_dir() -> Path:
+    d = get_workspace_dir() / "inbox"
+    d.mkdir(exist_ok=True)
+    old = Path.home() / "xjd-agent-files" / "inbox"
+    if old.exists() and old.is_dir() and not (d / ".migrated").exists():
+        import shutil
+        for item in old.iterdir():
+            dest = d / item.name
+            if not dest.exists():
+                shutil.move(str(item), str(dest))
+        (d / ".migrated").touch()
+    return d
+
 def get_sessions_dir() -> Path:
     d = get_home() / "sessions"
     d.mkdir(exist_ok=True)
