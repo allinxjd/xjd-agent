@@ -494,6 +494,8 @@ class SkillManager:
                     if skill.skill_id not in self._skills:
                         self._skills[skill.skill_id] = skill
                         builtin_count += 1
+                    elif skill.secrets and not self._skills[skill.skill_id].secrets:
+                        self._skills[skill.skill_id].secrets = skill.secrets
                 except (OSError, yaml.YAMLError, ValueError) as e:
                     logger.warning("Failed to load builtin skill %s: %s", skill_dir.name, e)
             if builtin_count:

@@ -2137,6 +2137,7 @@ function switchSettingsTab(tab) {
   const idx = ['general','channels','voice','skills'].indexOf(tab);
   document.querySelectorAll('.settings-tab')[idx]?.classList.add('active');
   $('settingsTab' + tab.charAt(0).toUpperCase() + tab.slice(1))?.classList.add('active');
+  if (tab === 'skills') { loadEcommerceConfig(); }
 }
 
 async function loadPlatformSchemas() {

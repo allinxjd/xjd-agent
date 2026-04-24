@@ -50,6 +50,8 @@ KNOWN_ENDPOINTS: dict[str, str] = {
     "siliconflow": "https://api.siliconflow.cn/v1",
 }
 
+_DEEPSEEK_V4_MODELS = {"deepseek-v4-pro", "deepseek-v4-flash", "deepseek-reasoner"}
+
 class OpenAIProvider(BaseProvider):
     """OpenAI 兼容 Provider — 统一接入所有 OpenAI 兼容 API."""
 
@@ -93,7 +95,7 @@ class OpenAIProvider(BaseProvider):
     def name(self) -> str:
         return self.provider_type.value
 
-    def _convert_messages(self, messages: list[Message]) -> list[dict[str, Any]]:
+    def _convert_messages(self, messages: list[Message], include_reasoning: bool = False) -> list[dict[str, Any]]:
         """转换为 OpenAI 消息格式."""
         result = []
         for msg in messages:
@@ -104,6 +106,8 @@ class OpenAIProvider(BaseProvider):
                 item["tool_call_id"] = msg.tool_call_id
             if msg.tool_calls:
                 item["tool_calls"] = msg.tool_calls
+            if include_reasoning and msg.reasoning_content:
+                item["reasoning_content"] = msg.reasoning_content
             result.append(item)
         return result
 
@@ -150,16 +154,22 @@ class OpenAIProvider(BaseProvider):
         **kwargs: Any,
     ) -> CompletionResponse:
         """发送请求并获取完整响应."""
+        is_v4 = model in _DEEPSEEK_V4_MODELS
         params: dict[str, Any] = {
             "model": model,
-            "messages": self._convert_messages(messages),
-            "temperature": temperature,
+            "messages": self._convert_messages(messages, include_reasoning=is_v4),
         }
+        if not is_v4:
+            params["temperature"] = temperature
         if max_tokens:
             params["max_tokens"] = max_tokens
         if tools:
             params["tools"] = self._convert_tools(tools)
-            params["tool_choice"] = kwargs.pop("tool_choice", None) or "auto"
+            if not is_v4:
+                params["tool_choice"] = kwargs.pop("tool_choice", None) or "auto"
+        if is_v4:
+            params["extra_body"] = {"thinking": {"type": "enabled"}}
+            params["reasoning_effort"] = "high"
 
         client = self._client
         if api_key_override:
@@ -175,9 +185,13 @@ class OpenAIProvider(BaseProvider):
         )
 
         choice = response.choices[0]
+        content = choice.message.content or ""
+        reasoning = getattr(choice.message, "reasoning_content", None) or ""
+        if reasoning:
+            logger.debug("V4 reasoning: %d chars", len(reasoning))
         logger.debug("API response: finish_reason=%s, has_tool_calls=%s, content_len=%d",
                      choice.finish_reason, bool(choice.message.tool_calls),
-                     len(choice.message.content or ""))
+                     len(content))
         tool_calls_data = []
         if choice.message.tool_calls:
             tool_calls_data = [
@@ -193,11 +207,12 @@ class OpenAIProvider(BaseProvider):
             ]
 
         return CompletionResponse(
-            content=choice.message.content or "",
+            content=content,
             tool_calls=tool_calls_data,
             usage=self._parse_usage(response.usage),
             model=response.model,
             finish_reason=choice.finish_reason or "stop",
+            reasoning_content=reasoning or None,
             raw=response,
         )
 
@@ -213,17 +228,23 @@ class OpenAIProvider(BaseProvider):
         **kwargs: Any,
     ) -> AsyncIterator[StreamChunk]:
         """流式输出."""
+        is_v4 = model in _DEEPSEEK_V4_MODELS
         params: dict[str, Any] = {
             "model": model,
-            "messages": self._convert_messages(messages),
-            "temperature": temperature,
+            "messages": self._convert_messages(messages, include_reasoning=is_v4),
             "stream": True,
         }
+        if not is_v4:
+            params["temperature"] = temperature
         if max_tokens:
             params["max_tokens"] = max_tokens
         if tools:
             params["tools"] = self._convert_tools(tools)
-            params["tool_choice"] = kwargs.pop("tool_choice", None) or "auto"
+            if not is_v4:
+                params["tool_choice"] = kwargs.pop("tool_choice", None) or "auto"
+        if is_v4:
+            params["extra_body"] = {"thinking": {"type": "enabled"}}
+            params["reasoning_effort"] = "high"
 
         client = self._client
         if api_key_override:

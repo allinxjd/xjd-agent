@@ -664,17 +664,21 @@ class GatewayServer:
                 all_msgs = all_msgs[-50:]
         session_msgs = all_msgs
 
-        # 记录用户消息到 session
-        session.add_message("user", message.content)
+        # 媒体文件路径注入
+        local_path = message.metadata.get("local_file_path", "")
+        user_text_with_file = message.content
+        if local_path:
+            user_text_with_file += f"\n[用户发送的文件已保存到本地: {local_path}]"
 
         # 电商模式: 电商意图走协调器，做图/非电商请求交给主引擎
         if self._ecommerce_mode and self._ecommerce_coordinator:
             intents = self._ecommerce_coordinator._classify_intent(message.content)
             if "image_generation" not in intents and "non_ecommerce" not in intents:
                 reply = await self._ecommerce_coordinator.handle_message(
-                    message.content,
+                    user_text_with_file,
                     session_id=session.session_id,
                 )
+                session.add_message("user", user_text_with_file)
                 session.add_message("assistant", reply)
                 await self._session_manager._persist_session(session)
                 return reply
@@ -686,12 +690,10 @@ class GatewayServer:
         chat_type = message.chat.chat_type.value if hasattr(message.chat, 'chat_type') else "private"
         sender_name = message.sender.display_name or message.sender.username or message.sender.user_id
         platform_ctx = f"[来源: {platform_name} | 会话类型: {chat_type} | 发送者: {sender_name}]"
-        user_content = f"{platform_ctx}\n{message.content}"
+        user_content = f"{platform_ctx}\n{user_text_with_file}"
 
-        # 媒体文件路径注入 — agent 可直接用于 generate_ecommerce_image 等工具
-        local_path = message.metadata.get("local_file_path", "")
-        if local_path:
-            user_content += f"\n[用户发送的文件已保存到本地: {local_path}]"
+        # 记录完整用户消息到 session（含文件路径注入）
+        session.add_message("user", user_content)
 
         # Canvas 跨平台广播回调 — 飞书/微信触发的 canvas 推送到 WebUI
         def on_tool_result(name: str, result: str):
