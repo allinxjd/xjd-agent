@@ -1109,6 +1109,17 @@ class WebServer:
         if self._engine and hasattr(self._engine, '_router'):
             router = self._engine._router
             providers = list(router._providers.keys()) if hasattr(router, '_providers') else []
+            # config.yaml 里配置过的所有模型（含切换前的）
+            configured = []
+            if self._global_config:
+                cfg = self._global_config.model
+                if cfg.primary.provider and cfg.primary.model:
+                    configured.append({"provider": cfg.primary.provider, "model": cfg.primary.model})
+                if cfg.cheap and cfg.cheap.provider and cfg.cheap.model:
+                    configured.append({"provider": cfg.cheap.provider, "model": cfg.cheap.model})
+                for fc in cfg.failover:
+                    if fc.provider and fc.model:
+                        configured.append({"provider": fc.provider, "model": fc.model})
             return web.json_response({
                 "primary": {
                     "provider": getattr(router, '_primary_provider', '') or '',
@@ -1124,6 +1135,7 @@ class WebServer:
                     {"provider": p, "model": m}
                     for p, m in getattr(router, '_failover_chain', [])
                 ],
+                "configured": configured,
                 "providers": providers,
             })
         return web.json_response({"error": "no router", "providers": []})
@@ -1328,12 +1340,37 @@ class WebServer:
                 updated.extend(["primary_provider", "primary_model"])
                 logger.info("Model switched: primary → %s:%s", prov, model)
 
-            # 切换便宜模型
+            # 关闭智能路由
+            if body.get("cheap_routing") is False:
+                router._cheap_routing_enabled = False
+                if self._global_config:
+                    self._global_config.model.cheap = None
+                    self._save_config()
+                updated.append("cheap_routing")
+                logger.info("Smart routing disabled")
+
+            # 设置便宜模型（启用智能路由）
             cheap_prov = body.get("cheap_provider")
             cheap_model = body.get("cheap_model")
             if cheap_prov and cheap_model:
+                cheap_key = (body.get("cheap_api_key") or "").strip()
+                if not cheap_key and self._global_config:
+                    if cheap_prov == self._global_config.model.primary.provider:
+                        cheap_key = self._global_config.model.primary.api_key
+                if cheap_key:
+                    from agent.providers.openai_provider import OpenAIProvider
+                    from agent.providers.base import ProviderType
+                    new_prov = OpenAIProvider(provider_type=ProviderType(cheap_prov), api_key=cheap_key)
+                    router.register_provider(new_prov)
                 router.set_cheap(cheap_prov, cheap_model)
+                if self._global_config:
+                    from agent.core.config import ProviderConfig
+                    self._global_config.model.cheap = ProviderConfig(
+                        provider=cheap_prov, model=cheap_model, api_key=cheap_key or ""
+                    )
+                    self._save_config()
                 updated.extend(["cheap_provider", "cheap_model"])
+                logger.info("Smart routing enabled: cheap → %s:%s", cheap_prov, cheap_model)
 
         admin_name = user.username if user else "anonymous"
         self._audit(admin_name, "CONFIG_UPDATE", str(updated), request.remote or "")

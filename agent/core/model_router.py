@@ -38,7 +38,10 @@ _COMPLEX_KEYWORDS = {
     "compare", "benchmark", "optimize", "review", "terminal",
     "shell", "tool", "tools", "pytest", "test", "tests", "plan",
     "planning", "delegate", "subagent", "cron", "docker", "kubernetes",
+}
+_COMPLEX_KEYWORDS_CJK = {
     "代码", "调试", "分析", "部署", "架构", "设计", "重构", "优化",
+    "报错", "异常", "测试", "终端", "脚本", "编译", "实现",
 }
 
 _IMMEDIATE_FAIL_CODES = {401, 403, 404, 429}
@@ -232,10 +235,14 @@ class ModelRouter:
         if re.search(r"https?://|www\.", text, re.IGNORECASE):
             return False
 
-        # 复杂关键词
+        # 复杂关键词（英文按词匹配）
         lowered = text.lower()
         words = {w.strip(".,;:!?()[]{}\"'`") for w in lowered.split()}
         if words & _COMPLEX_KEYWORDS:
+            return False
+
+        # 中文关键词（子串匹配）
+        if any(kw in lowered for kw in _COMPLEX_KEYWORDS_CJK):
             return False
 
         return True
