@@ -106,6 +106,7 @@ class LearningLoop:
         learning_enabled: bool = True,
         config: Optional[Any] = None,  # MemoryConfig
         pin_manager: Optional[Any] = None,  # ContextPinManager
+        tool_registry: Optional[Any] = None,  # ToolRegistry
         # 兼容旧调用
         min_tool_calls_for_skill: int = 2,
         learning_interval: int = 5,
@@ -119,6 +120,7 @@ class LearningLoop:
         self._skill_manager = skill_manager
         self._skill_optimizer = skill_optimizer
         self._pin_manager = pin_manager
+        self._tool_registry = tool_registry
         self._learning_enabled = learning_enabled
         self._min_tool_calls = self._config.min_tool_calls_for_skill
         self._learning_interval = self._config.learning_interval
@@ -655,6 +657,22 @@ class LearningLoop:
                     user_message=user_message,
                     model_router=model_router,
                 )
+                if matched_skill:
+                    # 校验工具可用性: 技能声明了 tools 但全部不存在 → 跳过注入
+                    if (
+                        self._tool_registry
+                        and hasattr(matched_skill, 'tools')
+                        and matched_skill.tools
+                    ):
+                        available = self._tool_registry.get_definitions_by_names(
+                            matched_skill.tools
+                        )
+                        if not available:
+                            logger.warning(
+                                "Skill '%s' declares tools %s but none available, skipping",
+                                matched_skill.name, matched_skill.tools,
+                            )
+                            matched_skill = None
                 if matched_skill:
                     result.skill_message = matched_skill.to_full_content()
                     result.matched_skill_id = matched_skill.skill_id

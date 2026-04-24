@@ -201,7 +201,15 @@ class WebServer:
 
         # Canvas API
         app.router.add_get("/api/workspace/canvas/list", self._canvas_list)
+        app.router.add_get("/api/workspace/canvas/{artifact_id}/export/pdf", self._canvas_export_pdf)
+        app.router.add_delete("/api/workspace/canvas/{artifact_id}", self._canvas_delete)
         app.router.add_get("/api/workspace/canvas/{artifact_id}", self._canvas_get)
+
+        # Local file proxy (for canvas image embedding)
+        app.router.add_get("/api/local-file", self._local_file_proxy)
+
+        # Workspace file serving
+        app.router.add_get("/api/workspace/files/{path:.*}", self._workspace_file)
 
         # Gateway Admin API (channels, voice, ecommerce)
         app.router.add_get("/api/admin/gateway/channels", self._gw_list_channels)
@@ -1572,6 +1580,7 @@ class WebServer:
             if not store:
                 return _web.json_response({"items": []})
             items = store.list_artifacts() or []
+            items = sorted(items, key=lambda x: x.get("updated_at", 0), reverse=True)
             return _web.json_response({"items": items})
         except Exception as e:
             return _web.json_response({"items": [], "error": str(e)})
@@ -1594,6 +1603,74 @@ class WebServer:
             })
         except Exception as e:
             return _web.json_response({"error": str(e)}, status=500)
+
+    async def _canvas_delete(self, request):
+        """DELETE /api/workspace/canvas/{artifact_id} — 删除 canvas."""
+        from aiohttp import web as _web
+        artifact_id = request.match_info.get("artifact_id", "")
+        try:
+            from agent.tools.canvas_tools import _canvas_mgr
+            store = getattr(_canvas_mgr, '_store', None)
+            if store and store.delete(artifact_id):
+                return _web.json_response({"status": "ok"})
+            return _web.json_response({"error": "not found"}, status=404)
+        except Exception as e:
+            return _web.json_response({"error": str(e)}, status=500)
+
+    async def _canvas_export_pdf(self, request):
+        """GET /api/workspace/canvas/{artifact_id}/export/pdf — 导出 PDF."""
+        from aiohttp import web as _web
+        artifact_id = request.match_info.get("artifact_id", "")
+        try:
+            from agent.tools.canvas_tools import _canvas_mgr
+            from agent.core.canvas_export import CanvasExporter
+            exporter = CanvasExporter(_canvas_mgr)
+            pdf_bytes = await exporter.export_pdf(artifact_id)
+            if not pdf_bytes:
+                return _web.json_response({"error": "not found"}, status=404)
+            return _web.Response(
+                body=pdf_bytes,
+                content_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="{artifact_id}.pdf"'},
+            )
+        except RuntimeError as e:
+            return _web.json_response({"error": str(e)}, status=500)
+
+    async def _local_file_proxy(self, request):
+        """GET /api/local-file?path=... — 代理本地文件（图片等）供 canvas iframe 引用."""
+        from aiohttp import web as _web
+        import mimetypes
+        from agent.core.workspace_files import resolve_safe_path
+        raw_path = request.query.get("path", "")
+        if not raw_path:
+            return _web.json_response({"error": "missing path"}, status=400)
+        p = resolve_safe_path(raw_path)
+        if p is None:
+            return _web.json_response({"error": "not found or access denied"}, status=404)
+        if p.stat().st_size > 20 * 1024 * 1024:
+            return _web.json_response({"error": "file too large (>20MB)"}, status=413)
+        content_type = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
+        return _web.Response(
+            body=p.read_bytes(),
+            content_type=content_type,
+            headers={"Cache-Control": "public, max-age=3600"},
+        )
+
+    async def _workspace_file(self, request):
+        """GET /api/workspace/files/{path} — 按 workspace 相对路径访问文件."""
+        from aiohttp import web as _web
+        import mimetypes
+        from agent.core.config import get_workspace_dir
+        rel = request.match_info.get("path", "")
+        p = (get_workspace_dir() / rel).resolve()
+        ws = get_workspace_dir().resolve()
+        if not p.is_relative_to(ws) or not p.is_file():
+            return _web.json_response({"error": "not found"}, status=404)
+        if p.stat().st_size > 20 * 1024 * 1024:
+            return _web.json_response({"error": "file too large"}, status=413)
+        ct = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
+        return _web.Response(body=p.read_bytes(), content_type=ct,
+                             headers={"Cache-Control": "public, max-age=3600"})
 
     # ─── Gateway Admin API ───
 

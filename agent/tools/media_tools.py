@@ -7,6 +7,7 @@ import asyncio
 import subprocess
 import os
 import tempfile
+from agent.core.workspace_files import workspace_tmp
 import base64
 import logging
 import platform
@@ -68,7 +69,7 @@ async def _text_to_speech(text: str, voice: str = "zh-CN-XiaoxiaoNeural", output
     try:
         import edge_tts
         if not output:
-            output = tempfile.mktemp(suffix=".mp3", prefix="tts_")
+            output = str(workspace_tmp(".mp3", "tts_"))
         communicate = edge_tts.Communicate(text, voice)
         await communicate.save(output)
         return f"语音已生成: {output}"
@@ -94,7 +95,7 @@ async def _speech_to_text(audio_path: str, language: str = "", **kwargs) -> str:
 
 async def _screenshot(region: str = "", **kwargs) -> str:
     """截取屏幕截图."""
-    path = tempfile.mktemp(suffix=".png", prefix="screenshot_")
+    path = str(workspace_tmp(".png", "screenshot_"))
     try:
         if platform.system() == "Darwin":
             cmd = ["screencapture", "-x"]

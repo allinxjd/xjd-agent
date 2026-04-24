@@ -87,8 +87,8 @@ async def _export_canvas(artifact_id: str, format: str = "html", **kw) -> str:
     safe_title = "".join(c if c.isalnum() or c in "-_ " else "" for c in title).strip() or "canvas"
     filename = f"{safe_title}.{ext}"
 
-    export_dir = Path.home() / ".xjd-agent" / "exports"
-    export_dir.mkdir(parents=True, exist_ok=True)
+    from agent.core.config import get_exports_dir
+    export_dir = get_exports_dir()
     file_path = export_dir / filename
     file_path.write_bytes(data)
 

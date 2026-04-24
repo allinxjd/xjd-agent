@@ -1,7 +1,7 @@
 """Canvas 持久化存储 — 文件系统 + 版本历史.
 
 存储结构:
-    ~/.xjd-agent/canvas/{artifact_id}/
+    ~/.xjd-agent/workspace/canvas/{artifact_id}/
         manifest.json   # 元数据
         v1.html         # 版本内容
         v2.html
@@ -17,17 +17,24 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .canvas import CanvasArtifact, CanvasType
+from .config import get_canvas_dir
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_BASE = Path.home() / ".xjd-agent" / "canvas"
+_DEFAULT_BASE = None
+
+def _get_default_base():
+    global _DEFAULT_BASE
+    if _DEFAULT_BASE is None:
+        _DEFAULT_BASE = get_canvas_dir()
+    return _DEFAULT_BASE
 
 
 class CanvasStore:
     """文件系统 Canvas 持久化."""
 
     def __init__(self, base_dir: Optional[Path] = None) -> None:
-        self._base = base_dir or _DEFAULT_BASE
+        self._base = base_dir or _get_default_base()
         self._base.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
 

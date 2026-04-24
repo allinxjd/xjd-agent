@@ -32,7 +32,8 @@ _INTENT_RULES: list[tuple[set[str], list[str], set[str]]] = [
     # 画布/可视化
     (
         {"画布", "canvas", "知识图谱", "可视化", "导出", "export", "pdf", "png",
-         "mermaid", "chart", "图表", "页面"},
+         "mermaid", "chart", "图表", "页面", "画册", "设计稿", "展示页", "产品页",
+         "海报", "排版"},
         ["canvas"],
         set(),
     ),
@@ -89,6 +90,13 @@ _ALWAYS_INCLUDE: set[str] = {
     "set_contact_nickname",
 }
 
+_FEEDBACK_PATTERNS: set[str] = {
+    "看不到", "不行", "还是不", "没有反应", "没反应", "出错", "找不到",
+    "不对", "不工作", "失败", "报错", "有问题", "不能用", "不显示",
+    "打不开", "无法", "错误", "不生效", "没效果", "白屏", "空白",
+    "答非所问", "不是我要的",
+}
+
 
 def select_tool_names_for_message(message: str) -> Optional[set[str]]:
     """根据用户消息关键词选择相关工具名集合.
@@ -96,10 +104,15 @@ def select_tool_names_for_message(message: str) -> Optional[set[str]]:
     Returns:
         匹配到 → 返回工具名集合
         匹配 0 个或 ≥4 个意图（模糊）→ 返回 None（fallback 到全量）
+        检测到反馈/投诉模式 → 返回 None（让模型自由回复）
     """
     from agent.tools.registry import TOOLSETS
 
     msg_lower = message.lower()
+
+    if any(pat in msg_lower for pat in _FEEDBACK_PATTERNS):
+        logger.debug("Tool selector: feedback pattern detected, returning full toolset")
+        return None
     matched_toolsets: set[str] = set()
     extra_tools: set[str] = set()
 

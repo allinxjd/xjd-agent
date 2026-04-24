@@ -17,6 +17,7 @@ import logging
 import platform
 import subprocess
 import tempfile
+from agent.core.workspace_files import workspace_tmp
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -261,7 +262,7 @@ async def _screen_ocr(
             img = ImageGrab.grab()
 
         # 保存截图
-        path = tempfile.mktemp(suffix=".png", prefix="ocr_")
+        path = str(workspace_tmp(".png", "ocr_"))
         img.save(path)
 
         # OCR

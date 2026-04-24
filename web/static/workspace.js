@@ -33,7 +33,8 @@ function renderCanvasComponent(comp) {
   const contentStr = (comp.content || '').trimStart();
   const looksLikeHtml = /^<!doctype\s|^<html[\s>]/i.test(contentStr);
   const typeLabel = looksLikeHtml ? 'html' : (comp.type || 'html');
-  el.innerHTML = `<div class="canvas-component-header"><span>${typeLabel.toUpperCase()}</span></div><div class="canvas-component-body"></div>`;
+  const safeId = (comp.artifact_id||'').replace(/[^a-zA-Z0-9_-]/g, '');
+  el.innerHTML = `<div class="canvas-component-header"><span>${typeLabel.toUpperCase()}</span><div class="canvas-actions"><button class="canvas-action-btn" onclick="event.stopPropagation();exportCanvasPdf('${safeId}')" title="Export PDF">PDF</button><button class="canvas-action-btn canvas-delete-btn" onclick="event.stopPropagation();deleteCanvas('${safeId}',this)" title="Delete">&times;</button></div></div><div class="canvas-component-body"></div>`;
   const body = el.querySelector('.canvas-component-body');
 
   if (comp.type === 'html' || comp.type === 'react' || looksLikeHtml) {
@@ -41,7 +42,6 @@ function renderCanvasComponent(comp) {
     iframe.sandbox = 'allow-scripts';
     body.appendChild(iframe);
     // 注入 A2UI bridge 到 canvas 内容
-    const safeId = (comp.artifact_id||'').replace(/[^a-zA-Z0-9_-]/g, '');
     const a2uiBridge = `<script>
 window.xjd={sendAction:function(a,p){window.parent.postMessage({type:"a2ui_action",action:a,payload:p||{},artifact_id:"${safeId}"},"*")}};
 </script>`;
@@ -66,8 +66,7 @@ window.xjd={sendAction:function(a,p){window.parent.postMessage({type:"a2ui_actio
   } else {
     body.innerHTML = `<pre style="margin:0;white-space:pre-wrap;">${_esc(comp.content || '')}</pre>`;
   }
-  viewport.prepend(el);
-  viewport.scrollTop = 0;
+  viewport.appendChild(el);
 }
 
 // A2UI: 监听 Canvas iframe postMessage，转发到 WebSocket
@@ -92,15 +91,46 @@ async function loadCanvasHistory() {
   try {
     const res = await fetch('/api/workspace/canvas/list');
     const data = await res.json();
+    console.log('[Canvas] list response:', data.items?.length, 'items');
     if (!data.items || !data.items.length) return;
-    for (const item of data.items.slice(-20)) {
+    for (const item of data.items.slice(0, 20)) {
       try {
         const r = await fetch('/api/workspace/canvas/' + encodeURIComponent(item.artifact_id));
         const comp = await r.json();
+        console.log('[Canvas] loaded:', item.artifact_id, comp.type, comp.error || 'ok');
         if (comp && !comp.error) renderCanvasComponent(comp);
-      } catch(e) {}
+      } catch(e) { console.warn('[Canvas] fetch error:', e); }
     }
-  } catch(e) {}
+  } catch(e) { console.warn('[Canvas] list error:', e); }
+}
+
+async function deleteCanvas(artifactId, btn) {
+  if (!confirm('Delete this canvas?')) return;
+  try {
+    const res = await fetch('/api/workspace/canvas/' + encodeURIComponent(artifactId), {
+      method: 'DELETE', headers: {'X-XJD-Request': '1'}
+    });
+    if (res.ok) {
+      const card = btn.closest('.canvas-component');
+      if (card) card.remove();
+      const viewport = document.querySelector('#canvasPanel .canvas-viewport');
+      const empty = document.querySelector('#canvasPanel .canvas-empty');
+      if (viewport && !viewport.querySelector('.canvas-component') && empty) empty.style.display = '';
+    }
+  } catch(e) { console.warn('deleteCanvas failed', e); }
+}
+
+async function exportCanvasPdf(artifactId) {
+  try {
+    const res = await fetch('/api/workspace/canvas/' + encodeURIComponent(artifactId) + '/export/pdf');
+    if (!res.ok) { const d = await res.json().catch(() => ({})); alert('Export failed: ' + (d.error || res.statusText)); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = artifactId + '.pdf';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch(e) { alert('Export error: ' + e.message); }
 }
 
 // ══════════════════════════════════════════════════════════════

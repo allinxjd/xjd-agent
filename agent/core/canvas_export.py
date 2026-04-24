@@ -63,9 +63,20 @@ class CanvasExporter:
                         "height": opts.get("height", 720),
                     }
                 )
+                # Navigate to local server first so relative URLs (/api/local-file) resolve
+                try:
+                    await page.goto("http://127.0.0.1:8080/static/blank.html", wait_until="domcontentloaded", timeout=5000)
+                except Exception:
+                    pass
                 await page.set_content(html, wait_until="domcontentloaded", timeout=15000)
                 # Brief wait for JS rendering (charts, mermaid, etc.)
                 await page.wait_for_timeout(1500)
+                # Wait for images to load
+                await page.evaluate("""() => Promise.all(
+                    Array.from(document.images).filter(i => !i.complete).map(
+                        i => new Promise(r => { i.onload = i.onerror = r; })
+                    )
+                )""")
                 # Force all elements visible (some pages use JS animations that
                 # set opacity:0 on load, which won't trigger with set_content)
                 await page.evaluate("""() => {

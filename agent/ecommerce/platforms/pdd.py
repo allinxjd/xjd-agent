@@ -88,6 +88,31 @@ class PddPlatform(EcommercePlatform):
             return True
         return False
 
+    async def _upload_images(self, page, image_paths: list[str]) -> list[str]:
+        """上传图片到当前页面的图片上传区域，返回成功上传的路径列表."""
+        from pathlib import Path
+        uploaded = []
+        file_inputs = page.locator('input[type="file"][accept*="image"]')
+        count = await file_inputs.count()
+        if count == 0:
+            file_inputs = page.locator('input[type="file"]')
+            count = await file_inputs.count()
+        if count == 0:
+            logger.warning("PDD: 未找到文件上传输入框")
+            return uploaded
+        for img_path in image_paths:
+            fp = Path(img_path).expanduser()
+            if not fp.exists():
+                logger.warning("PDD: 图片不存在: %s", fp)
+                continue
+            try:
+                await file_inputs.first.set_input_files(str(fp))
+                await page.wait_for_timeout(2000)
+                uploaded.append(str(fp))
+            except Exception as e:
+                logger.warning("PDD: 图片上传失败 %s: %s", fp, e)
+        return uploaded
+
     async def _extract_table_data(self, page, url: str) -> tuple[list[dict], str]:
         """通用表格数据提取: 导航到页面 → 等待加载 → 提取表格."""
         if not await self._safe_goto(page, url):
@@ -178,7 +203,7 @@ class PddPlatform(EcommercePlatform):
             return OperationResult.fail("get_product", str(e), ErrorCode.PLATFORM_ERROR)
 
     async def create_product(self, product: dict[str, Any]) -> OperationResult:
-        """发布新商品 — preview 模式，填表单但不提交."""
+        """发布新商品 — preview 模式，填表单但不提交，支持图片上传."""
         try:
             page = await self._get_page()
             if not await self.check_session():
@@ -191,11 +216,20 @@ class PddPlatform(EcommercePlatform):
                 val = product.get(key, "")
                 if val and await self._fill_input(page, label, str(val)):
                     filled[key] = val
+            images = product.get("images", [])
+            if isinstance(images, str):
+                images = [images]
+            uploaded = []
+            if images:
+                uploaded = await self._upload_images(page, images)
+                if uploaded:
+                    filled["images"] = uploaded
             await page.wait_for_timeout(1000)
             snapshot = await self._page_snapshot(page)
             return OperationResult.ok("create_product", {
                 "status": "preview",
                 "filled_fields": filled,
+                "uploaded_images": uploaded,
                 "page_snapshot": snapshot[:1500],
                 "url": page.url,
                 "instruction": "请确认信息无误后，调用 browser_action 点击提交按钮",
@@ -206,7 +240,7 @@ class PddPlatform(EcommercePlatform):
     # PLACEHOLDER_UPDATE
 
     async def update_product(self, product_id: str, updates: dict[str, Any]) -> OperationResult:
-        """编辑商品 — preview 模式."""
+        """编辑商品 — preview 模式，支持图片上传."""
         try:
             page = await self._get_page()
             if not await self.check_session():
@@ -223,11 +257,20 @@ class PddPlatform(EcommercePlatform):
                 val = updates.get(key, "")
                 if val and await self._fill_input(page, label, str(val)):
                     filled[key] = val
+            images = updates.get("images", [])
+            if isinstance(images, str):
+                images = [images]
+            uploaded = []
+            if images:
+                uploaded = await self._upload_images(page, images)
+                if uploaded:
+                    filled["images"] = uploaded
             snapshot = await self._page_snapshot(page)
             return OperationResult.ok("update_product", {
                 "status": "preview",
                 "product_id": product_id,
                 "updated_fields": filled,
+                "uploaded_images": uploaded,
                 "page_snapshot": snapshot[:1500],
                 "url": page.url,
                 "instruction": "请确认修改无误后，调用 browser_action 点击保存按钮",

@@ -26,7 +26,7 @@ open "https://ai.calabashai.cn"
 ### 步骤2：准备图片文件
 - 确认图片文件路径和名称
 - 检查文件格式（支持PNG、JPG等）
-- 示例：`/Users/evnzhang/Desktop/xjdlogo.PNG`
+- 示例：`~/Desktop/logo.PNG`
 
 ### 步骤3：上传图片
 1. 在平台首页找到上传区域
