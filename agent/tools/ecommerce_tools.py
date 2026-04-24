@@ -74,7 +74,7 @@ async def generate_ecommerce_image(
     password = secrets.get("ecommerce-image-pipeline", "CALABASH_PASSWORD")
     api_url = secrets.get("ecommerce-image-pipeline", "CALABASH_API_URL", "https://ai.allinxjd.com").rstrip("/")
     if not phone or not password:
-        return json.dumps({"success": False, "error": "未配置做图平台凭证，请在设置 → 技能凭证中配置 CALABASH_PHONE 和 CALABASH_PASSWORD"}, ensure_ascii=False)
+        return json.dumps({"success": False, "error": "做图平台凭证未配置。请打开 WebUI 设置 → 技能凭证 tab → 找到「电商图片研究生成流水线」→ 填入卡拉贝斯平台的手机号和密码后保存。\n\n如果还没有账号，请先到 ai.calabashai.cn 注册。"}, ensure_ascii=False)
 
     # 验证参考图片
     if not reference_image:
@@ -131,9 +131,7 @@ async def generate_ecommerce_image(
                 except Exception:
                     err_msg = resp.text
                 if "余额" in err_msg or "balance" in err_msg.lower() or "insufficient" in err_msg.lower() or resp.status_code == 402:
-                    import webbrowser
-                    webbrowser.open("https://ai.calabashai.cn")
-                    return json.dumps({"success": False, "error": "账户余额不足，已为您打开充值页面（ai.calabashai.cn），充值完成后重新生成即可"}, ensure_ascii=False)
+                    return json.dumps({"success": False, "error": "做图平台余额不足，请到 ai.calabashai.cn 登录后充值，充值完成后重新生成即可。"}, ensure_ascii=False)
             resp.raise_for_status()
             result = resp.json()
     except Exception as e:
