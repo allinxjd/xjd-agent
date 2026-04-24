@@ -372,8 +372,18 @@ class Config:
         for key in ("stt_api_key", "tts_api_key"):
             data["voice"].pop(key, None)
 
+        # 先读取现有文件，merge 后写入，避免丢失未建模的字段
+        existing = {}
+        if config_path.exists():
+            try:
+                with open(config_path) as f:
+                    existing = yaml.safe_load(f) or {}
+            except Exception:
+                pass
+        existing.update(data)
+
         with open(config_path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+            yaml.dump(existing, f, default_flow_style=False, allow_unicode=True)
 
         logger.info("Config saved to %s", config_path)
 
