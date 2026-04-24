@@ -2072,7 +2072,7 @@ function toggleSmartRouting() {
   const on = $('smartRoutingToggle').checked;
   $('cheapModelSection').style.display = on ? 'block' : 'none';
   if (!on) {
-    postJSON('/api/admin/model-config', { cheap_routing: false })
+    postJSON('/api/admin/config', { cheap_routing: false })
       .then(r => r.json())
       .then(d => { if (d.status==='ok') addSystemMsg(curLang==='zh'?'智能路由已关闭':'Smart routing disabled'); })
       .catch(() => {});
@@ -2084,7 +2084,7 @@ async function saveCheapModel() {
   if (!model) { addSystemMsg(curLang==='zh'?'请填写经济模型名称':'Cheap model name required'); return; }
   const api_key = $('cheapApiKey').value.trim();
   try {
-    const res = await postJSON('/api/admin/model-config', { cheap_provider: provider, cheap_model: model, cheap_api_key: api_key });
+    const res = await postJSON('/api/admin/config', { cheap_provider: provider, cheap_model: model, cheap_api_key: api_key });
     const data = await res.json();
     if (data.status === 'ok') {
       addSystemMsg(curLang==='zh'?'智能路由已启用':'Smart routing enabled');
