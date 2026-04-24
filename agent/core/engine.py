@@ -596,6 +596,7 @@ class AgentEngine:
                     role="assistant",
                     content=response.content,
                     tool_calls=response.tool_calls,
+                    reasoning_content=response.reasoning_content,
                 )
             )
             full_messages.append(
@@ -603,6 +604,7 @@ class AgentEngine:
                     role="assistant",
                     content=response.content,
                     tool_calls=response.tool_calls,
+                    reasoning_content=response.reasoning_content,
                 )
             )
 

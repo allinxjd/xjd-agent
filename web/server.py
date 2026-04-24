@@ -2115,7 +2115,9 @@ class WebServer:
         store = get_secrets_store()
         skills = []
         if self._engine and hasattr(self._engine, "_skill_manager") and self._engine._skill_manager:
-            for s in self._engine._skill_manager._skills.values():
+            sm = self._engine._skill_manager
+            await sm._ensure_loaded()
+            for s in sm._skills.values():
                 if not s.secrets:
                     continue
                 vals = store.get_all(s.skill_id)
@@ -2138,7 +2140,9 @@ class WebServer:
         skill_id = request.match_info["skill_id"]
         skill = None
         if self._engine and hasattr(self._engine, "_skill_manager") and self._engine._skill_manager:
-            skill = self._engine._skill_manager._skills.get(skill_id)
+            sm = self._engine._skill_manager
+            await sm._ensure_loaded()
+            skill = sm._skills.get(skill_id)
         if not skill:
             return web.json_response({"error": "Skill not found"}, status=404)
 
@@ -2176,7 +2180,9 @@ class WebServer:
 
         skill = None
         if self._engine and hasattr(self._engine, "_skill_manager") and self._engine._skill_manager:
-            skill = self._engine._skill_manager._skills.get(skill_id)
+            sm = self._engine._skill_manager
+            await sm._ensure_loaded()
+            skill = sm._skills.get(skill_id)
         if not skill:
             return web.json_response({"error": "Skill not found"}, status=404)
 

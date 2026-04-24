@@ -61,6 +61,7 @@ class Message:
     name: Optional[str] = None
     tool_call_id: Optional[str] = None
     tool_calls: Optional[list[dict[str, Any]]] = None
+    reasoning_content: Optional[str] = None
 
 @dataclass
 class ToolDefinition:
@@ -95,6 +96,7 @@ class CompletionResponse:
     model: str = ""
     finish_reason: str = ""  # "stop" | "tool_calls" | "length"
     thinking: Optional[str] = None  # 思考过程 (extended thinking)
+    reasoning_content: Optional[str] = None  # DeepSeek V4 reasoning
     raw: Optional[Any] = None  # 原始响应
 
 @dataclass
