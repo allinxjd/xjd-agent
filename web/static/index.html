@@ -523,6 +523,10 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+.toggle-slider { position:absolute;top:0;left:0;right:0;bottom:0;background:#555;border-radius:22px;cursor:pointer;transition:.3s; }
+.toggle-slider:before { content:"";position:absolute;height:16px;width:16px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s; }
+input:checked + .toggle-slider { background: var(--accent, #10a37f); }
+input:checked + .toggle-slider:before { transform: translateX(18px); }
 </style>
 </head>
 <body>
@@ -968,6 +972,38 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
         </div>
         <button class="settings-save-btn" onclick="saveModelConfig()" data-i18n="saveModel">Save Model</button>
       </div>
+      <!-- Smart Routing -->
+      <div class="settings-section">
+        <div class="settings-section-title" data-i18n="smartRouting">Smart Routing</div>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;" data-i18n="smartRoutingDesc">Simple questions auto-route to cheap model, complex ones use primary model</div>
+        <div class="setting-row">
+          <span class="setting-label" data-i18n="enabled">Enabled</span>
+          <label style="position:relative;display:inline-block;width:40px;height:22px;">
+            <input type="checkbox" id="smartRoutingToggle" onchange="toggleSmartRouting()" style="opacity:0;width:0;height:0;">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div id="cheapModelSection" style="display:none;">
+          <div class="setting-row"><span class="setting-label">Provider</span>
+            <select id="cheapProvider" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+              <option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option><option value="google">Google</option>
+              <option value="qwen">Qwen</option><option value="doubao">Doubao</option>
+              <option value="zhipu">Zhipu</option><option value="moonshot">Moonshot</option>
+              <option value="minimax">MiniMax</option><option value="mistral">Mistral</option>
+              <option value="openrouter">OpenRouter</option><option value="ollama">Ollama</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div class="setting-row"><span class="setting-label" data-i18n="cheapModel">Cheap Model</span>
+            <input type="text" id="cheapModelName" placeholder="deepseek-chat" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+          </div>
+          <div class="setting-row"><span class="setting-label">API Key</span>
+            <input type="password" id="cheapApiKey" placeholder="(same as primary if empty)" style="flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;">
+          </div>
+          <button class="settings-save-btn" onclick="saveCheapModel()" data-i18n="saveModel">Save</button>
+        </div>
+      </div>
       <!-- Backup Models -->
       <div class="settings-section">
         <div class="settings-section-title">Backup Models (Failover)</div>
@@ -1144,6 +1180,7 @@ const I18N = {
     systemPrompt: '系统提示词', enterSystemPrompt: '输入系统提示词...',
     savePrompt: '保存提示词', modelConfig: '模型配置',
     primaryModel: '主模型', cheapModel: '经济模型', smartRouting: '智能路由',
+    smartRoutingDesc: '简单问题自动用经济模型，复杂问题用主模型',
     serverStats: '服务器状态', uptime: '运行时间', totalMessages: '总消息数',
     activeSessions: '活跃会话', registeredTools: '已注册工具',
     availableProviders: '可用供应商',
@@ -1191,6 +1228,7 @@ const I18N = {
     systemPrompt: 'System Prompt', enterSystemPrompt: 'Enter system prompt...',
     savePrompt: 'Save Prompt', modelConfig: 'Model Configuration',
     primaryModel: 'Primary Model', cheapModel: 'Cheap Model', smartRouting: 'Smart Routing',
+    smartRoutingDesc: 'Simple questions auto-route to cheap model, complex ones use primary model',
     serverStats: 'Server Stats', uptime: 'Uptime', totalMessages: 'Total Messages',
     activeSessions: 'Active Sessions', registeredTools: 'Registered Tools',
     availableProviders: 'Available Providers',
@@ -1689,8 +1727,20 @@ async function loadModels() {
 }
 
 function renderModelList(serverData) {
+  const merged = JSON.parse(JSON.stringify(MODEL_PRESETS));
+  const inject = (prov, modelId) => {
+    if (!prov || !modelId) return;
+    if (!merged[prov]) merged[prov] = {icon: '\u2699\uFE0F', models: []};
+    if (!merged[prov].models.some(m => m.id === modelId)) {
+      merged[prov].models.unshift({id: modelId, name: modelId, desc: 'Custom'});
+    }
+  };
+  if (serverData.primary) inject(serverData.primary.provider, serverData.primary.model);
+  if (serverData.cheap) inject(serverData.cheap.provider, serverData.cheap.model);
+  if (serverData.failover) serverData.failover.forEach(f => inject(f.provider, f.model));
+  if (serverData.configured) serverData.configured.forEach(c => inject(c.provider, c.model));
   let html = '';
-  for (const [provKey, prov] of Object.entries(MODEL_PRESETS)) {
+  for (const [provKey, prov] of Object.entries(merged)) {
     html += `<div class="model-group"><div class="model-group-title">${prov.icon} ${provKey.charAt(0).toUpperCase() + provKey.slice(1)}</div>`;
     for (const m of prov.models) {
       const isActive = provKey === currentModel.provider && m.id === currentModel.model;
@@ -1937,6 +1987,12 @@ async function loadSettings() {
     $('settingProviders').innerHTML = providers.length
       ? providers.map(p => `<div style="padding:4px 0;">\u2022 ${p}</div>`).join('')
       : t('noProviders');
+    // Smart routing
+    const sr = modelsRes.cheap_routing || false;
+    $('smartRoutingToggle').checked = sr;
+    $('cheapModelSection').style.display = sr ? 'block' : 'none';
+    if (modelsRes.cheap?.provider) $('cheapProvider').value = modelsRes.cheap.provider;
+    if (modelsRes.cheap?.model) $('cheapModelName').value = modelsRes.cheap.model;
     loadBackupModels();
     loadKeyPool();
   } catch(e) { console.warn('Settings load failed', e); }
@@ -2009,6 +2065,31 @@ async function removeBackupModel(idx) {
     const data = await res.json();
     if (data.status === 'ok') { addSystemMsg('Backup removed'); loadBackupModels(); }
     else addSystemMsg(data.error || 'Failed');
+  } catch(e) { addSystemMsg('Error: ' + e.message); }
+}
+// ── Smart Routing ──
+function toggleSmartRouting() {
+  const on = $('smartRoutingToggle').checked;
+  $('cheapModelSection').style.display = on ? 'block' : 'none';
+  if (!on) {
+    postJSON('/api/admin/model-config', { cheap_routing: false })
+      .then(r => r.json())
+      .then(d => { if (d.status==='ok') addSystemMsg(curLang==='zh'?'智能路由已关闭':'Smart routing disabled'); })
+      .catch(() => {});
+  }
+}
+async function saveCheapModel() {
+  const provider = $('cheapProvider').value;
+  const model = $('cheapModelName').value.trim();
+  if (!model) { addSystemMsg(curLang==='zh'?'请填写经济模型名称':'Cheap model name required'); return; }
+  const api_key = $('cheapApiKey').value.trim();
+  try {
+    const res = await postJSON('/api/admin/model-config', { cheap_provider: provider, cheap_model: model, cheap_api_key: api_key });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      addSystemMsg(curLang==='zh'?'智能路由已启用':'Smart routing enabled');
+      $('cheapApiKey').value = '';
+    } else addSystemMsg(data.error || 'Failed');
   } catch(e) { addSystemMsg('Error: ' + e.message); }
 }
 async function loadKeyPool() {
