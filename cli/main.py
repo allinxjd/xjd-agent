@@ -418,6 +418,18 @@ async def _start_gateway(host: str, port: int) -> None:
         router.set_primary(primary.provider, primary.model)
         if config.model.failover:
             router.add_failover_from_config(config.model.failover)
+        if config.model.cheap:
+            cheap = config.model.cheap
+            if cheap.provider == primary.provider:
+                router.set_cheap(cheap.provider, cheap.model)
+            else:
+                cheap_prov = OpenAIProvider(
+                    provider_type=ProviderType(cheap.provider),
+                    api_key=cheap.api_key,
+                    base_url=cheap.base_url or None,
+                )
+                router.register_provider(cheap_prov)
+                router.set_cheap(cheap.provider, cheap.model)
 
     # 初始化 SkillManager + LearningLoop
     skill_manager = SkillManager()
@@ -677,6 +689,18 @@ async def _start_web(host: str, port: int) -> None:
         router.set_primary(primary.provider, primary.model)
         if config.model.failover:
             router.add_failover_from_config(config.model.failover)
+        if config.model.cheap:
+            cheap = config.model.cheap
+            if cheap.provider == primary.provider:
+                router.set_cheap(cheap.provider, cheap.model)
+            else:
+                cheap_prov = OpenAIProvider(
+                    provider_type=ProviderType(cheap.provider),
+                    api_key=cheap.api_key,
+                    base_url=cheap.base_url or None,
+                )
+                router.register_provider(cheap_prov)
+                router.set_cheap(cheap.provider, cheap.model)
 
     # 初始化 SkillManager
     from agent.skills.manager import SkillManager
@@ -924,6 +948,18 @@ async def _start_api(host: str, port: int, api_key: str) -> None:
         router.set_primary(primary.provider, primary.model)
         if config.model.failover:
             router.add_failover_from_config(config.model.failover)
+        if config.model.cheap:
+            cheap = config.model.cheap
+            if cheap.provider == primary.provider:
+                router.set_cheap(cheap.provider, cheap.model)
+            else:
+                cheap_prov = OpenAIProvider(
+                    provider_type=ProviderType(cheap.provider),
+                    api_key=cheap.api_key,
+                    base_url=cheap.base_url or None,
+                )
+                router.register_provider(cheap_prov)
+                router.set_cheap(cheap.provider, cheap.model)
 
     engine = AgentEngine(router=router)
 
