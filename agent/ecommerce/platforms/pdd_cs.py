@@ -109,6 +109,8 @@ class PddCSClient:
         self._standby_task: Optional[asyncio.Task] = None
         self._standby_interval = 120
         self._stats = {"received": 0, "replied": 0, "transferred": 0, "errors": 0}
+        self.on_offline: Optional[Callable[[str, str, str], Any]] = None
+        self._graceful_disconnect = False
 
     @property
     def connected(self) -> bool:
@@ -197,6 +199,7 @@ class PddCSClient:
             return False
 
     async def disconnect(self) -> None:
+        self._graceful_disconnect = True
         self._running = False
         self._standby = False
         for task in (self._recv_task, self._heartbeat_task, self._consumer_task, self._standby_task):
@@ -351,6 +354,8 @@ class PddCSClient:
                 except Exception as e:
                     logger.info("PDD CS: 待命重连失败 — %s，继续等待", e)
         self._standby = False
+        if not self._running and not self._graceful_disconnect and self.on_offline:
+            asyncio.create_task(self._fire_offline("standby_exit", "待命模式退出，客服已离线"))
         logger.info("PDD CS: 退出待命模式")
 
     async def _try_reconnect(self) -> None:
@@ -362,6 +367,8 @@ class PddCSClient:
             if self._reconnect_attempts >= self._max_reconnect:
                 logger.error("PDD CS: 达到最大重连次数 (%d)", self._max_reconnect)
                 self._running = False
+                if self.on_offline:
+                    asyncio.create_task(self._fire_offline("reconnect_exhausted", f"重连 {self._max_reconnect} 次均失败"))
                 return
             self._reconnect_attempts += 1
             delay = min(2 ** self._reconnect_attempts, 60)
@@ -376,6 +383,15 @@ class PddCSClient:
                     pass
                 self._ws = None
             await self.connect()
+
+    async def _fire_offline(self, reason: str, detail: str) -> None:
+        try:
+            if self.on_offline:
+                result = self.on_offline(self._shop_id, reason, detail)
+                if asyncio.iscoroutine(result):
+                    await result
+        except Exception as e:
+            logger.warning("on_offline callback failed: %s", e)
 
     def _build_send_payload(self, uid: str, content: str, msg_type: int = 0) -> dict:
         return {

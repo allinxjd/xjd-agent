@@ -348,6 +348,30 @@ async def _start_cs(platform: str = "pdd", shop_id: str = "") -> str:
             client.set_reply_engine(engine)
             ok = await client.connect()
             if ok:
+                async def _on_cs_offline(shop_id: str, reason: str, detail: str) -> None:
+                    try:
+                        from gateway.core.server import get_gateway_server
+                        gw = get_gateway_server()
+                        if not gw or not hasattr(gw, '_notifier') or not gw._notifier:
+                            return
+                        msg = f"⚠️ 拼多多客服离线\n店铺: {shop_id}\n原因: {detail}"
+                        sent = set()
+                        for s in gw._session_manager._sessions.values():
+                            if not s.is_active:
+                                continue
+                            for plat, cid in s.platform_bindings.items():
+                                key = f"{plat}:{cid}"
+                                if key in sent or plat not in gw._notifier._send_callbacks:
+                                    continue
+                                sent.add(key)
+                                await gw._notifier.send_direct(plat, cid, msg)
+                        if not sent:
+                            for ch in list(gw._notifier._send_callbacks):
+                                await gw._notifier.send_direct(ch, "", msg)
+                    except Exception as e:
+                        logger.warning("CS offline notify failed: %s", e)
+
+                client.on_offline = _on_cs_offline
                 actual_id = client.mall_id or account
                 actual_key = _cs_key(platform, actual_id)
                 _cs_clients[actual_key] = client

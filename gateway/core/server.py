@@ -51,6 +51,13 @@ from gateway.platforms.base import (
 
 logger = logging.getLogger(__name__)
 
+_gateway_instance: Optional["GatewayServer"] = None
+
+
+def get_gateway_server() -> Optional["GatewayServer"]:
+    return _gateway_instance
+
+
 @dataclass
 class GatewayStats:
     """网关统计."""
@@ -129,6 +136,9 @@ class GatewayServer:
 
         # 运行状态
         self._running = False
+
+        global _gateway_instance
+        _gateway_instance = self
 
         # 定时调度器 + 主动通知器 (start() 中初始化)
         self._scheduler: Any = None
