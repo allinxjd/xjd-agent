@@ -60,6 +60,7 @@
 | **PII 脱敏** | 手机号 / 身份证 / 邮箱 / 银行卡 / API Key / 密码自动检测与脱敏 |
 | **审计日志** | 持久化 JSONL + SHA-256 哈希链，防篡改完整性校验 |
 | **Inspector 监控** | 实时事件流面板 (LLM/Tool/Message/Cron/Error)，JSONL 审计持久化，历史查询 API |
+| **电商代运营** | 拼多多多店铺管理 / WebSocket 智能客服 / 自动回复 / 商品订单 / 广告投流 / 数据日报 |
 
 ## 快速开始
 
@@ -88,6 +89,24 @@ xjd-agent serve-mcp
 ```
 
 > Web UI 启动后，也可以在 Settings 面板中直接配置模型 Provider 和 API Key，无需手动编辑配置文件。
+
+## 电商代运营 (拼多多)
+
+```bash
+# 安装电商依赖
+pip install -e ".[ecommerce]"
+playwright install chromium
+
+# 启动 Web 管理面板
+xjd-agent web --port 8080
+```
+
+在 Web UI 的「技能」→「拼多多代运营」面板中：
+1. 点击「绑定新店铺」→ 弹出独立浏览器窗口 → 扫码登录 → 再次点击确认
+2. 重复绑定多个店铺，每个店铺独立 session 互不干扰
+3. 开启「智能客服」开关 → WebSocket 实时接管客服，AI 自动回复买家消息
+
+支持功能：多店铺管理 / 24h 智能客服 / 消息分类 / 知识库问答 / LLM 生成回复 / 转人工 / 商品订单管理 / 广告投流 / 数据日报
 
 ## 环境变量
 
