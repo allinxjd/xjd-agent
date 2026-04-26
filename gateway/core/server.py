@@ -479,6 +479,7 @@ class GatewayServer:
             result = await self._engine.run_turn(
                 prompt,
                 skill_id=getattr(task, 'skill_id', '') or None,
+                session_messages=[],
             )
         reply = result.content
         self._emit_inspector({
@@ -494,10 +495,21 @@ class GatewayServer:
         if task.platform and task.chat_id:
             adapter = self._adapters.get(task.platform)
             if adapter and adapter.is_running:
-                try:
-                    await adapter.send_text(task.chat_id, reply)
-                except Exception as e:
-                    logger.error("Cron task send failed (%s): %s", task.platform, e)
+                sent = False
+                for attempt in range(3):
+                    try:
+                        await adapter.send_text(task.chat_id, reply)
+                        sent = True
+                        break
+                    except Exception as e:
+                        logger.warning(
+                            "Cron task send attempt %d/3 failed (%s): %s",
+                            attempt + 1, task.platform, e,
+                        )
+                        if attempt < 2:
+                            await asyncio.sleep(3 * (attempt + 1))
+                if not sent:
+                    logger.error("Cron task send failed after 3 attempts (%s → %s)", task.platform, task.chat_id)
             elif self._notifier:
                 await self._notifier.send_direct(task.platform, task.chat_id, reply)
 

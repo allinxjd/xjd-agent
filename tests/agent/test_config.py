@@ -36,13 +36,15 @@ model:
     api_key: sk-xxx
 """)
 
-        os.environ["XJD_HOME"] = str(tmp_dir)
+        import agent.core.config as cfg_mod
+        old_home = cfg_mod.XJD_HOME
+        cfg_mod.XJD_HOME = tmp_dir
         try:
             config = Config.load()
             assert config.model.primary.provider == "deepseek"
             assert config.model.primary.model == "deepseek-chat"
         finally:
-            os.environ.pop("XJD_HOME", None)
+            cfg_mod.XJD_HOME = old_home
 
     def test_env_overrides(self):
         config = Config()

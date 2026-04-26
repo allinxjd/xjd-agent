@@ -762,6 +762,11 @@ async def _start_web(host: str, port: int) -> None:
     from agent.tools.knowledge_canvas import register_knowledge_canvas_tools
     register_knowledge_canvas_tools(tool_registry, memory_manager=memory_manager, learning_loop=learning_loop)
 
+    # Grounding 监控
+    from agent.core.grounding import GroundingTracker
+    grounding_tracker = GroundingTracker()
+    await grounding_tracker.initialize()
+
     # 初始化引擎 (传入 registry + 学习系统)
     engine = AgentEngine(
         router=router,
@@ -770,6 +775,7 @@ async def _start_web(host: str, port: int) -> None:
         learning_loop=learning_loop,
         registry=tool_registry,
         pin_manager=pin_manager,
+        grounding_tracker=grounding_tracker,
     )
     engine._skill_manager = skill_manager
     engine._memory_manager = memory_manager

@@ -47,6 +47,12 @@ DEFAULT_SYSTEM_PROMPT = """你是小巨蛋智能体 (XJD Agent)，一个强大�
 - 用户要求发消息、转告、通知某人时，必须立即调用 list_contacts 查看联系人，然后用 send_to_contact 发送，不要反问用户要联系方式
 - 如果不确定是否需要工具，先直接回答，用户会告诉你是否需要进一步操作
 - 每轮工具调用后，如果已经获得足够信息，立即给出最终回复，不要继续调用工具
+- 【真实性原则 — 绝对禁止编造】你的所有回复必须基于工具返回的真实数据或你确定掌握的知识。具体规则：
+  1. 涉及系统状态的问题（定时任务、配置、文件、进程、联系人等），必须先调用对应工具查询，用工具返回的数据回答
+  2. 涉及实时信息的问题（新闻、天气、股价、最新动态等），必须先用 web_search/web_fetch 获取数据
+  3. 绝对禁止编造不存在的事实、数据、时间、数量、状态。如果工具调用失败或没有相关数据，直接告诉用户"我没有查到相关信息"，不要自行补充
+  4. 回答中引用的数据必须能追溯到具体的工具调用结果。不能凭"印象"或"记忆"回答事实性问题
+  5. 如果用户追问细节而你没有对应数据，说"我需要查一下"然后调用工具，不要猜测
 - 任务完成后，考虑是否值得保存为技能
 - 危险操作 (删除文件、执行脚本) 需要用户确认
 - 绝对禁止关闭、重启、kill 用户的浏览器进程 (Chrome/Firefox/Safari)，不要执行 pkill/killall/osascript quit 等命令，不要建议用户关闭浏览器，不要建议用户以调试模式重启浏览器，不要检测 CDP 端口。浏览器连接由系统自动处理，CDP 连不上会自动用内置 Chromium
@@ -109,6 +115,7 @@ class TurnResult:
     tool_calls_made: int = 0
     total_usage: Usage = field(default_factory=Usage)
     duration_ms: float = 0.0
+    grounded: Optional[bool] = None
 
 class AgentEngine:
     """Agent 核心引擎.
@@ -132,12 +139,14 @@ class AgentEngine:
         learning_loop: Optional[Any] = None,
         registry: Optional[Any] = None,
         pin_manager: Optional[Any] = None,
+        grounding_tracker: Optional[Any] = None,
     ) -> None:
         self._router = router
         self._system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
         self._max_tool_rounds = max_tool_rounds
         self._max_context_tokens = max_context_tokens
         self._pin_manager = pin_manager
+        self._grounding_tracker = grounding_tracker
 
         # 外部工具注册表 (ToolRegistry)
         self._registry = registry
@@ -429,6 +438,13 @@ class AgentEngine:
                   and any(t.name in ("send_to_contact", "generate_ecommerce_image") for t in turn_tools)):
                 force_tool_rounds = 1
 
+        # Layer 2: 事实性查询 → 强制至少调一次工具
+        if not force_tool_rounds and turn_tools:
+            from agent.tools.tool_selector import is_factual_query
+            if is_factual_query(user_message):
+                force_tool_rounds = 1
+                logger.info("Factual query detected, forcing tool call")
+
         # cron 执行时排除 scheduled_task，防止模型在定时任务中创建新的定时任务
         if skill_id and turn_tools:
             turn_tools = [t for t in turn_tools if t.name != "scheduled_task"]
@@ -442,6 +458,7 @@ class AgentEngine:
         # 安全兜底: deadline (外层 timeout) + token 上限 + 绝对轮次上限
         max_safety_rounds = 50
         round_idx = 0
+        _grounding_retried = False
         while round_idx < max_safety_rounds:
             if abort_check and abort_check():
                 logger.info("run_turn aborted at round %d (client disconnected)", round_idx)
@@ -506,6 +523,110 @@ class AgentEngine:
 
             # 没有 tool calls → 最终回复
             if not response.tool_calls:
+                # Layer 3: Grounding Guard — 事实性问题 + 0 工具调用 → 强制重试
+                if (
+                    total_tool_calls == 0
+                    and round_idx == 0
+                    and turn_tools
+                ):
+                    from agent.tools.tool_selector import is_factual_query
+                    if is_factual_query(user_message):
+                        logger.warning("Grounding guard: factual query with no tool calls, forcing retry")
+                        full_messages.append(
+                            Message(role="user", content="请先使用工具查询真实数据后再回答，不要凭记忆回答。")
+                        )
+                        round_idx += 1
+                        continue
+
+                # Layer 4: Response Grounding Validator — 回复是否引用了工具数据
+                _grounded = None
+                _grounding_score = -1.0
+                _hard_blocked = False
+                if total_tool_calls > 0:
+                    from agent.tools.tool_selector import is_factual_query as _is_fq
+                    from agent.tools.tool_selector import is_factual_by_tools
+
+                    _called_names = []
+                    for m in messages:
+                        if m.role == "assistant" and m.tool_calls:
+                            for tc in m.tool_calls:
+                                _called_names.append(tc["function"]["name"])
+
+                    _is_factual = _is_fq(user_message) or is_factual_by_tools(_called_names)
+
+                    if _is_factual:
+                        tool_texts = [
+                            m.content for m in messages
+                            if m.role == "tool" and isinstance(m.content, str)
+                        ]
+                        if tool_texts:
+                            from agent.core.grounding import check_grounding
+                            _g_threshold = (
+                                self._grounding_tracker.threshold
+                                if self._grounding_tracker
+                                else 0.3
+                            )
+                            _grounded, _grounding_score = check_grounding(
+                                tool_texts, response.content or "",
+                                threshold=_g_threshold,
+                            )
+                            if not _grounded and not _grounding_retried:
+                                _grounding_retried = True
+                                logger.warning(
+                                    "Grounding validator: score %.2f, retrying (round %d)",
+                                    _grounding_score, round_idx,
+                                )
+                                full_messages.append(Message(
+                                    role="user",
+                                    content="你的回答似乎没有引用工具返回的实际数据。请仔细阅读上面工具返回的结果，基于真实数据重新回答。",
+                                ))
+                                round_idx += 1
+                                continue
+                            elif not _grounded and _grounding_retried:
+                                _hard_blocked = True
+                                logger.warning(
+                                    "Grounding hard block: score %.2f after retry",
+                                    _grounding_score,
+                                )
+                                _tool_summary = "\n---\n".join(
+                                    t[:500] for t in tool_texts[-3:]
+                                )
+                                response.content = (
+                                    "我查到了以下数据，但无法确认回答的准确性。"
+                                    "以下是工具返回的原始数据：\n\n"
+                                    + _tool_summary
+                                )
+
+                    if self._grounding_tracker and _is_factual:
+                        from agent.core.grounding import GroundingRecord
+                        self._grounding_tracker.record(GroundingRecord(
+                            timestamp=time.time(),
+                            user_message=user_message,
+                            is_factual=True,
+                            tool_calls_count=total_tool_calls,
+                            grounding_score=_grounding_score,
+                            grounded=bool(_grounded) if _grounded is not None else True,
+                            retried=_grounding_retried,
+                            hard_blocked=_hard_blocked,
+                        ))
+
+                    # 引用溯源 footer
+                    if (
+                        _grounded
+                        and _is_factual
+                        and _called_names
+                        and response.content
+                        and not _hard_blocked
+                    ):
+                        from agent.tools.tool_selector import TOOL_DISPLAY_NAMES
+                        _seen: list[str] = []
+                        for _n in _called_names:
+                            _disp = TOOL_DISPLAY_NAMES.get(_n)
+                            if _disp and _disp not in _seen:
+                                _seen.append(_disp)
+                        if _seen:
+                            response.content += f"\n\n📋 数据来源：{'、'.join(_seen)}"
+
                 if response.content and on_stream:
                     on_stream(response.content)
 
@@ -520,6 +641,7 @@ class AgentEngine:
                     tool_calls_made=total_tool_calls,
                     total_usage=total_usage,
                     duration_ms=(time.time() - start_time) * 1000,
+                    grounded=_grounded,
                 )
 
                 # 触发学习闭环

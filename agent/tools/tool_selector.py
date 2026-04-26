@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,94 @@ _ALWAYS_INCLUDE: set[str] = {
     "list_contacts",
     "set_contact_nickname",
 }
+
+_FACTUAL_KEYWORDS: set[str] = {
+    "定时任务", "cron", "任务列表", "有哪些任务", "什么时候执行",
+    "推送到哪", "配置", "设置了什么",
+    "联系人列表", "有哪些联系人", "好友列表",
+    "有哪些文件", "目录下有什么", "文件列表",
+    "今天", "最新", "现在", "当前", "目前", "实时",
+    "新闻", "资讯", "天气", "股价",
+    "有几个", "有多少", "几点", "什么时候", "状态",
+}
+
+_FACTUAL_EXTRA_KEYWORDS: set[str] = {
+    "帮我看看", "帮我查", "查一下", "看一下", "看看",
+    "推送", "推送情况", "执行情况", "运行情况",
+    "有没有", "是否有", "有什么",
+    "怎么样", "什么情况", "啥情况",
+    "多少钱", "价格", "库存", "销量", "订单",
+    "设了啥", "设了什么", "哪些",
+}
+
+_FACTUAL_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"有没有.+"),
+    re.compile(r".+怎么样"),
+    re.compile(r"看看.+"),
+    re.compile(r"查一下.+"),
+    re.compile(r".+是什么情况"),
+    re.compile(r"帮我.{0,4}(?:看|查|找|搜)"),
+    re.compile(r".+有几个"),
+    re.compile(r".+有多少"),
+    re.compile(r".+列表"),
+]
+
+_FACTUAL_DOMAIN_KEYWORDS: set[str] = {
+    "任务", "联系人", "文件", "搜索", "目录",
+    "数据库", "订单", "商品", "产品", "店铺",
+    "进程", "系统", "推送", "消息",
+}
+
+_QUESTION_MARKERS: set[str] = {
+    "?", "？", "吗", "呢", "啥", "什么", "几", "多少", "怎", "哪",
+}
+
+_FACTUAL_TOOL_NAMES: frozenset[str] = frozenset({
+    "web_search", "web_fetch", "list_directory", "read_file",
+    "list_contacts", "database_query", "json_query", "grep_search",
+    "system_info", "process_manager", "scheduled_task",
+    "ecommerce_list_products", "ecommerce_list_orders",
+    "ecommerce_shop_stats",
+})
+
+TOOL_DISPLAY_NAMES: dict[str, str] = {
+    "scheduled_task": "定时任务管理",
+    "list_contacts": "联系人列表",
+    "send_to_contact": "消息发送",
+    "web_search": "网络搜索",
+    "web_fetch": "网页获取",
+    "list_directory": "目录浏览",
+    "read_file": "文件读取",
+    "grep_search": "文件搜索",
+    "database_query": "数据库查询",
+    "json_query": "JSON查询",
+    "system_info": "系统信息",
+    "process_manager": "进程管理",
+    "ecommerce_list_products": "商品列表",
+    "ecommerce_list_orders": "订单列表",
+    "ecommerce_shop_stats": "店铺统计",
+}
+
+
+def is_factual_query(message: str) -> bool:
+    """检测是否为事实性查询（需要工具 grounding）— 三级检测."""
+    msg = message.lower()
+    if any(kw in msg for kw in _FACTUAL_KEYWORDS):
+        return True
+    if any(kw in msg for kw in _FACTUAL_EXTRA_KEYWORDS):
+        return True
+    if any(pat.search(msg) for pat in _FACTUAL_PATTERNS):
+        return True
+    if any(dk in msg for dk in _FACTUAL_DOMAIN_KEYWORDS):
+        if any(q in msg for q in _QUESTION_MARKERS):
+            return True
+    return False
+
+
+def is_factual_by_tools(tool_names: list[str]) -> bool:
+    """Tier B: 如果模型调用了事实性工具，则该查询是事实性的."""
+    return any(name in _FACTUAL_TOOL_NAMES for name in tool_names)
+
 
 _FEEDBACK_PATTERNS: set[str] = {
     "看不到", "不行", "还是不", "没有反应", "没反应", "出错", "找不到",

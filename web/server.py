@@ -170,6 +170,7 @@ class WebServer:
         app.router.add_post("/api/admin/model-keys", self._admin_model_keys)
         app.router.add_get("/api/admin/tools", self._admin_tools)
         app.router.add_get("/api/admin/memory", self._admin_memory)
+        app.router.add_get("/api/admin/grounding", self._admin_grounding)
         app.router.add_get("/api/admin/sessions", self._admin_sessions)
         app.router.add_post("/api/admin/config", self._admin_update_config)
         app.router.add_get("/api/admin/system-prompt", self._admin_get_system_prompt)
@@ -1298,6 +1299,17 @@ class WebServer:
             stats = await self._engine._memory_manager.get_stats()
             return web.json_response(stats)
         return web.json_response({"total_memories": 0})
+
+    async def _admin_grounding(self, request):
+        from aiohttp import web
+        user, err = self._require_admin(request)
+        if err:
+            return err
+        if self._engine and hasattr(self._engine, '_grounding_tracker') and self._engine._grounding_tracker:
+            days = int(request.query.get("days", "7"))
+            metrics = self._engine._grounding_tracker.get_historical_metrics(days)
+            return web.json_response(metrics)
+        return web.json_response({"total_checks": 0})
 
     async def _admin_sessions(self, request):
         from aiohttp import web
