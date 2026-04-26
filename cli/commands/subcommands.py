@@ -339,7 +339,10 @@ def setup_wizard():
 def check_update(auto: bool = False):
     """检查并更新到最新版本."""
     import asyncio
-    from agent.core.updater import get_current_version, check_latest_version, compare_versions, auto_update
+    from agent.core.updater import (
+        get_current_version, check_latest_version, compare_versions,
+        auto_update, _git_repo_dir, _git_pending_commits,
+    )
 
     current = get_current_version()
     console.print(f"  当前版本: [bold]{current}[/bold]")
@@ -348,36 +351,38 @@ def check_update(auto: bool = False):
     try:
         latest = asyncio.get_event_loop().run_until_complete(check_latest_version())
 
-        if latest and compare_versions(current, latest):
+        has_update = False
+        if latest and latest.startswith("commit:"):
+            count = latest.split(":")[1]
+            console.print(f"  [yellow]发现 {count} 个新提交可更新[/yellow]")
+            repo_dir = _git_repo_dir()
+            if repo_dir:
+                commits = _git_pending_commits(repo_dir)
+                if commits:
+                    for c in commits[:10]:
+                        console.print(f"  [dim]  {c}[/dim]")
+                    if len(commits) > 10:
+                        console.print(f"  [dim]  ... 还有 {len(commits) - 10} 个[/dim]")
+            has_update = True
+        elif latest and compare_versions(current, latest):
             console.print(f"  [yellow]发现新版本: {latest}[/yellow]")
-
-            if auto:
-                console.print("  [dim]正在自动更新...[/dim]")
-                ok = asyncio.get_event_loop().run_until_complete(auto_update())
-                if ok:
-                    console.print("  [green]更新成功! 请重启 xjd-agent[/green]")
-                else:
-                    console.print("  [red]自动更新失败，请手动运行: pip install --upgrade xjd-agent[/red]")
-            else:
-                console.print("  运行 [bold]xjd-agent update --auto[/bold] 自动更新")
-                console.print("  或手动: [bold]git pull && pip install -e .[/bold]")
+            has_update = True
         elif latest:
             console.print(f"  [green]已是最新版本 ({current})[/green]")
         else:
             console.print("  [yellow]无法检查远程版本，请手动运行: git pull[/yellow]")
 
-        # 检查 git 状态 (fetch 已在 check_latest_version 中完成)
-        repo_dir = str(__import__("pathlib").Path(__file__).parent.parent.parent)
-        result = subprocess.run(
-            ["git", "log", "--oneline", "HEAD..origin/main"],
-            capture_output=True, text=True, timeout=10,
-            cwd=repo_dir,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            commits = result.stdout.strip().split("\n")
-            console.print(f"\n  [yellow]Git 有 {len(commits)} 个新提交可拉取[/yellow]")
-            console.print(f"  [dim]{result.stdout.strip()[:300]}[/dim]")
-            console.print("  运行 [bold]xjd-agent update --auto[/bold] 或 [bold]git pull[/bold] 更新")
+        if has_update:
+            if auto:
+                console.print("  [dim]正在更新...[/dim]")
+                ok = asyncio.get_event_loop().run_until_complete(auto_update())
+                if ok:
+                    console.print("  [green]更新成功! 请重启 xjd-agent[/green]")
+                else:
+                    console.print("  [red]自动更新失败，请手动运行: git pull && pip install -e .[/red]")
+            else:
+                console.print("  运行 [bold]xjd-agent update --auto[/bold] 自动更新")
+                console.print("  或手动: [bold]git pull && pip install -e .[/bold]")
 
     except Exception as e:
         console.print(f"  [red]检查失败: {e}[/red]")
