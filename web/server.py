@@ -171,7 +171,6 @@ class WebServer:
         app.router.add_get("/api/admin/tools", self._admin_tools)
         app.router.add_get("/api/admin/memory", self._admin_memory)
         app.router.add_get("/api/admin/grounding", self._admin_grounding)
-        app.router.add_get("/admin/grounding", self._admin_grounding_page)
         app.router.add_get("/api/admin/sessions", self._admin_sessions)
         app.router.add_post("/api/admin/config", self._admin_update_config)
         app.router.add_get("/api/admin/system-prompt", self._admin_get_system_prompt)
@@ -1311,16 +1310,6 @@ class WebServer:
             metrics = self._engine._grounding_tracker.get_historical_metrics(days)
             return web.json_response(metrics)
         return web.json_response({"total_checks": 0})
-
-    async def _admin_grounding_page(self, request):
-        from aiohttp import web
-        user, err = self._require_admin(request)
-        if err:
-            return err
-        page = self._static_dir / "admin-grounding.html"
-        if page.exists():
-            return web.FileResponse(page)
-        return web.Response(text="admin-grounding.html not found", status=404)
 
     async def _admin_sessions(self, request):
         from aiohttp import web
