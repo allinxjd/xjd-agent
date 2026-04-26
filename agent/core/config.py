@@ -395,17 +395,17 @@ class Config:
             "XJD_PRIMARY_API_KEY": lambda v: setattr(self.model.primary, "api_key", v),
             "OPENAI_API_KEY": lambda v: (
                 setattr(self.model.primary, "api_key", v)
-                if not self.model.primary.api_key
+                if self.model.primary.provider in ("openai", "")
                 else None
             ),
             "ANTHROPIC_API_KEY": lambda v: (
                 setattr(self.model.primary, "api_key", v)
-                if self.model.primary.provider == "anthropic" and not self.model.primary.api_key
+                if self.model.primary.provider == "anthropic"
                 else None
             ),
             "DEEPSEEK_API_KEY": lambda v: (
                 setattr(self.model.primary, "api_key", v)
-                if self.model.primary.provider == "deepseek" and not self.model.primary.api_key
+                if self.model.primary.provider == "deepseek"
                 else None
             ),
             "XJD_GATEWAY_PORT": lambda v: setattr(self.gateway, "port", int(v)),

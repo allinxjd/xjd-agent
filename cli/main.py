@@ -832,11 +832,12 @@ async def _start_web(host: str, port: int) -> None:
         server._gateway = gw
         gw._web_server = server
 
+    model_info = f"{primary.provider}:{primary.model}" if primary.provider and primary.api_key else "未配置 (请在 Settings 中设置)"
     console.print(BANNER)
     console.print(Panel(
         f"  HTTP: http://{host}:{port}\n"
         f"  WebSocket: ws://{host}:{port}/ws\n"
-        f"  模型: {primary.provider}:{primary.model}\n"
+        f"  模型: {model_info}\n"
         f"  渠道: {len(config.channels)} 个已配置",
         style="cyan",
     ))
