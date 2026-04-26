@@ -82,7 +82,61 @@ class BrowserSessionManager:
         self._cdp_connected = False
         self._our_chromium_launched = False
 
-    # PLACEHOLDER_METHODS
+    async def create_isolated_context(self) -> Any:
+        """创建独立浏览器 context（独立 cookie jar），用于多店铺登录互不干扰.
+
+        返回的 context 用完后必须调用 close_context() 关闭。
+        """
+        await self._ensure_browser()
+        if self._cdp_connected and self._browser:
+            ctx = await self._browser.new_context(
+                viewport={"width": 1280, "height": 720},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+            )
+        else:
+            browser = await self._playwright.chromium.launch(
+                headless=False,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            ctx = await browser.new_context(
+                viewport={"width": 1280, "height": 720},
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+            )
+            ctx._isolated_browser = browser
+        return ctx
+
+    async def save_context_cookies(
+        self, ctx: Any, platform: str, account: str,
+    ) -> int:
+        """从指定 context 保存 cookies 到文件，返回 cookie 数量."""
+        try:
+            cookies = await ctx.cookies()
+            cookie_dir = self._data_dir / platform / account
+            cookie_dir.mkdir(parents=True, exist_ok=True)
+            cookie_file = cookie_dir / "cookies.json"
+            cookie_file.write_text(json.dumps(cookies, ensure_ascii=False, indent=2))
+            logger.info("Cookies saved (isolated): %s/%s (%d cookies)", platform, account, len(cookies))
+            return len(cookies)
+        except Exception as e:
+            logger.warning("save_context_cookies failed: %s/%s: %s", platform, account, e)
+            return 0
+
+    async def close_context(self, ctx: Any) -> None:
+        """关闭独立 context（及其关联的临时 browser）."""
+        try:
+            browser = getattr(ctx, "_isolated_browser", None)
+            await ctx.close()
+            if browser:
+                await browser.close()
+        except Exception as e:
+            logger.warning("close_context failed: %s", e)
 
     async def _ensure_browser(self) -> None:
         """懒加载浏览器: CDP 探测 → 启动 persistent context."""
@@ -189,16 +243,39 @@ class BrowserSessionManager:
         return session
 
     async def save_cookies(self, platform: str, account: str = "default") -> None:
-        """持久化 cookies (persistent context 自动保存，此方法仅用于 CDP 模式)."""
-        if self._cdp_connected:
-            key = f"{platform}:{account}"
-            session = self._sessions.get(key)
-            if session and session.context:
-                cookies = await session.context.cookies()
-                cookie_dir = self._data_dir / platform / account
-                cookie_dir.mkdir(parents=True, exist_ok=True)
-                cookie_file = cookie_dir / "cookies.json"
-                cookie_file.write_text(json.dumps(cookies, ensure_ascii=False, indent=2))
+        """持久化 cookies 到文件 (CDP 和 persistent context 模式均保存)."""
+        key = f"{platform}:{account}"
+        session = self._sessions.get(key)
+        ctx = session.context if session else self._context
+        if not ctx:
+            return
+        try:
+            cookies = await ctx.cookies()
+            cookie_dir = self._data_dir / platform / account
+            cookie_dir.mkdir(parents=True, exist_ok=True)
+            cookie_file = cookie_dir / "cookies.json"
+            cookie_file.write_text(json.dumps(cookies, ensure_ascii=False, indent=2))
+            logger.info("Cookies saved: %s/%s (%d cookies)", platform, account, len(cookies))
+        except Exception as e:
+            logger.warning("save_cookies failed for %s/%s: %s", platform, account, e)
+
+    def load_cookies(self, platform: str, account: str = "default") -> Optional[list[dict]]:
+        """从文件加载已保存的 cookies（不需要浏览器）."""
+        cookie_file = self._data_dir / platform / account / "cookies.json"
+        if cookie_file.exists():
+            try:
+                return json.loads(cookie_file.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+        return None
+
+    def list_accounts(self, platform: str) -> list[str]:
+        """列出某平台所有已保存 cookies 的账号."""
+        platform_dir = self._data_dir / platform
+        if not platform_dir.exists():
+            return []
+        return [d.name for d in sorted(platform_dir.iterdir())
+                if d.is_dir() and (d / "cookies.json").exists()]
 
     async def close_all(self) -> None:
         """关闭会话，但保持我们启动的 Chromium 运行以便下次 CDP 复用."""

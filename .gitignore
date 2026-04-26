@@ -66,3 +66,9 @@ inspector.jsonl
 
 # Local admin panels (not for open source)
 web/static/admin-grounding.html
+
+# PDD shops config (contains real shop IDs)
+config/pdd_shops.json
+
+# Local test scripts
+scripts/test_pdd_login.py

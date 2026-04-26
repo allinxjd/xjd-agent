@@ -137,6 +137,37 @@ class EcommercePlatform(ABC):
             "reply_message", "未实现", ErrorCode.NOT_IMPLEMENTED,
         )
 
+    # ── 广告投放 ──
+
+    async def create_ad_campaign(
+        self, config: dict[str, Any],
+    ) -> OperationResult:
+        return OperationResult.fail(
+            "create_ad_campaign", "未实现", ErrorCode.NOT_IMPLEMENTED,
+        )
+
+    async def pause_ad_campaign(self, campaign_id: str) -> OperationResult:
+        return OperationResult.fail(
+            "pause_ad_campaign", "未实现", ErrorCode.NOT_IMPLEMENTED,
+        )
+
+    async def resume_ad_campaign(self, campaign_id: str) -> OperationResult:
+        return OperationResult.fail(
+            "resume_ad_campaign", "未实现", ErrorCode.NOT_IMPLEMENTED,
+        )
+
+    async def get_ad_stats(self, campaign_id: str) -> OperationResult:
+        return OperationResult.fail(
+            "get_ad_stats", "未实现", ErrorCode.NOT_IMPLEMENTED,
+        )
+
+    async def adjust_ad_budget(
+        self, campaign_id: str, new_budget: float,
+    ) -> OperationResult:
+        return OperationResult.fail(
+            "adjust_ad_budget", "未实现", ErrorCode.NOT_IMPLEMENTED,
+        )
+
     # ── 生命周期 ──
 
     async def close(self) -> None:

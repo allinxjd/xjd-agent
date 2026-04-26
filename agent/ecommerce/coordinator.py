@@ -27,6 +27,10 @@ INTENT_ROLE_MAP: dict[str, list[str]] = {
     "recommendation": ["marketing"],
     "promotion": ["marketing"],
     "image_generation": [],  # 空列表 → 交给主引擎处理
+    "start_cs": ["customer_service"],
+    "ad_management": ["marketing"],
+    "batch_operation": ["order"],
+    "daily_report": ["marketing", "order"],
     "general": ["customer_service"],
 }
 
@@ -138,6 +142,10 @@ class ECommerceCoordinator(MultiAgentManager):
                 "poster", "image", "generate", "做张", "帮我做",
                 "竞品", "调研", "研究", "先看看", "参考", "对比",
             ],
+            "start_cs": ["启动客服", "开启客服", "智能客服", "自动回复", "start cs"],
+            "ad_management": ["广告", "投流", "推广计划", "竞价", "出价", "ad", "投放"],
+            "batch_operation": ["批量发货", "批量上架", "批量下架", "批量操作"],
+            "daily_report": ["日报", "周报", "数据报告", "运营报告", "report"],
         }
 
         for intent, keywords in intent_keywords.items():

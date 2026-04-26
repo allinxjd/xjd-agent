@@ -610,6 +610,30 @@
 .recharge-auth-form .auth-row button { flex-shrink:0; }
 .recharge-auth-status { font-size:13px; color:var(--green); margin-bottom:12px; }
 
+/* ── PDD Shop Management ── */
+.shop-management { margin-top:12px; padding:12px; background:rgba(255,255,255,0.03); border-radius:8px; border:1px solid rgba(255,255,255,0.08); }
+.shop-management-title { font-size:13px; font-weight:600; color:var(--text); margin-bottom:10px; display:flex; align-items:center; justify-content:space-between; }
+.shop-card { padding:10px 12px; background:rgba(255,255,255,0.04); border-radius:6px; margin-bottom:8px; border:1px solid rgba(255,255,255,0.06); }
+.shop-card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+.shop-card-title { font-size:12px; font-weight:500; color:var(--text); }
+.shop-card-status { display:flex; gap:8px; font-size:11px; color:var(--text-dim); margin-bottom:6px; }
+.shop-status-dot { display:inline-block; width:7px; height:7px; border-radius:50%; margin-right:3px; vertical-align:middle; }
+.shop-status-dot.online { background:var(--green); }
+.shop-status-dot.standby { background:var(--orange); }
+.shop-status-dot.offline { background:rgba(255,255,255,0.2); }
+.shop-status-ok { color:var(--green); }
+.shop-status-err { color:var(--red); }
+.shop-card-modules { display:flex; gap:10px; flex-wrap:wrap; margin-top:6px; }
+.module-toggle { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text-dim); cursor:pointer; }
+.module-toggle input[type="checkbox"] { width:14px; height:14px; accent-color:var(--green); cursor:pointer; }
+.module-toggle-slider { display:none; }
+.module-toggle-label { user-select:none; }
+.shop-unbind-btn { font-size:11px; padding:3px 8px; background:transparent; border:1px solid rgba(255,255,255,0.15); color:var(--text-dim); border-radius:4px; cursor:pointer; }
+.shop-unbind-btn:hover { border-color:var(--red); color:var(--red); }
+.shop-bind-btn { font-size:12px; padding:4px 12px; background:var(--purple); color:#fff; border:none; border-radius:4px; cursor:pointer; margin-top:8px; }
+.shop-bind-btn:hover { opacity:0.85; }
+.shop-empty { font-size:12px; color:var(--text-dim); padding:8px 0; }
+
 /* ── Responsive ── */
 @media (max-width: 768px) {
   .file-tree { width: 180px; }

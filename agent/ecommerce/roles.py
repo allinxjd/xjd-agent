@@ -21,7 +21,10 @@ ORDER_AGENT = AgentRole(
         "4. 解答订单相关问题\n\n"
         "回答要准确、简洁。涉及退款等敏感操作时，需确认用户身份和订单信息。"
     ),
-    tools_filter=["ecommerce_order"],
+    tools_filter=[
+        "ecommerce_list_orders", "ecommerce_ship_order", "ecommerce_batch_ship",
+        "ecommerce_get_product_stats", "ecommerce_daily_report",
+    ],
     max_tool_rounds=10,
     keywords=[
         "订单", "物流", "快递", "发货", "退货", "退款", "换货",
@@ -42,7 +45,10 @@ INVENTORY_AGENT = AgentRole(
         "4. 管理 SKU 和变体信息\n\n"
         "数据要精确，库存数量必须实时查询，不要猜测。"
     ),
-    tools_filter=["ecommerce_inventory"],
+    tools_filter=[
+        "ecommerce_list_products", "ecommerce_get_product", "ecommerce_create_product",
+        "ecommerce_update_product", "ecommerce_toggle_product", "ecommerce_get_product_stats",
+    ],
     max_tool_rounds=8,
     keywords=[
         "库存", "存货", "缺货", "补货", "SKU", "数量", "有货",
@@ -63,7 +69,10 @@ CUSTOMER_SERVICE_AGENT = AgentRole(
         "4. 提供购物指导\n\n"
         "态度友好专业，优先解决客户问题。复杂问题可升级给人工客服。"
     ),
-    tools_filter=["ecommerce_service"],
+    tools_filter=[
+        "ecommerce_list_messages", "ecommerce_reply_message",
+        "ecommerce_start_cs", "ecommerce_stop_cs", "ecommerce_cs_status",
+    ],
     max_tool_rounds=10,
     keywords=[
         "咨询", "投诉", "售后", "客服", "问题", "帮助", "怎么用",
@@ -84,7 +93,11 @@ MARKETING_AGENT = AgentRole(
         "4. 管理优惠券和折扣信息\n\n"
         "推荐要个性化，基于用户历史和偏好。不要过度推销。"
     ),
-    tools_filter=["ecommerce_marketing"],
+    tools_filter=[
+        "ecommerce_create_promotion", "ecommerce_list_promotions",
+        "ecommerce_create_ad", "ecommerce_manage_ad", "ecommerce_ad_stats",
+        "ecommerce_daily_report", "ecommerce_shop_stats",
+    ],
     max_tool_rounds=8,
     keywords=[
         "推荐", "优惠", "促销", "折扣", "优惠券", "活动", "搭配",

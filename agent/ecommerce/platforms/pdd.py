@@ -27,9 +27,12 @@ ORDER_LIST_URL = "https://mms.pinduoduo.com/orders/list"
 GOODS_LIST_URL = "https://mms.pinduoduo.com/goods/goods_list"
 GOODS_ADD_URL = "https://mms.pinduoduo.com/goods/add"
 DATA_URL = "https://mms.pinduoduo.com/sycm/overview"
-MSG_URL = "https://mms.pinduoduo.com/customer-service/im"
+MSG_URL = "https://mms.pinduoduo.com/chat-merchant/index.html"
 PROMO_URL = "https://mms.pinduoduo.com/promotion/list"
 PROMO_CREATE_URL = "https://mms.pinduoduo.com/promotion/create"
+AD_LIST_URL = "https://mms.pinduoduo.com/ad/list"
+AD_CREATE_URL = "https://mms.pinduoduo.com/ad/create"
+AD_DETAIL_URL = "https://mms.pinduoduo.com/ad/detail"
 
 
 @register_platform
@@ -143,13 +146,23 @@ class PddPlatform(EcommercePlatform):
             logger.warning("PDD session check failed: %s", e)
             return False
 
-    async def login(self, credentials: dict[str, Any]) -> OperationResult:
+    async def login(self, credentials: dict[str, Any], force_new: bool = False) -> OperationResult:
         try:
             page = await self._get_page()
-            if await self.check_session():
-                await self._session.save_cookies("pdd")
+            if not force_new and await self.check_session():
+                info = await self._detect_shop_info()
+                mall_id = info.get("mall_id", "")
+                mall_name = info.get("mall_name", "")
+                if mall_id:
+                    await self._session.save_cookies("pdd", mall_id)
+                else:
+                    await self._session.save_cookies("pdd")
                 mode = "CDP (复用已登录浏览器)" if self._session._cdp_connected else "内置 Chromium"
-                return OperationResult.ok("login", {"message": f"已登录拼多多商家后台 [{mode}]"})
+                return OperationResult.ok("login", {
+                    "message": f"已登录拼多多商家后台 [{mode}]",
+                    "mall_id": mall_id,
+                    "mall_name": mall_name,
+                })
             if not await self._safe_goto(page, LOGIN_URL):
                 return OperationResult.fail("login", "无法访问登录页", ErrorCode.NETWORK_ERROR)
             mode = "CDP (复用已登录浏览器)" if self._session._cdp_connected else "内置 Chromium"
@@ -160,6 +173,49 @@ class PddPlatform(EcommercePlatform):
             })
         except Exception as e:
             return OperationResult.fail("login", f"登录失败: {e}", ErrorCode.PLATFORM_ERROR)
+
+    async def _detect_shop_info(self) -> dict[str, str]:
+        """登录后检测店铺 mall_id 和 mall_name."""
+        info: dict[str, str] = {}
+        try:
+            import aiohttp
+            session = await self._session.get_session("pdd")
+            raw_cookies = await session.context.cookies()
+            cookie_dict = {c["name"]: c["value"] for c in raw_cookies if "pinduoduo" in c.get("domain", "")}
+            if not cookie_dict:
+                return info
+            cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
+            headers = {"Cookie": cookie_str}
+            async with aiohttp.ClientSession() as http:
+                async with http.post(
+                    "https://mms.pinduoduo.com/chats/getToken",
+                    headers=headers, json={"version": "3"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    data = await resp.json()
+                    mall_id = data.get("mall_id") or data.get("result", {}).get("mall_id")
+                    if mall_id:
+                        info["mall_id"] = str(mall_id)
+                        logger.info("PDD 检测到店铺 mall_id=%s", mall_id)
+                # 获取店铺名称
+                async with http.get(
+                    "https://mms.pinduoduo.com/sydney/api/shop/info",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp2:
+                    data2 = await resp2.json()
+                    name = (
+                        data2.get("result", {}).get("mall_name")
+                        or data2.get("mall_name")
+                        or data2.get("result", {}).get("mallName")
+                        or ""
+                    )
+                    if name:
+                        info["mall_name"] = name
+                        logger.info("PDD 店铺名称=%s", name)
+        except Exception as e:
+            logger.warning("PDD 检测店铺信息失败: %s", e)
+        return info
 
     # PLACEHOLDER_PRODUCTS
 
@@ -475,7 +531,7 @@ class PddPlatform(EcommercePlatform):
             if not await self.check_session():
                 return OperationResult.fail("reply_message", "未登录", ErrorCode.AUTH_REQUIRED)
             current = page.url or ""
-            if "customer-service" not in current and "im" not in current:
+            if "chat-merchant" not in current:
                 if not await self._safe_goto(page, MSG_URL):
                     return OperationResult.fail("reply_message", "无法访问客服页面", ErrorCode.NETWORK_ERROR)
                 await page.wait_for_timeout(3000)
@@ -547,3 +603,91 @@ class PddPlatform(EcommercePlatform):
             })
         except Exception as e:
             return OperationResult.fail("create_promotion", str(e), ErrorCode.PLATFORM_ERROR)
+
+    # ── 广告投放 ──
+
+    async def create_ad_campaign(self, config: dict[str, Any]) -> OperationResult:
+        try:
+            page = await self._get_page()
+            if not await self._safe_goto(page, AD_CREATE_URL):
+                return OperationResult.fail("create_ad", "无法打开广告创建页", ErrorCode.PLATFORM_ERROR)
+            await page.wait_for_load_state("networkidle", timeout=10000)
+            filled = []
+            for key in ("campaign_name", "budget", "bid"):
+                val = config.get(key)
+                if val and await self._fill_input(page, key, str(val)):
+                    filled.append(key)
+            snapshot = await self._page_snapshot(page)
+            return OperationResult.ok("create_ad", {
+                "status": "preview",
+                "filled_fields": filled,
+                "page_snapshot": snapshot[:1500],
+                "url": page.url,
+                "instruction": "请确认广告信息无误后，调用 browser_action 点击提交按钮",
+            })
+        except Exception as e:
+            return OperationResult.fail("create_ad", str(e), ErrorCode.PLATFORM_ERROR)
+
+    async def pause_ad_campaign(self, campaign_id: str) -> OperationResult:
+        return await self._toggle_ad(campaign_id, pause=True)
+
+    async def resume_ad_campaign(self, campaign_id: str) -> OperationResult:
+        return await self._toggle_ad(campaign_id, pause=False)
+
+    async def _toggle_ad(self, campaign_id: str, pause: bool) -> OperationResult:
+        action = "pause_ad" if pause else "resume_ad"
+        try:
+            page = await self._get_page()
+            if not await self._safe_goto(page, AD_LIST_URL):
+                return OperationResult.fail(action, "无法打开广告列表", ErrorCode.PLATFORM_ERROR)
+            await page.wait_for_load_state("networkidle", timeout=10000)
+            row = page.locator(f'text="{campaign_id}"').first
+            if await row.count() == 0:
+                return OperationResult.fail(action, f"未找到广告 {campaign_id}", ErrorCode.ITEM_NOT_FOUND)
+            btn_text = ["暂停", "pause"] if pause else ["恢复", "启动", "resume"]
+            parent = row.locator("xpath=ancestor::tr")
+            for t in btn_text:
+                btn = parent.get_by_role("button", name=t)
+                if await btn.count() > 0:
+                    await btn.first.click()
+                    await page.wait_for_timeout(1000)
+                    return OperationResult.ok(action, {"campaign_id": campaign_id})
+            return OperationResult.fail(action, "未找到操作按钮", ErrorCode.PLATFORM_ERROR)
+        except Exception as e:
+            return OperationResult.fail(action, str(e), ErrorCode.PLATFORM_ERROR)
+
+    async def get_ad_stats(self, campaign_id: str) -> OperationResult:
+        try:
+            page = await self._get_page()
+            url = f"{AD_DETAIL_URL}?id={campaign_id}"
+            if not await self._safe_goto(page, url):
+                return OperationResult.fail("ad_stats", "无法打开广告详情", ErrorCode.PLATFORM_ERROR)
+            await page.wait_for_load_state("networkidle", timeout=10000)
+            snapshot = await self._page_snapshot(page)
+            return OperationResult.ok("ad_stats", {
+                "campaign_id": campaign_id,
+                "page_snapshot": snapshot[:2000],
+                "url": page.url,
+            })
+        except Exception as e:
+            return OperationResult.fail("ad_stats", str(e), ErrorCode.PLATFORM_ERROR)
+
+    async def adjust_ad_budget(self, campaign_id: str, new_budget: float) -> OperationResult:
+        try:
+            page = await self._get_page()
+            url = f"{AD_DETAIL_URL}?id={campaign_id}"
+            if not await self._safe_goto(page, url):
+                return OperationResult.fail("adjust_budget", "无法打开广告详情", ErrorCode.PLATFORM_ERROR)
+            await page.wait_for_load_state("networkidle", timeout=10000)
+            if await self._fill_input(page, "预算", str(new_budget)):
+                snapshot = await self._page_snapshot(page)
+                return OperationResult.ok("adjust_budget", {
+                    "status": "preview",
+                    "campaign_id": campaign_id,
+                    "new_budget": new_budget,
+                    "page_snapshot": snapshot[:1500],
+                    "instruction": "请确认预算修改后，调用 browser_action 点击保存",
+                })
+            return OperationResult.fail("adjust_budget", "未找到预算输入框", ErrorCode.PLATFORM_ERROR)
+        except Exception as e:
+            return OperationResult.fail("adjust_budget", str(e), ErrorCode.PLATFORM_ERROR)

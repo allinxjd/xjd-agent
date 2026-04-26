@@ -228,6 +228,10 @@ class WebServer:
         app.router.add_post("/api/admin/gateway/voice/test", self._gw_test_voice)
         app.router.add_get("/api/admin/gateway/ecommerce", self._gw_get_ecommerce)
         app.router.add_post("/api/admin/gateway/ecommerce", self._gw_save_ecommerce)
+        app.router.add_get("/api/admin/gateway/pdd/shops", self._gw_pdd_shops_list)
+        app.router.add_post("/api/admin/gateway/pdd/shops/toggle", self._gw_pdd_shops_toggle)
+        app.router.add_post("/api/admin/gateway/pdd/shops/bind", self._gw_pdd_shops_bind)
+        app.router.add_post("/api/admin/gateway/pdd/shops/unbind", self._gw_pdd_shops_unbind)
         app.router.add_get("/api/admin/gateway/calabash", self._gw_get_calabash)
         app.router.add_post("/api/admin/gateway/calabash", self._gw_save_calabash)
         app.router.add_get("/api/admin/gateway/cron/tasks", self._gw_cron_list)
@@ -2058,6 +2062,293 @@ class WebServer:
         admin_name = user.username if user else "anonymous"
         self._audit(admin_name, "ECOMMERCE_TOGGLE", str(enabled), request.remote or "")
         return web.json_response({"status": "ok", "ecommerce_mode": enabled})
+
+    # ── PDD 店铺管理 ──
+
+    def _load_pdd_shops_config(self) -> dict:
+        import json as _json
+        from pathlib import Path
+        p = Path(__file__).resolve().parent.parent / "config" / "pdd_shops.json"
+        if p.exists():
+            try:
+                return _json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {"shops": {}}
+
+    def _save_pdd_shops_config(self, data: dict) -> None:
+        import json as _json
+        from pathlib import Path
+        p = Path(__file__).resolve().parent.parent / "config" / "pdd_shops.json"
+        p.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    async def _gw_pdd_shops_list(self, request):
+        """GET /api/admin/gateway/pdd/shops."""
+        from aiohttp import web
+        user, err = self._require_admin(request)
+        if err:
+            return err
+        from agent.ecommerce.session import get_session_manager
+        from agent.tools.ecommerce_ops_tools import _cs_clients, _cs_key
+        sm = get_session_manager()
+        accounts = sm.list_accounts("pdd")
+        config = self._load_pdd_shops_config()
+        config_changed = False
+        shops = []
+        for acc in accounts:
+            key = _cs_key("pdd", acc)
+            client = _cs_clients.get(key)
+            cs_status = "not_running"
+            if client:
+                if client.standby:
+                    cs_status = "standby"
+                elif client.connected:
+                    cs_status = "connected"
+                else:
+                    cs_status = "disconnected"
+            shop_cfg = config.get("shops", {}).get(acc, {})
+            mall_name = shop_cfg.get("mall_name", "")
+            if not mall_name:
+                mall_name = await self._fetch_shop_name(sm, acc)
+                if mall_name:
+                    if acc not in config.get("shops", {}):
+                        config.setdefault("shops", {})[acc] = {"modules": {"smart_cs": False, "auto_ship": False, "ad_manage": False}}
+                    config["shops"][acc]["mall_name"] = mall_name
+                    config_changed = True
+            modules = shop_cfg.get("modules", {"smart_cs": False, "auto_ship": False, "ad_manage": False})
+            shops.append({
+                "mall_id": acc,
+                "mall_name": mall_name,
+                "has_cookies": True,
+                "cs_status": cs_status,
+                "modules": modules,
+            })
+        if config_changed:
+            self._save_pdd_shops_config(config)
+        return web.json_response({"shops": shops})
+
+    async def _fetch_shop_name(self, sm, account: str) -> str:
+        """从 cookies 调多个 PDD 接口获取真实店铺名."""
+        import aiohttp as aio
+        cookies_list = sm.load_cookies("pdd", account)
+        if not cookies_list:
+            return ""
+        cookie_dict = {c["name"]: c["value"] for c in cookies_list if "pinduoduo" in c.get("domain", "")}
+        if not cookie_dict:
+            return ""
+        cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
+        headers = {"Cookie": cookie_str}
+        try:
+            async with aio.ClientSession() as http:
+                return await self._fetch_mall_name_from_api(http, headers)
+        except Exception:
+            return ""
+
+    async def _gw_pdd_shops_toggle(self, request):
+        """POST /api/admin/gateway/pdd/shops/toggle — {mall_id, module, enabled}."""
+        from aiohttp import web
+        user, err = self._require_admin(request)
+        if err:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        mall_id = body.get("mall_id", "")
+        module = body.get("module", "")
+        enabled = body.get("enabled", False)
+        if not mall_id or module not in ("smart_cs", "auto_ship", "ad_manage"):
+            return web.json_response({"error": "Invalid params"}, status=400)
+
+        config = self._load_pdd_shops_config()
+        if mall_id not in config["shops"]:
+            config["shops"][mall_id] = {"modules": {"smart_cs": False, "auto_ship": False, "ad_manage": False}}
+        config["shops"][mall_id]["modules"][module] = enabled
+        self._save_pdd_shops_config(config)
+
+        if module == "smart_cs":
+            from agent.tools.ecommerce_ops_tools import _start_cs, _stop_cs
+            if enabled:
+                await _start_cs(platform="pdd", shop_id=mall_id)
+            else:
+                await _stop_cs(platform="pdd", shop_id=mall_id)
+
+        admin_name = user.username if user else "anonymous"
+        self._audit(admin_name, "PDD_SHOP_TOGGLE", f"{mall_id}:{module}={enabled}", request.remote or "")
+        return web.json_response({"status": "ok", "mall_id": mall_id, "module": module, "enabled": enabled})
+
+    async def _gw_pdd_shops_bind(self, request):
+        """POST /api/admin/gateway/pdd/shops/bind — 独立 context 登录，多店铺互不干扰."""
+        from aiohttp import web
+        user, err = self._require_admin(request)
+        if err:
+            return err
+        from agent.tools.ecommerce_ops_tools import _get_platform
+        from agent.ecommerce.session import get_session_manager
+        import aiohttp as aio
+        p = _get_platform("pdd")
+        if not p:
+            return web.json_response({"error": "PDD platform not available"}, status=500)
+        sm = get_session_manager()
+        existing = set(sm.list_accounts("pdd"))
+
+        pending_ctx = getattr(self, "_pdd_bind_ctx", None)
+        pending_page = getattr(self, "_pdd_bind_page", None)
+
+        if pending_ctx and pending_page:
+            try:
+                page_url = pending_page.url or ""
+            except Exception:
+                await sm.close_context(pending_ctx)
+                self._pdd_bind_ctx = None
+                self._pdd_bind_page = None
+                pending_ctx = None
+                page_url = ""
+            if pending_ctx and "mms.pinduoduo.com" in page_url and "/login" not in page_url:
+                info = await self._detect_shop_from_context(pending_ctx)
+                mall_id = info.get("mall_id", "")
+                mall_name = info.get("mall_name", "")
+                if not mall_id:
+                    return web.json_response({
+                        "status": "waiting",
+                        "message": "登录检测中，请确认已完成扫码登录后再次点击绑定",
+                    })
+                if mall_id in existing:
+                    await sm.save_context_cookies(pending_ctx, "pdd", mall_id)
+                    await sm.close_context(pending_ctx)
+                    self._pdd_bind_ctx = None
+                    self._pdd_bind_page = None
+                    config = self._load_pdd_shops_config()
+                    if mall_id in config["shops"] and mall_name:
+                        config["shops"][mall_id]["mall_name"] = mall_name
+                        self._save_pdd_shops_config(config)
+                    return web.json_response({
+                        "status": "ok", "mall_id": mall_id, "mall_name": mall_name,
+                        "message": f"店铺 {mall_name or mall_id} cookies 已刷新",
+                    })
+                await sm.save_context_cookies(pending_ctx, "pdd", mall_id)
+                await sm.close_context(pending_ctx)
+                self._pdd_bind_ctx = None
+                self._pdd_bind_page = None
+                config = self._load_pdd_shops_config()
+                if mall_id not in config["shops"]:
+                    config["shops"][mall_id] = {"modules": {"smart_cs": False, "auto_ship": False, "ad_manage": False}}
+                if mall_name:
+                    config["shops"][mall_id]["mall_name"] = mall_name
+                self._save_pdd_shops_config(config)
+                return web.json_response({"status": "ok", "mall_id": mall_id, "mall_name": mall_name})
+            else:
+                return web.json_response({
+                    "status": "waiting",
+                    "message": "请在弹出的浏览器窗口中扫码登录拼多多，登录完成后再次点击绑定",
+                })
+
+        ctx = await sm.create_isolated_context()
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        try:
+            await page.goto("https://mms.pinduoduo.com/login", timeout=15000)
+        except Exception:
+            pass
+        self._pdd_bind_ctx = ctx
+        self._pdd_bind_page = page
+        return web.json_response({
+            "status": "waiting",
+            "message": "已打开独立登录窗口，请在浏览器中扫码登录拼多多，登录完成后再次点击绑定",
+        })
+
+    async def _detect_shop_from_context(self, ctx) -> dict:
+        """从指定 context 的 cookies 检测店铺信息."""
+        import aiohttp as aio
+        info: dict[str, str] = {}
+        try:
+            raw_cookies = await ctx.cookies()
+            cookie_dict = {c["name"]: c["value"] for c in raw_cookies if "pinduoduo" in c.get("domain", "")}
+            if not cookie_dict:
+                return info
+            cookie_str = "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
+            headers = {"Cookie": cookie_str}
+            async with aio.ClientSession() as http:
+                async with http.post(
+                    "https://mms.pinduoduo.com/chats/getToken",
+                    headers=headers, json={"version": "3"},
+                    timeout=aio.ClientTimeout(total=10),
+                ) as resp:
+                    data = await resp.json()
+                    mall_id = data.get("mall_id") or data.get("result", {}).get("mall_id")
+                    if mall_id:
+                        info["mall_id"] = str(mall_id)
+                mall_name = await self._fetch_mall_name_from_api(http, headers)
+                if mall_name:
+                    info["mall_name"] = mall_name
+        except Exception:
+            pass
+        return info
+
+    async def _fetch_mall_name_from_api(self, http, headers: dict) -> str:
+        """尝试多个 PDD 接口获取真实店铺名."""
+        import aiohttp as aio
+        endpoints = [
+            ("POST", "https://mms.pinduoduo.com/janus/api/shop/info", {}),
+            ("POST", "https://mms.pinduoduo.com/vodka/v2/shop/detail/get", {}),
+            ("GET", "https://mms.pinduoduo.com/sydney/api/shop/info", None),
+            ("POST", "https://mms.pinduoduo.com/mangkhut/mms/info/detail/mall/queryMallBaseInfo", {}),
+        ]
+        for method, url, body in endpoints:
+            try:
+                if method == "GET":
+                    async with http.get(url, headers=headers, timeout=aio.ClientTimeout(total=5)) as resp:
+                        data = await resp.json()
+                else:
+                    async with http.post(url, headers=headers, json=body, timeout=aio.ClientTimeout(total=5)) as resp:
+                        data = await resp.json()
+                name = (
+                    data.get("result", {}).get("mall_name")
+                    or data.get("result", {}).get("mallName")
+                    or data.get("mall_name")
+                    or data.get("mallName")
+                    or data.get("result", {}).get("shop_name")
+                    or data.get("result", {}).get("shopName")
+                    or ""
+                )
+                if name and name != "主账号":
+                    return name
+            except Exception:
+                continue
+        return ""
+
+    async def _gw_pdd_shops_unbind(self, request):
+        """POST /api/admin/gateway/pdd/shops/unbind — {mall_id}."""
+        from aiohttp import web
+        user, err = self._require_admin(request)
+        if err:
+            return err
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        mall_id = body.get("mall_id", "")
+        if not mall_id:
+            return web.json_response({"error": "mall_id required"}, status=400)
+
+        from agent.tools.ecommerce_ops_tools import _stop_cs, _cs_clients, _cs_key
+        key = _cs_key("pdd", mall_id)
+        if key in _cs_clients:
+            await _stop_cs(platform="pdd", shop_id=mall_id)
+
+        from agent.ecommerce.session import get_session_manager
+        sm = get_session_manager()
+        cookie_dir = sm._data_dir / "pdd" / mall_id
+        if cookie_dir.exists():
+            import shutil
+            shutil.rmtree(cookie_dir)
+
+        config = self._load_pdd_shops_config()
+        config.get("shops", {}).pop(mall_id, None)
+        self._save_pdd_shops_config(config)
+
+        admin_name = user.username if user else "anonymous"
+        self._audit(admin_name, "PDD_SHOP_UNBIND", mall_id, request.remote or "")
+        return web.json_response({"status": "ok", "mall_id": mall_id})
 
     async def _gw_get_calabash(self, request):
         """GET /api/admin/gateway/calabash — 兼容旧端点，改用 SecretsStore."""

@@ -4,14 +4,18 @@ description: 管理电商店铺的商品、订单、营销、数据分析和客�
 version: 1.0.0
 category: ecommerce
 tags: [电商, 运营, 商品管理, 订单, 推广, 数据分析, 客服]
-trigger: 店铺 运营 商品 管理 订单 上架 下架 发货 推广 活动 客服 评价 店铺数据 运营数据 拼多多 淘宝 京东 抖音 电商 代运营 商家后台 多多 pdd taobao jd douyin
+trigger: 店铺 运营 商品 管理 订单 上架 下架 发货 推广 活动 客服 评价 店铺数据 运营数据 淘宝 京东 抖音 电商 代运营 商家后台 taobao jd douyin 智能客服 自动回复 广告 投流 批量 日报 周报
 tools: [ecommerce_login, ecommerce_list_products, ecommerce_get_product,
         ecommerce_create_product, ecommerce_update_product, ecommerce_toggle_product,
         ecommerce_list_orders, ecommerce_ship_order,
         ecommerce_shop_stats, ecommerce_get_product_stats,
         ecommerce_list_messages, ecommerce_reply_message,
         ecommerce_create_promotion, ecommerce_list_promotions,
-        ecommerce_list_platforms, browser_action, web_search]
+        ecommerce_list_platforms,
+        ecommerce_start_cs, ecommerce_stop_cs, ecommerce_cs_status,
+        ecommerce_create_ad, ecommerce_manage_ad, ecommerce_ad_stats,
+        ecommerce_batch_ship, ecommerce_daily_report,
+        browser_action, web_search]
 examples:
   - 查看拼多多店铺的商品列表
   - 帮我把这个商品下架
@@ -19,6 +23,10 @@ examples:
   - 查看店铺最近7天的流量数据
   - 回复一下客服消息
   - 创建一个满减活动
+  - 启动拼多多智能客服
+  - 创建一个推广计划
+  - 批量发货
+  - 生成今日运营日报
 ---
 
 # 电商店铺运营助手
@@ -48,16 +56,26 @@ examples:
 **订单管理:**
 - `ecommerce_list_orders` — 查看订单列表
 - `ecommerce_ship_order` — 发货操作 (需确认)
+- `ecommerce_batch_ship` — 批量发货 (需确认)
 
 **数据分析:**
 - `ecommerce_shop_stats` — 店铺经营数据
+- `ecommerce_daily_report` — 生成运营日报/周报
 
 **客服:**
 - `ecommerce_list_messages` — 查看客服消息
 - `ecommerce_reply_message` — 回复消息
+- `ecommerce_start_cs` — 启动实时智能客服 (WebSocket，需确认)
+- `ecommerce_stop_cs` — 停止智能客服
+- `ecommerce_cs_status` — 查看客服运行状态
 
 **营销:**
 - `ecommerce_create_promotion` — 创建活动/优惠券 (需确认)
+
+**广告投放:**
+- `ecommerce_create_ad` — 创建推广计划 (需确认)
+- `ecommerce_manage_ad` — 暂停/恢复广告 (需确认)
+- `ecommerce_ad_stats` — 查看广告投放数据
 
 ### 3. 错误处理
 

@@ -45,7 +45,11 @@ TOOLSETS: dict[str, list[str]] = {
         "ecommerce_list_orders", "ecommerce_ship_order",
         "ecommerce_shop_stats", "ecommerce_list_messages",
         "ecommerce_reply_message", "ecommerce_create_promotion",
+        "ecommerce_list_promotions", "ecommerce_get_product_stats",
         "ecommerce_list_platforms",
+        "ecommerce_start_cs", "ecommerce_stop_cs", "ecommerce_cs_status",
+        "ecommerce_create_ad", "ecommerce_manage_ad", "ecommerce_ad_stats",
+        "ecommerce_batch_ship", "ecommerce_daily_report",
     ],
 }
 

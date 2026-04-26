@@ -52,6 +52,7 @@ class PlatformType(str, Enum):
     WEB = "web"
     API = "api"
     WECHAT_CLAWBOT = "wechat_clawbot"
+    PDD = "pdd"
 
 class MessageType(str, Enum):
     """消息类型."""

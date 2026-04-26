@@ -132,6 +132,16 @@ PLATFORM_SCHEMAS: dict[str, dict] = {
              "help": "扫码登录后自动填入，无需手动配置"},
         ],
     },
+    "pdd": {
+        "name": "拼多多客服",
+        "name_en": "PDD Customer Service",
+        "icon": "pdd",
+        "auth_mode": "browser_login",
+        "fields": [
+            {"key": "shop_id", "label": "Shop ID", "label_zh": "店铺 ID", "type": "text", "required": False,
+             "help": "浏览器登录后自动获取"},
+        ],
+    },
 }
 
 # 适配器类映射 (平台名 → 模块路径, 类名)
@@ -146,6 +156,7 @@ ADAPTER_MAP: dict[str, tuple[str, str]] = {
     "line": ("gateway.platforms.line", "LineAdapter"),
     "matrix": ("gateway.platforms.matrix", "MatrixAdapter"),
     "wechat_clawbot": ("gateway.platforms.wechat_clawbot", "WeChatClawBotAdapter"),
+    "pdd": ("gateway.platforms.pdd", "PDDAdapter"),
 }
 
 

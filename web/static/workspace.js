@@ -609,12 +609,19 @@ function renderSkillCards() {
         const tool = st.tool ? `<span class="step-tool">[${_esc(st.tool)}]</span>` : '';
         return `<li><span class="step-num">${i+1}</span>${_esc(st.description||'')} ${tool}</li>`;
       }).join('');
+      const shopMgmt = s.category === 'ecommerce' ? `
+        <div class="shop-management">
+          <div class="shop-management-title">店铺管理</div>
+          <div id="pddShopList"><div class="shop-empty">加载中...</div></div>
+          <button class="shop-bind-btn" id="pddBindBtn" onclick="event.stopPropagation();bindNewShop()">+ 绑定新店铺</button>
+        </div>` : '';
       detail = `<div class="skill-detail">
         <div class="skill-detail-section"><label>Trigger</label>${_esc(s.trigger||'\u2014')}</div>
         ${tags ? `<div class="skill-detail-section"><label>Tags</label><div class="skill-detail-tags">${tags}</div></div>` : ''}
         ${examples ? `<div class="skill-detail-section"><label>Examples</label>${examples}</div>` : ''}
         <div class="skill-detail-section"><label>Steps (${(s.steps||[]).length})</label><ul class="skill-detail-steps">${steps||'<li>No steps</li>'}</ul></div>
         <div class="skill-detail-section"><label>Stats</label>v${s.version||1} \u00b7 ${s.use_count||0} uses \u00b7 ${rate} success</div>
+        ${shopMgmt}
         <div class="skill-test-area">
           <input type="text" id="testInput_${s.skill_id}" placeholder="Test trigger phrase...">
           <button class="btn-secondary" onclick="testSkill('${s.skill_id}')">Test</button>
@@ -644,9 +651,15 @@ function renderSkillCards() {
 }
 
 function toggleSkillDetail(id, ev) {
-  if (ev.target.closest('button,input')) return;
+  if (ev.target.closest('button,input,label')) return;
   _expandedSkillId = _expandedSkillId === id ? null : id;
   renderSkillCards();
+  if (_expandedSkillId) {
+    const skill = _skillsCache.find(s => s.skill_id === id);
+    if (skill && skill.category === 'ecommerce') {
+      setTimeout(loadPddShops, 50);
+    }
+  }
 }
 
 // ── Modal ──
@@ -740,6 +753,103 @@ async function testSkill(id) {
       resultDiv.innerHTML = `<div class="skill-test-result no-match">No skill matched</div>`;
     }
   } catch(e) { resultDiv.innerHTML = `<div class="skill-test-result no-match">Error: ${_esc(e.message)}</div>`; }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  PDD Shop Management (ecommerce skill detail)
+// ══════════════════════════════════════════════════════════════
+const _moduleLabels = { smart_cs: '智能客服', auto_ship: '自动发货', ad_manage: '广告投流' };
+
+async function loadPddShops() {
+  const container = document.getElementById('pddShopList');
+  if (!container) return;
+  container.innerHTML = '<div class="shop-empty">加载中...</div>';
+  try {
+    const res = await fetch('/api/admin/gateway/pdd/shops');
+    if (!res.ok) throw new Error(res.statusText);
+    const data = await res.json();
+    const shops = data.shops || [];
+    if (!shops.length) {
+      container.innerHTML = '<div class="shop-empty">暂无绑定店铺，点击下方按钮绑定</div>';
+      return;
+    }
+    container.innerHTML = shops.map(s => {
+      const csStatus = s.cs_status === 'connected' ? '<span class="shop-status-dot online"></span>运行中'
+        : s.cs_status === 'standby' ? '<span class="shop-status-dot standby"></span>待命'
+        : '<span class="shop-status-dot offline"></span>未启动';
+      const cookieStatus = s.has_cookies ? '<span class="shop-status-ok">有效</span>' : '<span class="shop-status-err">无效</span>';
+      const modules = Object.entries(_moduleLabels).map(([key, label]) => {
+        const on = s.modules && s.modules[key];
+        return `<label class="module-toggle" onclick="event.stopPropagation()">
+          <input type="checkbox" ${on ? 'checked' : ''} onchange="toggleShopModule('${_esc(s.mall_id)}','${key}',this.checked)">
+          <span class="module-toggle-slider"></span>
+          <span class="module-toggle-label">${label}</span>
+        </label>`;
+      }).join('');
+      return `<div class="shop-card">
+        <div class="shop-card-header">
+          <span class="shop-card-title">${s.mall_name ? _esc(s.mall_name) : '店铺 ' + _esc(s.mall_id)}</span>
+          <button class="shop-unbind-btn" onclick="event.stopPropagation();unbindShop('${_esc(s.mall_id)}')" title="解绑">解绑</button>
+        </div>
+        <div class="shop-card-status">ID: ${_esc(s.mall_id)} &nbsp; cookies: ${cookieStatus} &nbsp; 客服: ${csStatus}</div>
+        <div class="shop-card-modules">${modules}</div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    container.innerHTML = `<div class="shop-empty" style="color:var(--red)">加载失败: ${_esc(e.message)}</div>`;
+  }
+}
+
+async function toggleShopModule(mallId, module, enabled) {
+  try {
+    const res = await fetch('/api/admin/gateway/pdd/shops/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-XJD-Request': '1' },
+      body: JSON.stringify({ mall_id: mallId, module, enabled }),
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); loadPddShops(); return; }
+    setTimeout(loadPddShops, 1000);
+  } catch(e) { alert('操作失败: ' + e.message); loadPddShops(); }
+}
+
+async function bindNewShop() {
+  const btn = document.getElementById('pddBindBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '处理中...'; }
+  try {
+    const res = await fetch('/api/admin/gateway/pdd/shops/bind', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-XJD-Request': '1' },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    if (data.status === 'waiting') {
+      alert(data.message || '请在浏览器中登录拼多多，登录后再次点击绑定');
+      if (btn) { btn.textContent = '登录完成后点击确认'; }
+      return;
+    }
+    if (data.status === 'ok') {
+      const label = data.mall_name || data.mall_id || '';
+      alert((data.message || '绑定成功') + (label ? ': ' + label : ''));
+      loadPddShops();
+    }
+  } catch(e) { alert('绑定失败: ' + e.message); }
+  finally { if (btn) { btn.disabled = false; if (btn.textContent === '处理中...') btn.textContent = '+ 绑定新店铺'; } }
+}
+
+async function unbindShop(mallId) {
+  if (!confirm('确定解绑店铺 ' + mallId + '？将停止客服并删除登录信息。')) return;
+  try {
+    const res = await fetch('/api/admin/gateway/pdd/shops/unbind', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-XJD-Request': '1' },
+      body: JSON.stringify({ mall_id: mallId }),
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+    loadPddShops();
+  } catch(e) { alert('解绑失败: ' + e.message); }
 }
 
 // ── Hub Modal ──
