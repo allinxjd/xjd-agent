@@ -282,7 +282,7 @@ def service():
 @service.command()
 @click.option("--mode", "-m", default="web", type=click.Choice(["web", "gateway"]),
               help="运行模式 (默认 web)")
-@click.option("--port", "-p", default=8080, help="监听端口 (默认 8080)")
+@click.option("--port", "-p", default=8080, type=click.IntRange(1, 65535), help="监听端口 (默认 8080)")
 def install(mode: str, port: int) -> None:
     """安装为系统服务（开机自启 + 崩溃重启）."""
     plat = _detect_platform()

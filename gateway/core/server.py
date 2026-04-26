@@ -834,7 +834,11 @@ class GatewayServer:
                 except json.JSONDecodeError:
                     await websocket.send(json.dumps({"error": "invalid JSON"}))
         except Exception as e:
-            if "ConnectionClosed" not in type(e).__name__:
+            try:
+                from websockets.exceptions import ConnectionClosed
+                if not isinstance(e, ConnectionClosed):
+                    logger.warning("WebSocket error: %s", e)
+            except ImportError:
                 logger.warning("WebSocket error: %s", e)
         finally:
             self._ws_connections.discard(websocket)

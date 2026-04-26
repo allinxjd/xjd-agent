@@ -213,7 +213,8 @@ async def check_and_notify() -> Optional[str]:
         latest = await check_latest_version()
 
         if latest and latest.startswith("commit:"):
-            count = latest.split(":")[1]
+            parts = latest.split(":", 1)
+            count = parts[1] if len(parts) > 1 else "?"
             return f"发现 {count} 个新提交可更新，运行 xjd-agent update --auto 更新"
         if latest and compare_versions(current, latest):
             return f"发现新版本 {latest} (当前 {current})，运行 xjd-agent update 更新"

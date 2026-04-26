@@ -353,7 +353,8 @@ def check_update(auto: bool = False):
 
         has_update = False
         if latest and latest.startswith("commit:"):
-            count = latest.split(":")[1]
+            parts = latest.split(":", 1)
+            count = parts[1] if len(parts) > 1 else "?"
             console.print(f"  [yellow]发现 {count} 个新提交可更新[/yellow]")
             repo_dir = _git_repo_dir()
             if repo_dir:
