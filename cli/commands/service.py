@@ -87,7 +87,12 @@ def _systemd_install(mode: str, port: int) -> None:
     unit_path.write_text(unit)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "--user", "enable", "--now", SERVICE_NAME], check=True)
-    subprocess.run(["loginctl", "enable-linger", os.getlogin()], capture_output=True)
+    try:
+        user = os.getlogin()
+    except OSError:
+        import pwd
+        user = pwd.getpwuid(os.getuid()).pw_name
+    subprocess.run(["loginctl", "enable-linger", user], capture_output=True)
     console.print(f"  systemd 用户服务已安装: {unit_path}")
     console.print(f"  服务已启动，访问 http://localhost:{port}")
 
