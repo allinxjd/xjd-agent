@@ -564,7 +564,7 @@ class AgentEngine:
                             _g_threshold = (
                                 self._grounding_tracker.threshold
                                 if self._grounding_tracker
-                                else 0.3
+                                else 0.2
                             )
                             _grounded, _grounding_score = check_grounding(
                                 tool_texts, response.content or "",

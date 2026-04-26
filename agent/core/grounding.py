@@ -39,17 +39,13 @@ def extract_fact_tokens(text: str) -> set[str]:
         if any(i in covered for i in range(m.start(), m.end())):
             continue
         val = m.group()
-        if len(val) < 2:
+        if len(val) < 2 or len(val) > 6:
             continue
         tokens.add(val)
     for m in _RE_CJK_SEG.finditer(text):
         seg = m.group()
-        if seg not in _CJK_STOP:
+        if seg not in _CJK_STOP and len(seg) >= 2:
             tokens.add(seg)
-    for m in _RE_ASCII_WORD.finditer(text):
-        word = m.group().lower()
-        if "_" not in word:
-            tokens.add(word)
 
     return tokens
 
@@ -57,7 +53,7 @@ def extract_fact_tokens(text: str) -> set[str]:
 def check_grounding(
     tool_results: list[str],
     response_text: str,
-    threshold: float = 0.3,
+    threshold: float = 0.2,
 ) -> tuple[bool, float]:
     """校验回复是否基于工具结果.
 
@@ -114,7 +110,7 @@ class GroundingTracker:
             data_dir = Path.home() / ".xjd-agent" / "grounding"
         self._data_dir = data_dir
         self._records: list[GroundingRecord] = []
-        self._threshold: float = 0.3
+        self._threshold: float = 0.2
 
     @property
     def threshold(self) -> float:
