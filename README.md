@@ -90,6 +90,27 @@ xjd-agent serve-mcp
 
 > Web UI 启动后，也可以在 Settings 面板中直接配置模型 Provider 和 API Key，无需手动编辑配置文件。
 
+## 持久化运行（开机自启）
+
+```bash
+# 安装为系统服务 (支持 Linux / macOS / Windows)
+xjd-agent service install
+
+# 指定模式和端口
+xjd-agent service install --mode gateway --port 18789
+
+# 查看服务状态
+xjd-agent service status
+
+# 查看实时日志
+xjd-agent service logs
+
+# 卸载服务
+xjd-agent service uninstall
+```
+
+> 安装后服务会开机自启、崩溃自动重启。Linux 使用 systemd 用户服务，macOS 使用 launchd，Windows 使用计划任务。也可以使用 Docker 部署 (`docker compose up -d`)。
+
 ## 电商代运营 (拼多多)
 
 ```bash
@@ -158,6 +179,9 @@ xjd-agent/
 | `xjd-agent chat` | 交互式对话 |
 | `xjd-agent web` | 启动 Web 聊天服务 |
 | `xjd-agent gateway` | 启动消息网关 |
+| `xjd-agent service install` | 安装为系统服务 (开机自启) |
+| `xjd-agent service status` | 查看服务状态 |
+| `xjd-agent service uninstall` | 卸载系统服务 |
 | `xjd-agent serve-mcp` | MCP Server 模式 (IDE 集成) |
 | `xjd-agent setup` | 引导式配置向导 |
 | `xjd-agent model list` | 列出支持的模型 |

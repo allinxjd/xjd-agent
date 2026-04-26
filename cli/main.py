@@ -1007,6 +1007,12 @@ try:
 except ImportError:
     pass
 
+try:
+    from cli.commands.service import service
+    cli.add_command(service)
+except ImportError:
+    pass
+
 @cli.command()
 @click.option("--auto", "auto", is_flag=True, help="自动更新")
 def update(auto: bool) -> None:
