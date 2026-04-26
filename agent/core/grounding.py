@@ -27,21 +27,29 @@ _RE_ASCII_WORD = re.compile(r"[a-zA-Z_]{4,}")
 def extract_fact_tokens(text: str) -> set[str]:
     """从文本中提取事实性 token（数字、时间、日期、CJK 词段、ASCII 词）."""
     tokens: set[str] = set()
+    covered: set[int] = set()
 
     for m in _RE_TIME.finditer(text):
         tokens.add(m.group())
+        covered.update(range(m.start(), m.end()))
     for m in _RE_DATE.finditer(text):
         tokens.add(m.group())
+        covered.update(range(m.start(), m.end()))
     for m in _RE_NUMBER.finditer(text):
+        if any(i in covered for i in range(m.start(), m.end())):
+            continue
         val = m.group()
-        if val not in ("0", "1"):
-            tokens.add(val)
+        if len(val) < 2:
+            continue
+        tokens.add(val)
     for m in _RE_CJK_SEG.finditer(text):
         seg = m.group()
         if seg not in _CJK_STOP:
             tokens.add(seg)
     for m in _RE_ASCII_WORD.finditer(text):
-        tokens.add(m.group().lower())
+        word = m.group().lower()
+        if "_" not in word:
+            tokens.add(word)
 
     return tokens
 
