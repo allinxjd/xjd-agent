@@ -63,3 +63,6 @@ inspector.jsonl
 
 # Hub (独立仓库 allinxjd/xjd-hub)
 /hub/
+
+# Local admin panels (not for open source)
+web/static/admin-grounding.html
