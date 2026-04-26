@@ -189,26 +189,17 @@ def _update_git() -> bool:
             logger.warning("git pull failed: %s", result.stderr)
             return False
 
+        _pip_args = ["pip", "install", "-e", ".",
+                     "-i", "https://mirrors.aliyun.com/pypi/simple/",
+                     "--trusted-host", "mirrors.aliyun.com"]
         result = subprocess.run(
-            ["pip", "install", "-e", "."],
+            _pip_args,
             capture_output=True, text=True, timeout=120,
             cwd=repo,
         )
         if result.returncode == 0:
             logger.info("git update succeeded")
             return True
-        if "SSL" in (result.stderr or ""):
-            logger.info("pip SSL failed, retrying with mirror")
-            result = subprocess.run(
-                ["pip", "install", "-e", ".",
-                 "-i", "https://mirrors.aliyun.com/pypi/simple/",
-                 "--trusted-host", "mirrors.aliyun.com"],
-                capture_output=True, text=True, timeout=120,
-                cwd=repo,
-            )
-            if result.returncode == 0:
-                logger.info("git update succeeded (mirror)")
-                return True
         logger.warning("pip install failed: %s", result.stderr)
         return False
     except Exception as e:
