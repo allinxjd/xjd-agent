@@ -97,7 +97,7 @@ class PddCSClient:
         self._ws: Any = None
         self._ws_url: Optional[str] = None
         self._running = False
-        self._queue: asyncio.Queue[PddCSMessage] = asyncio.Queue()
+        self._queue: asyncio.Queue[PddCSMessage] = asyncio.Queue(maxsize=1000)
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._recv_task: Optional[asyncio.Task] = None
         self._consumer_task: Optional[asyncio.Task] = None

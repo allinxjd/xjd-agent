@@ -208,6 +208,12 @@ class MCPConnection:
         except Exception as e:
             logger.error("SSE connection failed for %s: %s", self.config.name, e)
             self._connected = False
+            if self._sse_client:
+                try:
+                    await self._sse_client.aclose()
+                except Exception:
+                    pass
+                self._sse_client = None
             return False
 
     async def _read_loop_sse(self) -> None:

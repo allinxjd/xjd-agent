@@ -56,6 +56,32 @@ STEALTH_SCRIPTS = [
     }""",
 ]
 
+async def _cleanup_browser():
+    global _playwright, _browser, _context, _page, _stealth_mode
+    if _page and not _page.is_closed():
+        try:
+            await _page.close()
+        except Exception:
+            pass
+    if _context:
+        try:
+            await _context.close()
+        except Exception:
+            pass
+    if _browser:
+        try:
+            await _browser.close()
+        except Exception:
+            pass
+    if _playwright:
+        try:
+            await _playwright.stop()
+        except Exception:
+            pass
+    _playwright = _browser = _context = _page = None
+    _stealth_mode = False
+
+
 async def _get_page(stealth: bool = False, cdp_url: str = ""):
     """获取或创建浏览器页面 (懒加载单例).
 
@@ -68,6 +94,9 @@ async def _get_page(stealth: bool = False, cdp_url: str = ""):
 
     if _page and not _page.is_closed():
         return _page
+
+    if _page or _playwright:
+        await _cleanup_browser()
 
     try:
         from playwright.async_api import async_playwright

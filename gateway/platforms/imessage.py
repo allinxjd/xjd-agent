@@ -120,8 +120,8 @@ class IMessageAdapter(BasePlatformAdapter):
 
     async def send_message(self, message: OutgoingMessage) -> Optional[str]:
         try:
-            recipient = message.chat_id
-            text = message.content.replace('"', '\\"')
+            recipient = message.chat_id.replace("\\", "\\\\").replace('"', '\\"')
+            text = message.content.replace("\\", "\\\\").replace('"', '\\"')
             script = f'''
             tell application "Messages"
                 set targetService to 1st account whose service type = iMessage

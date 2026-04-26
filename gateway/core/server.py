@@ -248,10 +248,12 @@ class GatewayServer:
             start_tasks.append(self._start_adapter(name, adapter))
 
         if start_tasks:
+            adapter_names = list(self._adapters.keys())
             results = await asyncio.gather(*start_tasks, return_exceptions=True)
-            for name, result in zip(self._adapters.keys(), results):
+            for name, result in zip(adapter_names, results):
                 if isinstance(result, Exception):
                     logger.error("Gateway: adapter %s failed to start: %s", name, result)
+                    self._adapters.pop(name, None)
                 else:
                     logger.info("Gateway: adapter %s started", name)
 
@@ -813,10 +815,11 @@ class GatewayServer:
         # 认证: 检查 query param 或首条消息中的 token
         ws_token = self._config.get("ws_token", "")
         if ws_token:
+            import hmac
             import urllib.parse
             query = urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
             client_token = query.get("token", [""])[0]
-            if client_token != ws_token:
+            if not hmac.compare_digest(client_token, ws_token):
                 await websocket.close(4001, "Unauthorized")
                 return
 
@@ -830,8 +833,9 @@ class GatewayServer:
                     await self._handle_ws_command(websocket, data)
                 except json.JSONDecodeError:
                     await websocket.send(json.dumps({"error": "invalid JSON"}))
-        except Exception:
-            pass
+        except Exception as e:
+            if "ConnectionClosed" not in type(e).__name__:
+                logger.warning("WebSocket error: %s", e)
         finally:
             self._ws_connections.discard(websocket)
             logger.info("WebSocket client disconnected")
