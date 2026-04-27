@@ -26,6 +26,9 @@ _BLOCKED_PATTERNS = [
     re.compile(r'\brm\s+(-[a-z]*r[a-z]*\s+)?\s*/', re.I),
     re.compile(r'\bmkfs\b|\bdd\s+.*of=/', re.I),
     re.compile(r'\b:(){ :\|:& };:', re.I),  # fork bomb
+    re.compile(r'\bcrontab\b', re.I),  # 定时任务统一走 CronScheduler
+    re.compile(r'\blaunchctl\b', re.I),  # 服务管理统一走 service 命令
+    re.compile(r'\bsystemctl\b', re.I),
 ]
 
 
