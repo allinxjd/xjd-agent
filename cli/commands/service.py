@@ -3,23 +3,29 @@
 子命令:
   xjd-agent service install    安装为系统服务（开机自启）
   xjd-agent service uninstall  卸载系统服务
+  xjd-agent service restart    重启系统服务
   xjd-agent service status     查看服务状态
   xjd-agent service logs       查看服务日志
 """
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
+import socket
 import subprocess
 import sys
 import textwrap
+import time
+from html import escape as _xml_escape
 from pathlib import Path
 
 import click
 from rich.console import Console
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "xjd-agent"
 PLIST_LABEL = "com.xjd.agent"
@@ -34,11 +40,28 @@ def _get_install_dir() -> Path:
     spec = importlib.util.find_spec("cli.main")
     if spec and spec.origin:
         return Path(spec.origin).resolve().parent.parent
-    return Path.cwd()
+    raise RuntimeError("无法定位项目目录，请在项目根目录下运行")
 
 
 def _get_python() -> str:
-    return sys.executable
+    """获取当前 Python 解释器路径，优先使用 virtualenv."""
+    exe = sys.executable
+    venv = os.environ.get("VIRTUAL_ENV")
+    if not venv:
+        exe_path = Path(exe).resolve()
+        for parent in exe_path.parents:
+            if (parent / "pyvenv.cfg").exists():
+                venv = str(parent)
+                break
+    if venv:
+        for candidate in [
+            Path(venv) / "bin" / "python3",
+            Path(venv) / "bin" / "python",
+            Path(venv) / "Scripts" / "python.exe",
+        ]:
+            if candidate.exists():
+                return str(candidate)
+    return exe
 
 
 def _get_log_path() -> Path:
@@ -58,13 +81,26 @@ def _detect_platform() -> str:
     return "unknown"
 
 
+def _check_port_available(port: int) -> bool:
+    """检测端口是否可用."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(1)
+        sock.bind(("0.0.0.0", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
 # ── Linux (systemd --user) ──────────────────────────────────────
 
 def _systemd_unit_path() -> Path:
     return Path.home() / ".config" / "systemd" / "user" / f"{SERVICE_NAME}.service"
 
 
-def _systemd_install(mode: str, port: int) -> None:
+def _systemd_install(port: int) -> None:
     unit_path = _systemd_unit_path()
     unit_path.parent.mkdir(parents=True, exist_ok=True)
     unit = textwrap.dedent(f"""\
@@ -75,7 +111,7 @@ def _systemd_install(mode: str, port: int) -> None:
 
         [Service]
         Type=simple
-        ExecStart={_get_python()} -m cli.main {mode} --host 0.0.0.0 --port {port}
+        ExecStart={_get_python()} -m cli.main gateway --foreground --host 0.0.0.0 --port {port}
         WorkingDirectory={_get_install_dir()}
         Restart=on-failure
         RestartSec=5
@@ -126,10 +162,11 @@ def _plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{PLIST_LABEL}.plist"
 
 
-def _launchd_install(mode: str, port: int) -> None:
+def _launchd_install(port: int) -> None:
     plist_file = _plist_path()
     plist_file.parent.mkdir(parents=True, exist_ok=True)
     log_path = _get_log_path()
+    _e = _xml_escape
     plist = textwrap.dedent(f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -137,32 +174,36 @@ def _launchd_install(mode: str, port: int) -> None:
         <plist version="1.0">
         <dict>
             <key>Label</key>
-            <string>{PLIST_LABEL}</string>
+            <string>{_e(PLIST_LABEL)}</string>
             <key>ProgramArguments</key>
             <array>
-                <string>{_get_python()}</string>
+                <string>{_e(str(_get_python()))}</string>
                 <string>-m</string>
                 <string>cli.main</string>
-                <string>{mode}</string>
+                <string>gateway</string>
+                <string>--foreground</string>
                 <string>--host</string>
                 <string>0.0.0.0</string>
                 <string>--port</string>
                 <string>{port}</string>
             </array>
             <key>WorkingDirectory</key>
-            <string>{_get_install_dir()}</string>
+            <string>{_e(str(_get_install_dir()))}</string>
             <key>RunAtLoad</key>
             <true/>
             <key>KeepAlive</key>
-            <true/>
+            <dict>
+                <key>SuccessfulExit</key>
+                <false/>
+            </dict>
             <key>StandardOutPath</key>
-            <string>{log_path}</string>
+            <string>{_e(str(log_path))}</string>
             <key>StandardErrorPath</key>
-            <string>{log_path}</string>
+            <string>{_e(str(log_path))}</string>
             <key>EnvironmentVariables</key>
             <dict>
                 <key>XJD_AGENT_HOME</key>
-                <string>{_get_xjd_home()}</string>
+                <string>{_e(str(_get_xjd_home()))}</string>
             </dict>
         </dict>
         </plist>
@@ -213,16 +254,32 @@ def _win_bat_path() -> Path:
     return appdata / "xjd-agent" / "start-service.bat"
 
 
-def _win_install(mode: str, port: int) -> None:
+def _validate_path_for_batch(path: str) -> None:
+    """Reject paths with cmd metacharacters that could break batch scripts."""
+    dangerous = set('&|<>^%!"')
+    found = dangerous & set(path)
+    if found:
+        raise RuntimeError(
+            f"路径包含不安全字符 {found}: {path}\n"
+            "请将项目安装到不含特殊字符的路径下"
+        )
+
+
+def _win_install(port: int) -> None:
     bat_path = _win_bat_path()
     bat_path.parent.mkdir(parents=True, exist_ok=True)
     log_path = _get_log_path()
+    python_path = _get_python()
+    install_dir = str(_get_install_dir())
+    xjd_home = str(_get_xjd_home())
+    for p in [python_path, install_dir, xjd_home, str(log_path)]:
+        _validate_path_for_batch(p)
     bat = textwrap.dedent(f"""\
         @echo off
-        set XJD_AGENT_HOME={_get_xjd_home()}
-        cd /d "{_get_install_dir()}"
+        set "XJD_AGENT_HOME={xjd_home}"
+        cd /d "{install_dir}"
         :loop
-        "{_get_python()}" -m cli.main {mode} --host 0.0.0.0 --port {port} >> "{log_path}" 2>&1
+        "{python_path}" -m cli.main gateway --foreground --host 0.0.0.0 --port {port} >> "{log_path}" 2>&1
         echo [%date% %time%] Service exited, restarting in 5s... >> "{log_path}"
         timeout /t 5 /nobreak >nul
         goto loop
@@ -233,9 +290,12 @@ def _win_install(mode: str, port: int) -> None:
         "schtasks", "/create", "/tn", SERVICE_NAME,
         "/sc", "onlogon",
         "/tr", f'cmd /c start /min "" "{bat_path}"',
-        "/rl", "highest", "/f",
+        "/rl", "limited", "/f",
     ], check=True)
-    subprocess.Popen(f'start /min "" "{bat_path}"', shell=True)
+    subprocess.Popen(
+        ["cmd", "/c", "start", "/min", "", str(bat_path)],
+        close_fds=True,
+    )
     console.print(f"  Windows 计划任务已创建: {SERVICE_NAME}")
     console.print(f"  启动脚本: {bat_path}")
     console.print(f"  服务已启动，访问 http://localhost:{port}")
@@ -271,6 +331,63 @@ def _win_logs() -> None:
         pass
 
 
+# ── 辅助函数（供其他模块调用）─────────────────────────────────
+
+def is_service_installed() -> bool:
+    """检测系统服务是否已注册."""
+    plat = _detect_platform()
+    if plat == "linux":
+        return _systemd_unit_path().exists()
+    elif plat == "macos":
+        return _plist_path().exists()
+    elif plat == "windows":
+        r = subprocess.run(["schtasks", "/query", "/tn", SERVICE_NAME],
+                           capture_output=True)
+        return r.returncode == 0
+    return False
+
+
+def restart_service() -> bool:
+    """重启已注册的系统服务. 返回是否成功."""
+    plat = _detect_platform()
+    if plat == "linux":
+        r = subprocess.run(["systemctl", "--user", "restart", SERVICE_NAME],
+                           capture_output=True)
+        return r.returncode == 0
+    elif plat == "macos":
+        plist = _plist_path()
+        if not plist.exists():
+            return False
+        subprocess.run(["launchctl", "unload", str(plist)], capture_output=True)
+        time.sleep(1)
+        r = subprocess.run(["launchctl", "load", "-w", str(plist)], capture_output=True)
+        return r.returncode == 0
+    elif plat == "windows":
+        subprocess.run(["schtasks", "/end", "/tn", SERVICE_NAME], capture_output=True)
+        r = subprocess.run(["schtasks", "/run", "/tn", SERVICE_NAME], capture_output=True)
+        return r.returncode == 0
+    return False
+
+
+def install_service_silent(port: int = 8080) -> bool:
+    """静默安装系统服务. 返回是否成功."""
+    plat = _detect_platform()
+    try:
+        if plat == "linux":
+            _systemd_install(port)
+        elif plat == "macos":
+            _launchd_install(port)
+        elif plat == "windows":
+            _win_install(port)
+        else:
+            return False
+        return True
+    except Exception as e:
+        logger.error("服务安装失败: %s", e)
+        console.print(f"  [red]错误详情: {e}[/red]")
+        return False
+
+
 # ── Click 命令 ──────────────────────────────────────────────────
 
 @click.group()
@@ -280,22 +397,22 @@ def service():
 
 
 @service.command()
-@click.option("--mode", "-m", default="web", type=click.Choice(["web", "gateway"]),
-              help="运行模式 (默认 web)")
 @click.option("--port", "-p", default=8080, type=click.IntRange(1, 65535), help="监听端口 (默认 8080)")
-def install(mode: str, port: int) -> None:
+def install(port: int) -> None:
     """安装为系统服务（开机自启 + 崩溃重启）."""
     plat = _detect_platform()
-    console.print(f"  平台: {plat}  模式: {mode}  端口: {port}")
+    console.print(f"  平台: {plat}  端口: {port}")
     console.print(f"  Python: {_get_python()}")
     console.print(f"  项目目录: {_get_install_dir()}")
     console.print()
+    if not _check_port_available(port):
+        console.print(f"  [yellow]端口 {port} 已被占用，服务启动后可能冲突[/yellow]")
     if plat == "linux":
-        _systemd_install(mode, port)
+        _systemd_install(port)
     elif plat == "macos":
-        _launchd_install(mode, port)
+        _launchd_install(port)
     elif plat == "windows":
-        _win_install(mode, port)
+        _win_install(port)
     else:
         console.print(f"  [red]不支持的平台: {plat}[/red]")
         console.print("  请使用 Docker 部署: docker compose up -d")
@@ -313,6 +430,18 @@ def uninstall() -> None:
         _win_uninstall()
     else:
         console.print(f"  [red]不支持的平台: {plat}[/red]")
+
+
+@service.command(name="restart")
+def restart_cmd() -> None:
+    """重启系统服务."""
+    if not is_service_installed():
+        console.print("  [yellow]服务未安装，请先运行: xjd-agent gateway[/yellow]")
+        return
+    if restart_service():
+        console.print("  [green]服务已重启[/green]")
+    else:
+        console.print("  [red]服务重启失败[/red]")
 
 
 @service.command()

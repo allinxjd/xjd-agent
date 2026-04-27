@@ -44,6 +44,7 @@ def get_current_version() -> str:
                 return m.group(1)
     except Exception:
         logger.debug("pyproject.toml version lookup failed")
+    return "0.0.0"
 
 def compare_versions(current: str, latest: str) -> bool:
     """比较版本号，返回 True 表示有更新.

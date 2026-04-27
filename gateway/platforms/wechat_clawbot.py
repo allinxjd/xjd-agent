@@ -411,7 +411,7 @@ class WeChatClawBotAdapter(BasePlatformAdapter):
         opts = WeixinApiOptions(base_url=self._base_url, token=self._bot_token)
         try:
             cfg = await get_config(opts, ilink_user_id=chat_id)
-            if not cfg.typing_ticket:
+            if not cfg or not cfg.typing_ticket:
                 return
             status = TypingStatus.TYPING if action == "start" else TypingStatus.CANCEL
             await send_typing(opts, SendTypingReq(
@@ -464,14 +464,15 @@ class WeChatClawBotAdapter(BasePlatformAdapter):
             caption = markdown_to_plain_text(message.content) if message.content else ""
             upload_opts = self._make_opts(to_user)
             upload_opts.context_token = None
-            result = await send_weixin_media_file(
-                file_path, to_user, caption, opts, self._cdn_base_url,
-            )
-            # 清理临时文件
             try:
-                os.unlink(file_path)
-            except OSError:
-                pass
+                result = await send_weixin_media_file(
+                    file_path, to_user, caption, upload_opts, self._cdn_base_url,
+                )
+            finally:
+                try:
+                    os.unlink(file_path)
+                except OSError:
+                    pass
             return result.get("messageId", "")
         except Exception as e:
             logger.error("发送消息失败: %s", e)

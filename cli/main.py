@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 
 import click
@@ -23,6 +24,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 BANNER = """[bold cyan]
       ██╗  ██╗     ██╗██████╗
@@ -207,7 +209,6 @@ async def _chat_loop(
             branch = f"xjd-agent-{uuid.uuid4().hex[:6]}"
             worktree_dir = f"/tmp/xjd-worktree-{branch}"
             subprocess.run(["git", "worktree", "add", "-b", branch, worktree_dir], check=True, capture_output=True)
-            import os
             os.chdir(worktree_dir)
             console.print(f"  [dim]Worktree: {worktree_dir} (branch: {branch})[/dim]")
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
@@ -352,7 +353,7 @@ async def _chat_loop(
             result = await engine.run_turn(
                 user_input,
                 on_stream=lambda s: console.print(s, end=""),
-                on_thinking=lambda s: console.print(f"[dim italic]{s[:200]}...[/dim italic]") if len(s) > 200 else None,
+                on_thinking=lambda s: console.print(f"[dim italic]{s[:200]}...[/dim italic]") if s and len(s) > 200 else None,
                 on_tool_call=lambda n, a: console.print(f"\n  🔧 [bold]{n}[/bold]", style="cyan"),
                 on_tool_result=lambda n, r: console.print(f"  ✅ {n}: {r[:100]}{'...' if len(r) > 100 else ''}", style="dim"),
                 thinking=thinking,
@@ -383,9 +384,45 @@ def setup() -> None:
 @cli.command()
 @click.option("--host", default="0.0.0.0", help="监听地址")
 @click.option("--port", default=8080, help="监听端口")
-def gateway(host: str, port: int) -> None:
+@click.option("--foreground", is_flag=True, help="前台运行（调试用）")
+def gateway(host: str, port: int, foreground: bool) -> None:
     """启动消息网关 (WebUI + 消息渠道)."""
-    asyncio.run(_start_web(host=host, port=port))
+    if foreground:
+        asyncio.run(_start_gateway(host=host, port=port))
+        return
+
+    from rich.console import Console
+    from cli.commands.service import is_service_installed, install_service_silent, restart_service
+    console = Console()
+
+    if not is_service_installed():
+        console.print("  将注册为系统服务（开机自启 + 后台运行）")
+        if not click.confirm("  是否继续?", default=True):
+            console.print("  以前台模式启动...")
+            asyncio.run(_start_gateway(host=host, port=port))
+            return
+        ok = install_service_silent(port=port)
+        if ok:
+            console.print(f"  [green]服务已注册并启动[/green]")
+        else:
+            console.print("  [yellow]服务注册失败，以前台模式启动[/yellow]")
+            asyncio.run(_start_gateway(host=host, port=port))
+            return
+    else:
+        if port != 8080 or host != "0.0.0.0":
+            console.print(f"  [yellow]服务已注册，--host/--port 参数需重新安装才能生效[/yellow]")
+            console.print(f"  运行: xjd-agent service uninstall && xjd-agent gateway --port {port}")
+        ok = restart_service()
+        if ok:
+            console.print("  [green]服务已重启[/green]")
+        else:
+            console.print("  [yellow]服务重启失败，以前台模式启动[/yellow]")
+            asyncio.run(_start_gateway(host=host, port=port))
+            return
+
+    console.print(f"  访问 http://localhost:{port}")
+    console.print("  查看状态: xjd-agent service status")
+    console.print("  查看日志: xjd-agent service logs")
 
 async def _start_gateway(host: str, port: int) -> None:
     """启动 Gateway."""
@@ -441,7 +478,7 @@ async def _start_gateway(host: str, port: int) -> None:
         memory_manager = MemoryManager()
         await memory_manager.initialize()
     except Exception:
-        pass
+        logger.debug("MemoryManager 初始化失败", exc_info=True)
 
     pin_manager = None
     try:
@@ -449,7 +486,7 @@ async def _start_gateway(host: str, port: int) -> None:
         pin_manager = ContextPinManager(workspace_dir=os.getcwd())
         await pin_manager.initialize()
     except Exception:
-        pass
+        logger.debug("ContextPinManager 初始化失败", exc_info=True)
 
     learning_loop = None
     try:
@@ -460,7 +497,7 @@ async def _start_gateway(host: str, port: int) -> None:
             pin_manager=pin_manager,
         )
     except Exception:
-        pass
+        logger.debug("LearningLoop 初始化失败", exc_info=True)
 
     # 注册工具
     tool_registry = ToolRegistry()
@@ -588,7 +625,7 @@ async def _start_gateway(host: str, port: int) -> None:
     console.print(Panel(
         f"  WebSocket: ws://{host}:{port}\n"
         f"  渠道: {len(gw._adapters)} 个已注册\n"
-        f"  模型: {primary.provider}:{primary.model}",
+        f"  模型: {primary.provider or '未配置'}:{primary.model or '未配置'}",
         style="cyan",
     ))
 
@@ -617,8 +654,12 @@ async def _start_gateway(host: str, port: int) -> None:
     def _on_sigint():
         stop_event.set()
 
-    loop.add_signal_handler(signal.SIGINT, _on_sigint)
-    loop.add_signal_handler(signal.SIGTERM, _on_sigint)
+    if sys.platform != "win32":
+        loop.add_signal_handler(signal.SIGINT, _on_sigint)
+        loop.add_signal_handler(signal.SIGTERM, _on_sigint)
+    else:
+        signal.signal(signal.SIGINT, lambda *_: _on_sigint())
+        signal.signal(signal.SIGTERM, lambda *_: _on_sigint())
 
     await stop_event.wait()
     console.print("\n[dim]正在关闭网关...[/dim]")
@@ -627,8 +668,7 @@ async def _start_gateway(host: str, port: int) -> None:
     except asyncio.TimeoutError:
         console.print("[dim]关闭超时, 强制退出[/dim]")
 
-    import os as _os
-    _os._exit(0)
+    os._exit(0)
 
 @cli.command()
 def doctor() -> None:
@@ -645,7 +685,7 @@ def doctor() -> None:
         ("配置文件", str(get_home() / "config.yaml"), (get_home() / "config.yaml").exists()),
         ("Primary Provider", config.model.primary.provider or "(未配置)", bool(config.model.primary.provider)),
         ("Primary Model", config.model.primary.model or "(未配置)", bool(config.model.primary.model)),
-        ("API Key", "***" + config.model.primary.api_key[-4:] if len(config.model.primary.api_key) > 4 else "(未配置)", bool(config.model.primary.api_key)),
+        ("API Key", "***" + config.model.primary.api_key[-4:] if config.model.primary.api_key and len(config.model.primary.api_key) > 4 else "(未配置)", bool(config.model.primary.api_key)),
     ]
 
     for name, value, ok in checks:
@@ -661,7 +701,6 @@ def web(host: str, port: int) -> None:
 
 async def _start_web(host: str, port: int) -> None:
     """启动 Web 服务."""
-    import os
     from agent.core.config import Config
     from agent.core.engine import AgentEngine
     from agent.core.model_router import ModelRouter
@@ -882,8 +921,12 @@ async def _start_web(host: str, port: int) -> None:
     def _on_sigint():
         stop_event.set()
 
-    loop.add_signal_handler(signal.SIGINT, _on_sigint)
-    loop.add_signal_handler(signal.SIGTERM, _on_sigint)
+    if sys.platform != "win32":
+        loop.add_signal_handler(signal.SIGINT, _on_sigint)
+        loop.add_signal_handler(signal.SIGTERM, _on_sigint)
+    else:
+        signal.signal(signal.SIGINT, lambda *_: _on_sigint())
+        signal.signal(signal.SIGTERM, lambda *_: _on_sigint())
 
     await stop_event.wait()
     console.print("\n[dim]正在关闭 Web 服务...[/dim]")
@@ -895,9 +938,9 @@ async def _start_web(host: str, port: int) -> None:
             except Exception:
                 pass
         await server.stop()
-        # 关闭 pin_manager 确保 WAL 数据 flush
         try:
-            await pin_manager.close()
+            if pin_manager:
+                await pin_manager.close()
         except Exception:
             pass
 
@@ -908,8 +951,7 @@ async def _start_web(host: str, port: int) -> None:
 
     # 飞书 SDK 会创建非 daemon 线程, threading._shutdown() 会卡住等它们 join
     # graceful shutdown 已完成, 直接退出进程
-    import os as _os
-    _os._exit(0)
+    os._exit(0)
 
 @cli.command()
 def version() -> None:
@@ -981,7 +1023,7 @@ async def _start_api(host: str, port: int, api_key: str) -> None:
             requires_approval=tool.requires_approval,
         )
 
-    api_config = APIConfig(host=host, port=port, api_key=api_key, model_name=f"{primary.provider}:{primary.model}")
+    api_config = APIConfig(host=host, port=port, api_key=api_key, model_name=f"{primary.provider or 'unknown'}:{primary.model or 'unknown'}")
     server = OpenAIAPIServer(agent_engine=engine, config=api_config)
 
     console.print(Panel(
@@ -989,7 +1031,7 @@ async def _start_api(host: str, port: int, api_key: str) -> None:
         f"  Endpoint: http://{host}:{port}/v1/chat/completions\n"
         f"  Models:   http://{host}:{port}/v1/models\n"
         f"  认证: {'Bearer token' if api_key else '无 (开放访问)'}\n"
-        f"  模型: {primary.provider}:{primary.model}",
+        f"  模型: {primary.provider or '未配置'}:{primary.model or '未配置'}",
         style="cyan",
     ))
 

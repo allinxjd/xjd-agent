@@ -190,7 +190,7 @@ def config_show(raw: bool):
     table.add_row("配置目录", str(get_home()))
     table.add_row("Primary Provider", cfg.model.primary.provider or "(未配置)")
     table.add_row("Primary Model", cfg.model.primary.model or "(未配置)")
-    table.add_row("API Key", "***" + cfg.model.primary.api_key[-4:] if len(cfg.model.primary.api_key) > 4 else "(未配置)")
+    table.add_row("API Key", "***" + cfg.model.primary.api_key[-4:] if cfg.model.primary.api_key and len(cfg.model.primary.api_key) > 4 else "(未配置)")
     table.add_row("Base URL", cfg.model.primary.base_url or "(默认)")
     if cfg.model.cheap:
         table.add_row("Cheap Provider", cfg.model.cheap.provider)
@@ -349,7 +349,7 @@ def check_update(auto: bool = False):
     console.print("[dim]检查更新...[/dim]")
 
     try:
-        latest = asyncio.get_event_loop().run_until_complete(check_latest_version())
+        latest = asyncio.run(check_latest_version())
 
         has_update = False
         if latest and latest.startswith("commit:"):
@@ -376,9 +376,17 @@ def check_update(auto: bool = False):
         if has_update:
             if auto:
                 console.print("  [dim]正在更新...[/dim]")
-                ok = asyncio.get_event_loop().run_until_complete(auto_update())
+                ok = asyncio.run(auto_update())
                 if ok:
-                    console.print("  [green]更新成功! 请重启 xjd-agent[/green]")
+                    console.print("  [green]更新成功![/green]")
+                    from cli.commands.service import is_service_installed, restart_service
+                    if is_service_installed():
+                        if restart_service():
+                            console.print("  [green]服务已自动重启[/green]")
+                        else:
+                            console.print("  [yellow]服务重启失败，请手动运行: xjd-agent gateway[/yellow]")
+                    else:
+                        console.print("  运行 [bold]xjd-agent gateway[/bold] 启动服务")
                 else:
                     console.print("  [red]自动更新失败，请手动运行: git pull && pip install -e .[/red]")
             else:
@@ -425,7 +433,7 @@ async def _plugin_list():
             p.name,
             p.meta.version,
             p.state.value,
-            p.meta.description[:60] or "-",
+            (p.meta.description or "")[:60] or "-",
         )
 
     console.print(table)
