@@ -391,6 +391,8 @@ class AgentEngine:
 
         # 记忆 + 技能概览 → system prompt (稳定前缀，prompt cache 友好)
         system_content = self._system_prompt
+        import datetime as _dt
+        system_content += f"\n- 当前日期: {_dt.datetime.now().strftime('%Y年%m月%d日 %A')}"
         if injected and injected.system_context:
             system_content += "\n" + injected.system_context
 
@@ -558,6 +560,10 @@ class AgentEngine:
                             for tc in m.tool_calls:
                                 _called_names.append(tc["function"]["name"])
 
+                    _web_only = all(
+                        n in ("web_search", "web_fetch") for n in _called_names
+                    ) if _called_names else False
+
                     _is_factual = _is_fq(user_message) or is_factual_by_tools(_called_names)
 
                     if _is_factual:
@@ -589,11 +595,17 @@ class AgentEngine:
                                 round_idx += 1
                                 continue
                             elif not _grounded and _grounding_retried:
-                                _hard_blocked = True
-                                logger.warning(
-                                    "Grounding hard block: score %.2f after retry",
-                                    _grounding_score,
-                                )
+                                if _web_only:
+                                    logger.info(
+                                        "Grounding soft pass: score %.2f (web-only, skip hard block)",
+                                        _grounding_score,
+                                    )
+                                else:
+                                    _hard_blocked = True
+                                    logger.warning(
+                                        "Grounding hard block: score %.2f after retry",
+                                        _grounding_score,
+                                    )
                                 _tool_summary = "\n---\n".join(
                                     t[:500] for t in tool_texts[-3:]
                                 )
