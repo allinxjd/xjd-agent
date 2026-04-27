@@ -305,6 +305,9 @@ class WeChatAdapter(BasePlatformAdapter):
         @self._ws_client.on("reconnecting")
         def on_reconnecting(attempt):
             logger.info("企业微信智能机器人重连中 (第 %d 次)...", attempt)
+            if attempt >= 2:
+                from gateway.core.server import _check_and_clear_dead_proxy
+                _check_and_clear_dead_proxy()
 
         await self._ws_client.connect()
         logger.info("企业微信智能机器人 WebSocket 长连接已建立")

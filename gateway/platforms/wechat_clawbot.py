@@ -294,6 +294,9 @@ class WeChatClawBotAdapter(BasePlatformAdapter):
                 break
             except Exception as e:
                 logger.warning("iLink poll 失败: %s, %.0fs 后重试", e, retry_delay)
+                if retry_delay >= 8.0:
+                    from gateway.core.server import _check_and_clear_dead_proxy
+                    _check_and_clear_dead_proxy()
                 await asyncio.sleep(retry_delay)
                 retry_delay = min(retry_delay * 2, 30.0)
 

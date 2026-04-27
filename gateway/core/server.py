@@ -53,6 +53,48 @@ logger = logging.getLogger(__name__)
 
 _gateway_instance: Optional["GatewayServer"] = None
 
+_PROXY_KEYS = (
+    "HTTP_PROXY", "http_proxy",
+    "HTTPS_PROXY", "https_proxy",
+    "ALL_PROXY", "all_proxy",
+)
+
+
+def _check_and_clear_dead_proxy() -> None:
+    """检测代理环境变量，如果代理不可达则清除，确保直连可用."""
+    import os
+    import socket
+    import urllib.parse
+
+    proxy_url = None
+    for k in _PROXY_KEYS:
+        v = os.environ.get(k)
+        if v:
+            proxy_url = v
+            break
+
+    if not proxy_url:
+        return
+
+    try:
+        parsed = urllib.parse.urlparse(proxy_url if "://" in proxy_url else f"http://{proxy_url}")
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 1080
+    except Exception:
+        return
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(2)
+        sock.connect((host, port))
+        logger.info("代理 %s:%d 可用，保留代理设置", host, port)
+    except (ConnectionRefusedError, OSError, socket.timeout):
+        for k in _PROXY_KEYS:
+            os.environ.pop(k, None)
+        logger.warning("代理 %s:%d 不可达，已清除代理环境变量，使用直连", host, port)
+    finally:
+        sock.close()
+
 
 def get_gateway_server() -> Optional["GatewayServer"]:
     return _gateway_instance
@@ -233,6 +275,8 @@ class GatewayServer:
         """启动 Gateway — 启动所有适配器 + WebSocket 服务器."""
         self._stats.started_at = time.time()
         self._running = True
+
+        _check_and_clear_dead_proxy()
 
         # 初始化语音管线
         await self._init_voice_pipeline()
