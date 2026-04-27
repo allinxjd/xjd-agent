@@ -29,6 +29,8 @@ _BLOCKED_PATTERNS = [
     re.compile(r'\bcrontab\b', re.I),  # 定时任务统一走 CronScheduler
     re.compile(r'\blaunchctl\b', re.I),  # 服务管理统一走 service 命令
     re.compile(r'\bsystemctl\b', re.I),
+    re.compile(r'\bschtasks\b', re.I),
+    re.compile(r'\bxjd-agent\b', re.I),  # CLI 命令不能被 agent 自行调用
 ]
 
 
