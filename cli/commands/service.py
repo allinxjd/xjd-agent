@@ -111,7 +111,7 @@ def _systemd_install(port: int) -> None:
 
         [Service]
         Type=simple
-        ExecStart={_get_python()} -m cli.main gateway --foreground --host 0.0.0.0 --port {port}
+        ExecStart={_get_python()} -m cli.main web --host 0.0.0.0 --port {port}
         WorkingDirectory={_get_install_dir()}
         Restart=on-failure
         RestartSec=5
@@ -180,8 +180,7 @@ def _launchd_install(port: int) -> None:
                 <string>{_e(str(_get_python()))}</string>
                 <string>-m</string>
                 <string>cli.main</string>
-                <string>gateway</string>
-                <string>--foreground</string>
+                <string>web</string>
                 <string>--host</string>
                 <string>0.0.0.0</string>
                 <string>--port</string>
@@ -279,7 +278,7 @@ def _win_install(port: int) -> None:
         set "XJD_AGENT_HOME={xjd_home}"
         cd /d "{install_dir}"
         :loop
-        "{python_path}" -m cli.main gateway --foreground --host 0.0.0.0 --port {port} >> "{log_path}" 2>&1
+        "{python_path}" -m cli.main web --host 0.0.0.0 --port {port} >> "{log_path}" 2>&1
         echo [%date% %time%] Service exited, restarting in 5s... >> "{log_path}"
         timeout /t 5 /nobreak >nul
         goto loop
@@ -358,9 +357,11 @@ def restart_service() -> bool:
         plist = _plist_path()
         if not plist.exists():
             return False
-        subprocess.run(["launchctl", "unload", str(plist)], capture_output=True)
-        time.sleep(1)
-        r = subprocess.run(["launchctl", "load", "-w", str(plist)], capture_output=True)
+        uid = os.getuid()
+        r = subprocess.run(
+            ["launchctl", "kickstart", "-k", f"gui/{uid}/{PLIST_LABEL}"],
+            capture_output=True,
+        )
         return r.returncode == 0
     elif plat == "windows":
         subprocess.run(["schtasks", "/end", "/tn", SERVICE_NAME], capture_output=True)

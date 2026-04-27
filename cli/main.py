@@ -388,7 +388,7 @@ def setup() -> None:
 def gateway(host: str, port: int, foreground: bool) -> None:
     """启动消息网关 (WebUI + 消息渠道)."""
     if foreground:
-        asyncio.run(_start_gateway(host=host, port=port))
+        asyncio.run(_start_web(host=host, port=port))
         return
 
     from rich.console import Console
@@ -399,14 +399,14 @@ def gateway(host: str, port: int, foreground: bool) -> None:
         console.print("  将注册为系统服务（开机自启 + 后台运行）")
         if not click.confirm("  是否继续?", default=True):
             console.print("  以前台模式启动...")
-            asyncio.run(_start_gateway(host=host, port=port))
+            asyncio.run(_start_web(host=host, port=port))
             return
         ok = install_service_silent(port=port)
         if ok:
             console.print(f"  [green]服务已注册并启动[/green]")
         else:
             console.print("  [yellow]服务注册失败，以前台模式启动[/yellow]")
-            asyncio.run(_start_gateway(host=host, port=port))
+            asyncio.run(_start_web(host=host, port=port))
             return
     else:
         if port != 8080 or host != "0.0.0.0":
@@ -417,12 +417,21 @@ def gateway(host: str, port: int, foreground: bool) -> None:
             console.print("  [green]服务已重启[/green]")
         else:
             console.print("  [yellow]服务重启失败，以前台模式启动[/yellow]")
-            asyncio.run(_start_gateway(host=host, port=port))
+            asyncio.run(_start_web(host=host, port=port))
             return
 
     console.print(f"  访问 http://localhost:{port}")
-    console.print("  查看状态: xjd-agent service status")
     console.print("  查看日志: xjd-agent service logs")
+    console.print("  Ctrl+C 退出日志（服务继续后台运行）")
+    console.print()
+
+    from cli.commands.service import _get_log_path
+    import subprocess as _sp
+    log_path = _get_log_path()
+    try:
+        _sp.run(["tail", "-f", "-n", "20", str(log_path)])
+    except KeyboardInterrupt:
+        console.print("\n  服务仍在后台运行")
 
 async def _start_gateway(host: str, port: int) -> None:
     """启动 Gateway."""
