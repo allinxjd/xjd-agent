@@ -106,8 +106,8 @@ class OpenAIProvider(BaseProvider):
                 item["tool_call_id"] = msg.tool_call_id
             if msg.tool_calls:
                 item["tool_calls"] = msg.tool_calls
-            if include_reasoning and msg.reasoning_content:
-                item["reasoning_content"] = msg.reasoning_content
+            if include_reasoning and msg.role == "assistant":
+                item["reasoning_content"] = msg.reasoning_content or ""
             result.append(item)
         return result
 

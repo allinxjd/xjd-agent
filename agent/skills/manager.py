@@ -856,21 +856,30 @@ class SkillManager:
 
         if scored:
             best_sat, best_skill = scored[0]
+
+            # 话题保护: 已有活跃技能且未超时时，切换到不同技能需要更高置信度
+            _switch_penalty = (
+                self._last_matched_skill
+                and best_skill.skill_id != self._last_matched_skill
+                and (time.time() - self._last_match_time) < 300
+            )
+            l4_threshold = 0.60 if _switch_penalty else 0.45
+
             # 有多个候选时，检查第一名是否显著领先第二名
             if len(scored) >= 2:
                 second_sat = scored[1][0]
                 gap = best_sat - second_sat
-                if best_sat >= 0.45 and gap >= 0.08:
+                if best_sat >= l4_threshold and gap >= 0.08:
                     logger.info("L4 keyword_sat matched: %s (sat=%.2f, gap=%.2f)",
                                 best_skill.name, best_sat, gap)
                     self._last_matched_skill = best_skill.skill_id
                     self._last_match_time = time.time()
                     return best_skill
                 # 差距太小 → 不确定，跳到 L5/L6
-                if best_sat >= 0.45 and gap < 0.08:
+                if best_sat >= l4_threshold and gap < 0.08:
                     logger.debug("L4 ambiguous: %s(%.2f) vs %s(%.2f)",
                                  best_skill.name, best_sat, scored[1][1].name, second_sat)
-            elif best_sat >= 0.45:
+            elif best_sat >= l4_threshold:
                 logger.info("L4 keyword_sat matched: %s (sat=%.2f)",
                             best_skill.name, best_sat)
                 self._last_matched_skill = best_skill.skill_id
@@ -885,8 +894,8 @@ class SkillManager:
             # 超过 5 分钟不再继承
             if elapsed > 300:
                 self._last_matched_skill = None
-            # 话题切换: 当前最高分技能 ≠ 上一轮，且有一定置信度 → 切换
-            elif best_skill.skill_id != self._last_matched_skill and best_sat >= 0.35:
+            # 话题切换: 当前最高分技能 ≠ 上一轮，且有较高置信度 → 切换
+            elif best_skill.skill_id != self._last_matched_skill and best_sat >= 0.55:
                 self._last_matched_skill = best_skill.skill_id
                 self._last_match_time = time.time()
                 logger.info("L5 topic_switch: %s (sat=%.2f)", best_skill.name, best_sat)
