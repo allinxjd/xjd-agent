@@ -156,6 +156,7 @@ class CronScheduler:
         self._scheduler_task: Optional[asyncio.Task] = None
         self._running_tasks: set[str] = set()  # 防止同一任务并发执行
         self._executor: Optional[Callable] = None
+        self._grouped_executor: Optional[Callable] = None
         self._db = None
 
     async def initialize(self) -> None:
@@ -186,6 +187,10 @@ class CronScheduler:
     def set_executor(self, executor: Callable) -> None:
         """设置任务执行器 (通常是 AgentEngine.run_turn)."""
         self._executor = executor
+
+    def set_grouped_executor(self, executor: Callable) -> None:
+        """设置分组任务执行器 (一次生成，多渠道分发)."""
+        self._grouped_executor = executor
 
     async def add_task(
         self,
@@ -275,20 +280,36 @@ class CronScheduler:
         while self._running:
             now = time.time()
 
+            # 收集本轮到期的任务
+            due_tasks: list[CronTask] = []
             for task in list(self._tasks.values()):
                 if not task.enabled:
                     continue
                 if task.task_id in self._running_tasks:
-                    continue  # 防止同一任务并发执行
+                    continue
                 if task.next_run and now >= task.next_run:
-                    # 标记为运行中并执行
+                    due_tasks.append(task)
+
+            # 按 (skill_id, prompt) 分组 — 同 cron_expr 才会同时到期
+            groups: dict[tuple, list[CronTask]] = {}
+            for task in due_tasks:
+                key = (task.skill_id, task.prompt) if task.skill_id else (task.task_id,)
+                groups.setdefault(key, []).append(task)
+
+            for _key, group in groups.items():
+                for task in group:
                     self._running_tasks.add(task.task_id)
-                    asyncio.create_task(self._execute_task(task))
-                    # 更新下次执行时间
+
+                if len(group) > 1 and group[0].skill_id and self._grouped_executor:
+                    asyncio.create_task(self._execute_grouped_tasks(group))
+                else:
+                    for task in group:
+                        asyncio.create_task(self._execute_task(task))
+
+                for task in group:
                     task.last_run = now
                     task.run_count += 1
                     self._update_next_run(task)
-                    # 检查是否达到最大执行次数
                     if task.max_runs > 0 and task.run_count >= task.max_runs:
                         task.enabled = False
                         logger.info("Task %s reached max runs, disabled", task.name)
@@ -313,6 +334,29 @@ class CronScheduler:
         else:
             self._running_tasks.discard(task.task_id)
             logger.warning("No executor set for cron tasks")
+
+    async def _execute_grouped_tasks(self, tasks: list[CronTask]) -> None:
+        """执行分组任务：一次生成，多渠道分发."""
+        names = ", ".join(t.name for t in tasks)
+        logger.info("Executing grouped cron tasks (%d targets): %s", len(tasks), names)
+
+        if self._grouped_executor:
+            try:
+                await asyncio.wait_for(
+                    self._grouped_executor(tasks[0], tasks),
+                    timeout=300.0,
+                )
+                logger.info("Grouped cron tasks completed: %s", names)
+            except asyncio.TimeoutError:
+                logger.error("Grouped cron tasks timed out: %s", names)
+            except Exception as e:
+                logger.error("Grouped cron tasks failed: %s — %s", names, e)
+            finally:
+                for task in tasks:
+                    self._running_tasks.discard(task.task_id)
+        else:
+            for task in tasks:
+                self._running_tasks.discard(task.task_id)
 
     def _update_next_run(self, task: CronTask) -> None:
         """计算下次执行时间."""

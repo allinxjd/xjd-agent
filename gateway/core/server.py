@@ -328,6 +328,7 @@ class GatewayServer:
             self._scheduler = CronScheduler()
             await self._scheduler.initialize()
             self._scheduler.set_executor(self._execute_cron_task)
+            self._scheduler.set_grouped_executor(self._execute_grouped_cron_tasks)
             await self._scheduler.start()
             logger.info("CronScheduler 已启动")
         except Exception as e:
@@ -527,7 +528,8 @@ class GatewayServer:
             prompt = (
                 f"[定时任务 | 平台: {task.platform} | 目标: {task.chat_id}]\n"
                 f"注意：你的回复会自动发送到目标渠道，不需要调用 send_to_contact 或 list_contacts 等工具来发送。"
-                f"直接输出最终内容即可，不要包含任何工具调用说明、推送状态或内部提示。\n\n"
+                f"直接输出最终内容即可，不要包含任何前言、说明、过渡语、分隔线或内部提示。"
+                f"第一行必须直接是正文内容。\n\n"
                 f"{prompt}"
             )
 
@@ -566,6 +568,65 @@ class GatewayServer:
                             await asyncio.sleep(3 * (attempt + 1))
                 if not sent:
                     logger.error("Cron task send failed after 3 attempts (%s → %s)", task.platform, task.chat_id)
+            elif self._notifier:
+                await self._notifier.send_direct(task.platform, task.chat_id, reply)
+
+    async def _execute_grouped_cron_tasks(self, primary_task: Any, all_tasks: list) -> None:
+        """分组执行：用 primary_task 跑一次 agent，结果分发到所有 task 的目标渠道."""
+        targets = len(all_tasks)
+        self._emit_inspector({
+            "event_type": "cron_start",
+            "title": f"Cron (grouped): {primary_task.name} +{targets - 1}",
+            "detail": f"targets={targets}, prompt={primary_task.prompt[:80]}",
+            "timestamp": time.time(),
+        })
+        _cron_start = time.time()
+
+        prompt = (
+            f"[定时任务 | 多渠道推送]\n"
+            f"注意：你的回复会自动发送到目标渠道，不需要调用 send_to_contact 或 list_contacts 等工具来发送。"
+            f"直接输出最终内容即可，不要包含任何前言、说明、过渡语、分隔线或内部提示。"
+            f"第一行必须直接是正文内容。\n\n"
+            f"{primary_task.prompt}"
+        )
+
+        async with self._engine_lock:
+            result = await self._engine.run_turn(
+                prompt,
+                skill_id=getattr(primary_task, 'skill_id', '') or None,
+                session_messages=[],
+            )
+        reply = result.content
+
+        self._emit_inspector({
+            "event_type": "cron_complete",
+            "title": f"Cron Done (grouped): {primary_task.name} +{targets - 1}",
+            "detail": f"reply_len={len(reply or '')}, tokens={result.total_usage.total_tokens}",
+            "timestamp": time.time(),
+            "duration_ms": round((time.time() - _cron_start) * 1000),
+        })
+        if not reply:
+            return
+
+        for task in all_tasks:
+            if not (task.platform and task.chat_id):
+                continue
+            adapter = self._adapters.get(task.platform)
+            if adapter and adapter.is_running:
+                for attempt in range(3):
+                    try:
+                        await adapter.send_text(task.chat_id, reply)
+                        logger.info("Grouped send ok: %s → %s", task.platform, task.name)
+                        break
+                    except Exception as e:
+                        logger.warning(
+                            "Grouped send attempt %d/3 failed (%s → %s): %s",
+                            attempt + 1, task.platform, task.chat_id, e,
+                        )
+                        if attempt < 2:
+                            await asyncio.sleep(3 * (attempt + 1))
+                else:
+                    logger.error("Grouped send failed (%s → %s)", task.platform, task.chat_id)
             elif self._notifier:
                 await self._notifier.send_direct(task.platform, task.chat_id, reply)
 

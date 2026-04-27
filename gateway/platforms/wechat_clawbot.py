@@ -449,7 +449,9 @@ class WeChatClawBotAdapter(BasePlatformAdapter):
         try:
             if message.message_type == MessageType.TEXT:
                 text = markdown_to_plain_text(message.content or "")
+                logger.info("ClawBot send_message: to=%s, text_len=%d", to_user, len(text))
                 result = await send_message_weixin(to_user, text, opts)
+                logger.info("ClawBot send_message result: %s", result)
                 return result.get("messageId", "")
 
             # 媒体消息: 写入临时文件 → send_weixin_media_file 自动路由
