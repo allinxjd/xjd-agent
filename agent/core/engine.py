@@ -606,14 +606,14 @@ class AgentEngine:
                                         "Grounding hard block: score %.2f after retry",
                                         _grounding_score,
                                     )
-                                _tool_summary = "\n---\n".join(
-                                    t[:500] for t in tool_texts[-3:]
-                                )
-                                response.content = (
-                                    "我查到了以下数据，但无法确认回答的准确性。"
-                                    "以下是工具返回的原始数据：\n\n"
-                                    + _tool_summary
-                                )
+                                    _tool_summary = "\n---\n".join(
+                                        t[:500] for t in tool_texts[-3:]
+                                    )
+                                    response.content = (
+                                        "我查到了以下数据，但无法确认回答的准确性。"
+                                        "以下是工具返回的原始数据：\n\n"
+                                        + _tool_summary
+                                    )
 
                     if self._grounding_tracker and _is_factual:
                         from agent.core.grounding import GroundingRecord
