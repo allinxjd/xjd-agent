@@ -74,16 +74,22 @@ def _git_repo_dir() -> Optional["Path"]:
 
 
 def _git_fetch(repo_dir: "Path") -> bool:
-    try:
-        r = subprocess.run(
-            ["git", "fetch", "origin"],
-            capture_output=True, text=True, timeout=30,
-            cwd=str(repo_dir),
-        )
-        return r.returncode == 0
-    except Exception as e:
-        logger.debug("git fetch failed: %s", e)
-        return False
+    for attempt in range(2):
+        try:
+            r = subprocess.run(
+                ["git", "-c", "http.version=HTTP/1.1", "fetch", "origin", "main"],
+                capture_output=True, text=True, timeout=45,
+                cwd=str(repo_dir),
+            )
+            if r.returncode == 0:
+                return True
+            logger.debug("git fetch attempt %d failed (rc=%d): %s",
+                         attempt + 1, r.returncode, r.stderr.strip())
+        except subprocess.TimeoutExpired:
+            logger.debug("git fetch attempt %d timed out", attempt + 1)
+        except Exception as e:
+            logger.debug("git fetch attempt %d error: %s", attempt + 1, e)
+    return False
 
 
 def _git_pending_commits(repo_dir: "Path") -> list[str]:
@@ -182,7 +188,7 @@ def _update_git() -> bool:
 
     try:
         result = subprocess.run(
-            ["git", "pull", "--ff-only", "origin", "main"],
+            ["git", "-c", "http.version=HTTP/1.1", "pull", "--ff-only", "origin", "main"],
             capture_output=True, text=True, timeout=60,
             cwd=repo,
         )

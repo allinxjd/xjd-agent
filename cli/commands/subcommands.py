@@ -371,7 +371,9 @@ def check_update(auto: bool = False):
         elif latest:
             console.print(f"  [green]已是最新版本 ({current})[/green]")
         else:
-            console.print("  [yellow]无法检查远程版本，请手动运行: git pull[/yellow]")
+            console.print("  [yellow]无法连接 GitHub，请检查网络后重试[/yellow]")
+            console.print("  [dim]手动更新: cd {} && git pull && pip install -e .[/dim]".format(
+                _git_repo_dir() or "项目目录"))
 
         if has_update:
             if auto:
