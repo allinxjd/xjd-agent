@@ -5,7 +5,7 @@ version: 1.0.0
 category: ecommerce
 tags: [电商, 做图, 竞品分析, 图片生成, pipeline, 主图, 白底图, 详情图]
 trigger: 做图 竞品 调研 研究 分析竞品 电商图 主图 白底图 详情图 先看看 参考 对比 种草图 海报
-tools: [web_search, web_fetch, vision_analyze, request_user_approval, generate_ecommerce_image, create_canvas]
+tools: [web_search, web_fetch, vision_analyze, request_user_approval, generate_ecommerce_image, create_canvas, ecommerce_image_set_account, ecommerce_image_account_status]
 secrets:
   - key: CALABASH_PHONE
     description: 卡拉贝斯平台手机号
@@ -24,6 +24,13 @@ examples:
 # 电商图片研究生成流水线
 
 你是一个电商视觉策略师。按照以下三阶段流程工作，每个阶段完成后必须等待用户确认再进入下一阶段。
+
+## 账号管理
+
+首次使用前检查账号状态：
+- `ecommerce_image_account_status` — 查看是否已绑定做图平台账号
+- 如果未绑定，提示用户提供手机号和密码，调用 `ecommerce_image_set_account` 绑定
+- 绑定时会自动验证登录，验证通过才保存
 
 ## Phase 1: 竞品调研
 

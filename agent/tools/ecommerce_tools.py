@@ -74,7 +74,7 @@ async def generate_ecommerce_image(
     password = secrets.get("ecommerce-image-pipeline", "CALABASH_PASSWORD")
     api_url = secrets.get("ecommerce-image-pipeline", "CALABASH_API_URL", "https://ai.allinxjd.com").rstrip("/")
     if not phone or not password:
-        return json.dumps({"success": False, "error": "做图平台凭证未配置。请打开 WebUI 设置 → 技能凭证 tab → 找到「电商图片研究生成流水线」→ 填入卡拉贝斯平台的手机号和密码后保存。\n\n如果还没有账号，请先到 ai.calabashai.cn 注册。"}, ensure_ascii=False)
+        return json.dumps({"success": False, "error": "做图平台账号未绑定。请告诉我你的做图平台手机号和密码，我来帮你绑定。\n\n如果还没有账号，请先到 ai.calabashai.cn 注册。"}, ensure_ascii=False)
 
     # 验证参考图片
     if not reference_image:
@@ -168,6 +168,47 @@ async def generate_ecommerce_image(
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  做图平台账号管理
+# ═══════════════════════════════════════════════════════════════════
+
+_SKILL_ID = "ecommerce-image-pipeline"
+
+
+async def set_image_account(phone: str, password: str, api_url: str = "") -> str:
+    """绑定做图平台账号（验证登录后保存）."""
+    from agent.core.secrets import get_secrets_store
+
+    url = (api_url or "https://ai.allinxjd.com").rstrip("/")
+    try:
+        _calabash_session.clear()
+        await _calabash_login(url, phone, password)
+    except Exception as e:
+        return json.dumps({"success": False, "error": f"登录验证失败: {e}"}, ensure_ascii=False)
+
+    store = get_secrets_store()
+    store.set_bulk(_SKILL_ID, {
+        "CALABASH_PHONE": phone,
+        "CALABASH_PASSWORD": password,
+        "CALABASH_API_URL": url,
+    })
+    masked = phone[:3] + "****" + phone[-4:] if len(phone) >= 7 else "***"
+    return json.dumps({"success": True, "phone": masked, "api_url": url}, ensure_ascii=False)
+
+
+async def image_account_status() -> str:
+    """查看做图平台账号绑定状态."""
+    from agent.core.secrets import get_secrets_store
+
+    store = get_secrets_store()
+    phone = store.get(_SKILL_ID, "CALABASH_PHONE")
+    url = store.get(_SKILL_ID, "CALABASH_API_URL", "https://ai.allinxjd.com")
+    if phone:
+        masked = phone[:3] + "****" + phone[-4:] if len(phone) >= 7 else "***"
+        return json.dumps({"configured": True, "phone": masked, "api_url": url}, ensure_ascii=False)
+    return json.dumps({"configured": False}, ensure_ascii=False)
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  注册
 # ═══════════════════════════════════════════════════════════════════
 
@@ -201,5 +242,29 @@ def register_ecommerce_tools(registry) -> None:
             "required": ["platform", "description", "reference_image"],
         },
         handler=generate_ecommerce_image,
+        category="image",
+    )
+
+    registry.register(
+        name="ecommerce_image_set_account",
+        description="绑定做图平台账号（手机号+密码），验证登录后保存。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "phone": {"type": "string", "description": "做图平台手机号"},
+                "password": {"type": "string", "description": "做图平台密码"},
+                "api_url": {"type": "string", "description": "API 地址 (默认 ai.allinxjd.com)", "default": ""},
+            },
+            "required": ["phone", "password"],
+        },
+        handler=set_image_account,
+        category="image",
+    )
+
+    registry.register(
+        name="ecommerce_image_account_status",
+        description="查看做图平台账号绑定状态。",
+        parameters={"type": "object", "properties": {}},
+        handler=image_account_status,
         category="image",
     )
