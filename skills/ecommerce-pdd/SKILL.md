@@ -26,9 +26,7 @@ examples:
   - 查看拼多多广告效果
   - 拼多多客服消息
   - 查看已登录的店铺
-metadata:
-  hermes:
-    requires_tools: [ecommerce_start_cs]
+requires_tools: [ecommerce_start_cs]
 ---
 
 # 拼多多代运营助手

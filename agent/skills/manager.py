@@ -94,7 +94,7 @@ class Skill:
     failure_count: int = 0
     deprecated: bool = False
 
-    # 条件激活 (借鉴 Hermes Agent)
+    # 条件激活
     requires_tools: list[str] = field(default_factory=list)   # 需要这些工具才激活
     fallback_for_tools: list[str] = field(default_factory=list)  # 这些工具可用时不激活
 
@@ -225,8 +225,8 @@ class Skill:
             SkillSecret(key=s.get("key", ""), description=s.get("description", ""), default=s.get("default", ""))
             for s in raw_secrets if isinstance(s, dict)
         ]
-        # 条件激活 (兼容 Hermes metadata.hermes.* 格式)
-        hermes = meta.get("hermes", {}) if isinstance(meta.get("hermes"), dict) else {}
+        # 条件激活 (兼容旧版 metadata.hermes.* 格式)
+        _compat = meta.get("hermes", {}) if isinstance(meta.get("hermes"), dict) else {}
         return cls(
             skill_id=skill_id or fm.get("name", str(uuid.uuid4())[:8]),
             name=fm.get("name", ""),
@@ -243,8 +243,8 @@ class Skill:
             metadata=meta,
             use_count=meta.get("use_count", 0),
             success_rate=meta.get("success_rate", 1.0),
-            requires_tools=hermes.get("requires_tools", []),
-            fallback_for_tools=hermes.get("fallback_for_tools", []),
+            requires_tools=fm.get("requires_tools") or _compat.get("requires_tools", []),
+            fallback_for_tools=fm.get("fallback_for_tools") or _compat.get("fallback_for_tools", []),
             status=fm.get("status", "active"),
             source=fm.get("source", "manual"),
             author=fm.get("author", ""),
@@ -365,7 +365,7 @@ class SkillManager:
         │   └── SKILL.md
         └── old-skill-id.yaml  (旧格式，启动时自动迁移)
 
-    匹配管线 (借鉴 OpenClaw Intent Router):
+    匹配管线:
         L1 learn_cache  — 精确 prompt → skill (跨 session 持久化)
         L2 exact_name   — 用户消息包含技能名称
         L3 trivial_fast — 短消息 ("好的"/"继续") 继承上一轮技能
@@ -769,7 +769,7 @@ class SkillManager:
     def _saturation_score(raw: float, k: float = 0.4) -> float:
         """饱和曲线: 防止宽泛触发词列表通过堆量取胜.
 
-        OpenClaw 公式: 1 - 1/(1 + raw * k)
+        饱和公式: 1 - 1/(1 + raw * k)
         raw=1 → 0.29, raw=3 → 0.55, raw=5 → 0.67, raw=10 → 0.80
         """
         return 1.0 - 1.0 / (1.0 + raw * k)
@@ -780,7 +780,7 @@ class SkillManager:
         model_router: Optional[Any] = None,
         available_tools: Optional[set[str]] = None,
     ) -> Optional[Skill]:
-        """6 层匹配管线 (借鉴 OpenClaw Intent Router + Hermes Skills).
+        """6 层匹配管线.
 
         L1 learn_cache  → L2 exact_name → L3 trivial_fast →
         L4 keyword_sat  → L5 prior_intent → L6 llm_semantic
@@ -819,7 +819,7 @@ class SkillManager:
         # ── L4: Keyword Saturation Scoring ──
         scored: list[tuple[float, Skill]] = []
         for skill in self._skills.values():
-            # 条件激活过滤 (借鉴 Hermes)
+            # 条件激活过滤
             if skill.requires_tools and available_tools is not None:
                 if not all(t in available_tools for t in skill.requires_tools):
                     continue

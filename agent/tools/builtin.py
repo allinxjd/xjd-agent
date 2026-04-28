@@ -15,7 +15,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
-# 禁止执行的危险命令模式 (参考 HermesAgent 安全策略)
+# 禁止执行的危险命令模式
 # 1. 禁止关闭/杀死用户桌面进程 (浏览器、应用等)
 # 2. 禁止系统级破坏操作
 _BLOCKED_PATTERNS = [

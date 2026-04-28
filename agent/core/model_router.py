@@ -355,7 +355,7 @@ class ModelRouter:
                 if active_key and self._credential_mgr:
                     self._credential_mgr.report_error(provider.name, active_key, status)
 
-                # 连接错误 → 立即跳到下一个 provider (HermesAgent 模式)
+                # 连接错误 → 立即跳到下一个 provider
                 is_conn_error = any(t in err_str for t in _CONNECTION_ERROR_TYPES)
                 if is_conn_error:
                     logger.warning(

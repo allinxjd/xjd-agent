@@ -1,6 +1,6 @@
 """标准化电商协议 — 统一数据模型 + 错误码.
 
-借鉴 OpenClaw commerce protocol，定义平台无关的数据结构，
+定义平台无关的数据结构，
 所有平台适配器统一返回这些类型。
 """
 
@@ -166,7 +166,7 @@ class Message:
 class OperationResult:
     """统一操作结果 — 所有平台操作都返回此类型.
 
-    失败时 instruction 字段告诉 AI 下一步该做什么 (OpenClaw 风格)。
+    失败时 instruction 字段告诉 AI 下一步该做什么。
     """
 
     success: bool = False

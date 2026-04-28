@@ -3,7 +3,7 @@
 操作拼多多商家管理后台 (mms.pinduoduo.com)，
 通过 CDP 连接用户已登录的 Chrome 或 Playwright 内置浏览器。
 
-写操作安全策略 (借鉴 OpenClaw dry-run):
+写操作安全策略:
 - 简单写操作 (上下架/发货/客服回复): 直接执行
 - 复杂写操作 (发布商品/编辑商品/创建活动): 填表单后返回 preview，不自动提交
 """
@@ -60,7 +60,7 @@ class PddPlatform(EcommercePlatform):
             return False
 
     async def _page_snapshot(self, page, max_len: int = 3000) -> str:
-        """提取页面可见文本快照 (Hermes 风格)."""
+        """提取页面可见文本快照."""
         return await page.evaluate(
             f"() => document.body?.innerText?.substring(0, {max_len}) || ''"
         )
