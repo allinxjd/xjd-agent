@@ -197,13 +197,17 @@ class KnowledgeBase:
     def search(self, query: str) -> list[str]:
         results: list[str] = []
         lower = query.lower()
+        query_grams = {lower[i:i+2] for i in range(len(lower)-1)} if len(lower) >= 2 else {lower}
         for faq in self._faq:
             q = faq.get("q", "").lower()
-            if any(w in lower for w in q.split()) or any(w in q for w in lower):
+            q_grams = {q[i:i+2] for i in range(len(q)-1)} if len(q) >= 2 else {q}
+            overlap = len(q_grams & query_grams)
+            if overlap >= 2 or lower in q or q in lower:
                 results.append(f"Q: {faq['q']}\nA: {faq['a']}")
         for pid, info in self._product_cache.items():
             name = str(info.get("title", info.get("goods_name", ""))).lower()
-            if any(w in name for w in lower if len(w) >= 2):
+            name_grams = {name[i:i+2] for i in range(len(name)-1)} if len(name) >= 2 else {name}
+            if len(name_grams & query_grams) >= 2 or lower in name:
                 results.append(f"商品: {info.get('title', pid)} — ¥{info.get('price', '?')}")
         return results[:5]
 

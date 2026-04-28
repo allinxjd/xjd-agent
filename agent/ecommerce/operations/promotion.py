@@ -61,6 +61,8 @@ class PromotionManager:
         budget = float(campaign_data.get("budget", 0))
         hist_conv = float(historical_stats.get("conversion_rate", 0.02))
         hist_aov = float(historical_stats.get("avg_order_value", 50))
+        conv_is_default = "conversion_rate" not in historical_stats
+        aov_is_default = "avg_order_value" not in historical_stats
         cpc = float(campaign_data.get("cpc", 1.0))
         if cpc <= 0:
             return {"error": "CPC 必须大于 0"}
@@ -68,7 +70,12 @@ class PromotionManager:
         est_orders = est_clicks * hist_conv
         est_revenue = est_orders * hist_aov
         est_roi = (est_revenue - budget) / budget if budget > 0 else 0
-        return {
+        defaults_used = []
+        if conv_is_default:
+            defaults_used.append("conversion_rate=0.02")
+        if aov_is_default:
+            defaults_used.append("avg_order_value=50")
+        result = {
             "budget": budget,
             "estimated_clicks": round(est_clicks),
             "estimated_orders": round(est_orders, 1),
@@ -76,6 +83,10 @@ class PromotionManager:
             "estimated_roi": round(est_roi * 100, 1),
             "note": "基于历史转化率预估，实际效果受多种因素影响",
         }
+        if defaults_used:
+            result["defaults_used"] = defaults_used
+            result["note"] += f"（以下参数使用默认值: {', '.join(defaults_used)}，建议提供真实数据）"
+        return result
 
 
 class AdCampaignManager:

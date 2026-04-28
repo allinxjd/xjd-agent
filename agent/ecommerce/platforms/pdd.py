@@ -10,8 +10,10 @@
 
 from __future__ import annotations
 
+import json as _json
 import logging
 from typing import Any, Optional
+from urllib.parse import quote as _url_quote
 
 from agent.ecommerce.base import EcommercePlatform
 from agent.ecommerce.platforms import register_platform
@@ -117,18 +119,27 @@ class PddPlatform(EcommercePlatform):
         return uploaded
 
     async def _extract_table_data(self, page, url: str) -> tuple[list[dict], str]:
-        """通用表格数据提取: 导航到页面 → 等待加载 → 提取表格."""
+        """通用表格数据提取: 导航到页面 → 等待加载 → 按表头名称提取."""
         if not await self._safe_goto(page, url):
             return [], "无法访问页面"
         await page.wait_for_timeout(3000)
-        rows = await page.evaluate("""() => {
-            const trs = document.querySelectorAll('table tbody tr, [class*="table-row"], [class*="list-item"]');
-            return Array.from(trs).map(tr => {
+        data = await page.evaluate("""() => {
+            const table = document.querySelector('table');
+            if (!table) return {headers: [], rows: []};
+            const ths = table.querySelectorAll('thead th, thead td');
+            const headers = Array.from(ths).map(h => h.innerText?.trim() || '');
+            const trs = table.querySelectorAll('tbody tr');
+            const rows = Array.from(trs).map(tr => {
                 const cells = tr.querySelectorAll('td, [class*="cell"]');
                 return Array.from(cells).map(c => c.innerText?.trim() || '');
             });
+            return {headers, rows};
         }""")
-        return rows, ""
+        headers = data.get("headers", []) if isinstance(data, dict) else []
+        raw_rows = data.get("rows", []) if isinstance(data, dict) else data
+        if headers:
+            return [dict(zip(headers, row)) for row in raw_rows], ""
+        return raw_rows, ""
 
     # PLACEHOLDER_AUTH
 
@@ -231,15 +242,25 @@ class PddPlatform(EcommercePlatform):
                 text = await self._page_snapshot(page, 1000)
                 return OperationResult.ok("list_products", {"products": [], "page_preview": text[:500], "url": page.url})
             products = []
-            for cells in rows:
-                if len(cells) >= 2:
-                    products.append(Product(
-                        title=cells[1] if len(cells) > 1 else "",
-                        price=float("".join(c for c in (cells[2] if len(cells) > 2 else "0") if c.isdigit() or c == ".") or 0),
-                        stock=int("".join(c for c in (cells[3] if len(cells) > 3 else "0") if c.isdigit()) or 0),
-                        status=cells[4] if len(cells) > 4 else "",
-                        platform="pdd",
-                    ))
+            for row in rows:
+                if isinstance(row, dict):
+                    title = row.get("商品名称", row.get("商品标题", row.get("title", "")))
+                    price_raw = row.get("价格", row.get("团购价", row.get("price", "0")))
+                    stock_raw = row.get("库存", row.get("stock", "0"))
+                    status_val = row.get("状态", row.get("status", ""))
+                else:
+                    cells = row
+                    title = cells[1] if len(cells) > 1 else ""
+                    price_raw = cells[2] if len(cells) > 2 else "0"
+                    stock_raw = cells[3] if len(cells) > 3 else "0"
+                    status_val = cells[4] if len(cells) > 4 else ""
+                products.append(Product(
+                    title=str(title),
+                    price=float("".join(c for c in str(price_raw) if c.isdigit() or c == ".") or 0),
+                    stock=int("".join(c for c in str(stock_raw) if c.isdigit()) or 0),
+                    status=str(status_val),
+                    platform="pdd",
+                ))
             return OperationResult.ok("list_products", products)
         except Exception as e:
             return OperationResult.fail("list_products", str(e), ErrorCode.PLATFORM_ERROR)
@@ -249,7 +270,7 @@ class PddPlatform(EcommercePlatform):
             page = await self._get_page()
             if not await self.check_session():
                 return OperationResult.fail("get_product", "未登录", ErrorCode.AUTH_REQUIRED)
-            url = f"{self.BASE_URL}/goods/goods_detail?goodsId={product_id}"
+            url = f"{self.BASE_URL}/goods/goods_detail?goodsId={_url_quote(str(product_id))}"
             if not await self._safe_goto(page, url):
                 return OperationResult.fail("get_product", "无法访问商品详情", ErrorCode.NETWORK_ERROR)
             await page.wait_for_timeout(3000)
@@ -301,7 +322,7 @@ class PddPlatform(EcommercePlatform):
             page = await self._get_page()
             if not await self.check_session():
                 return OperationResult.fail("update_product", "未登录", ErrorCode.AUTH_REQUIRED)
-            url = f"{self.BASE_URL}/goods/goods_detail?goodsId={product_id}"
+            url = f"{self.BASE_URL}/goods/goods_detail?goodsId={_url_quote(str(product_id))}"
             if not await self._safe_goto(page, url):
                 return OperationResult.fail("update_product", "无法访问商品详情", ErrorCode.NETWORK_ERROR)
             await page.wait_for_timeout(3000)
@@ -344,12 +365,14 @@ class PddPlatform(EcommercePlatform):
                 return OperationResult.fail("toggle_product", "无法访问商品列表", ErrorCode.NETWORK_ERROR)
             await page.wait_for_timeout(3000)
             action_text = "上架" if active else "下架"
+            safe_action = _json.dumps(action_text)
             found = await page.evaluate(f"""(productId) => {{
                 const rows = document.querySelectorAll('table tbody tr, [class*="table-row"], [class*="list-item"]');
+                const target = {safe_action};
                 for (const row of rows) {{
                     if (row.innerText.includes(productId)) {{
                         const btn = Array.from(row.querySelectorAll('button, a, [role="button"]'))
-                            .find(b => b.innerText.includes('{action_text}'));
+                            .find(b => b.innerText.includes(target));
                         if (btn) {{ btn.click(); return true; }}
                     }}
                 }}
@@ -385,16 +408,26 @@ class PddPlatform(EcommercePlatform):
                 text = await self._page_snapshot(page, 1000)
                 return OperationResult.ok("list_orders", {"orders": [], "page_preview": text[:500], "url": page.url})
             orders = []
-            for cells in rows:
-                if len(cells) >= 2:
-                    orders.append(Order(
-                        order_id=cells[0] if cells else "",
-                        status=cells[4] if len(cells) > 4 else "",
-                        total_amount=float("".join(c for c in (cells[2] if len(cells) > 2 else "0") if c.isdigit() or c == ".") or 0),
-                        items=[{"description": cells[1]}] if len(cells) > 1 else [],
-                        created_at=0,
-                        platform="pdd",
-                    ))
+            for row in rows:
+                if isinstance(row, dict):
+                    oid = row.get("订单号", row.get("订单编号", row.get("order_id", "")))
+                    desc = row.get("商品", row.get("商品信息", row.get("商品名称", "")))
+                    amount_raw = row.get("金额", row.get("订单金额", row.get("实付", "0")))
+                    status_val = row.get("状态", row.get("订单状态", row.get("status", "")))
+                else:
+                    cells = row
+                    oid = cells[0] if cells else ""
+                    desc = cells[1] if len(cells) > 1 else ""
+                    amount_raw = cells[2] if len(cells) > 2 else "0"
+                    status_val = cells[4] if len(cells) > 4 else ""
+                orders.append(Order(
+                    order_id=str(oid),
+                    status=str(status_val),
+                    total_amount=float("".join(c for c in str(amount_raw) if c.isdigit() or c == ".") or 0),
+                    items=[{"description": str(desc)}] if desc else [],
+                    created_at=0,
+                    platform="pdd",
+                ))
             return OperationResult.ok("list_orders", orders)
         except Exception as e:
             return OperationResult.fail("list_orders", str(e), ErrorCode.PLATFORM_ERROR)
@@ -404,7 +437,7 @@ class PddPlatform(EcommercePlatform):
             page = await self._get_page()
             if not await self.check_session():
                 return OperationResult.fail("get_order", "未登录", ErrorCode.AUTH_REQUIRED)
-            url = f"{self.BASE_URL}/orders/detail?orderSn={order_id}"
+            url = f"{self.BASE_URL}/orders/detail?orderSn={_url_quote(str(order_id))}"
             if not await self._safe_goto(page, url):
                 return OperationResult.fail("get_order", "无法访问订单详情", ErrorCode.NETWORK_ERROR)
             await page.wait_for_timeout(3000)
@@ -419,7 +452,7 @@ class PddPlatform(EcommercePlatform):
             page = await self._get_page()
             if not await self.check_session():
                 return OperationResult.fail("ship_order", "未登录", ErrorCode.AUTH_REQUIRED)
-            url = f"{self.BASE_URL}/orders/detail?orderSn={order_id}"
+            url = f"{self.BASE_URL}/orders/detail?orderSn={_url_quote(str(order_id))}"
             if not await self._safe_goto(page, url):
                 return OperationResult.fail("ship_order", "无法访问订单详情", ErrorCode.NETWORK_ERROR)
             await page.wait_for_timeout(3000)
@@ -473,7 +506,7 @@ class PddPlatform(EcommercePlatform):
             page = await self._get_page()
             if not await self.check_session():
                 return OperationResult.fail("get_product_stats", "未登录", ErrorCode.AUTH_REQUIRED)
-            url = f"{self.BASE_URL}/goods/goods_detail?goodsId={product_id}"
+            url = f"{self.BASE_URL}/goods/goods_detail?goodsId={_url_quote(str(product_id))}"
             if not await self._safe_goto(page, url):
                 return OperationResult.fail("get_product_stats", "无法访问商品详情", ErrorCode.NETWORK_ERROR)
             await page.wait_for_timeout(3000)
@@ -609,6 +642,8 @@ class PddPlatform(EcommercePlatform):
     async def create_ad_campaign(self, config: dict[str, Any]) -> OperationResult:
         try:
             page = await self._get_page()
+            if not await self.check_session():
+                return OperationResult.fail("create_ad", "未登录", ErrorCode.AUTH_REQUIRED)
             if not await self._safe_goto(page, AD_CREATE_URL):
                 return OperationResult.fail("create_ad", "无法打开广告创建页", ErrorCode.PLATFORM_ERROR)
             await page.wait_for_load_state("networkidle", timeout=10000)
@@ -659,7 +694,7 @@ class PddPlatform(EcommercePlatform):
     async def get_ad_stats(self, campaign_id: str) -> OperationResult:
         try:
             page = await self._get_page()
-            url = f"{AD_DETAIL_URL}?id={campaign_id}"
+            url = f"{AD_DETAIL_URL}?id={_url_quote(str(campaign_id))}"
             if not await self._safe_goto(page, url):
                 return OperationResult.fail("ad_stats", "无法打开广告详情", ErrorCode.PLATFORM_ERROR)
             await page.wait_for_load_state("networkidle", timeout=10000)
@@ -675,7 +710,7 @@ class PddPlatform(EcommercePlatform):
     async def adjust_ad_budget(self, campaign_id: str, new_budget: float) -> OperationResult:
         try:
             page = await self._get_page()
-            url = f"{AD_DETAIL_URL}?id={campaign_id}"
+            url = f"{AD_DETAIL_URL}?id={_url_quote(str(campaign_id))}"
             if not await self._safe_goto(page, url):
                 return OperationResult.fail("adjust_budget", "无法打开广告详情", ErrorCode.PLATFORM_ERROR)
             await page.wait_for_load_state("networkidle", timeout=10000)

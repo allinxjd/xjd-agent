@@ -462,7 +462,7 @@ async def _create_ad(platform: str = "pdd", config: str = "{}") -> str:
         return _no_platform(platform)
     data, err = _parse_json_param(config)
     if err:
-        return err
+        return json.dumps({"success": False, "error": err}, ensure_ascii=False)
     from agent.ecommerce.operations.promotion import AdCampaignManager
     mgr = AdCampaignManager(p)
     return _result_json(await mgr.create_campaign(data))
@@ -496,7 +496,7 @@ async def _batch_ship(platform: str = "pdd", orders: str = "[]") -> str:
         return _no_platform(platform)
     data, err = _parse_json_param(orders)
     if err:
-        return err
+        return json.dumps({"success": False, "error": err}, ensure_ascii=False)
     from agent.ecommerce.operations.order import OrderManager
     mgr = OrderManager(p)
     return _result_json(await mgr.batch_ship(data))

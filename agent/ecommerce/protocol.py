@@ -32,6 +32,11 @@ ERROR_INSTRUCTIONS: dict[ErrorCode, str] = {
     ErrorCode.RATE_LIMITED: "平台限流，等待 30 秒后重试",
     ErrorCode.CAPTCHA_REQUIRED: "需要验证码，截图发给用户处理",
     ErrorCode.PERMISSION_DENIED: "无权限执行此操作，告知用户检查账号权限",
+    ErrorCode.ITEM_NOT_FOUND: "目标不存在，确认 ID 是否正确或重新搜索",
+    ErrorCode.PLATFORM_ERROR: "平台返回异常，等待 10 秒后重试，连续失败则告知用户",
+    ErrorCode.NETWORK_ERROR: "网络连接失败，检查网络后重试",
+    ErrorCode.INVALID_PARAMS: "参数错误，检查输入格式后重新调用",
+    ErrorCode.NOT_IMPLEMENTED: "该功能尚未实现，告知用户当前不支持此操作",
 }
 
 
@@ -46,7 +51,10 @@ class ProductStatus(str, Enum):
 class OrderStatus(str, Enum):
     PENDING = "pending"
     PAID = "paid"
+    PROCESSING = "processing"
+    READY_TO_SHIP = "ready_to_ship"
     SHIPPED = "shipped"
+    DELIVERED = "delivered"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     REFUND = "refund"

@@ -231,8 +231,17 @@ class PddCSClient:
                 if msg.is_customer and msg.content and msg.msg_type not in _IGNORE_MSG_TYPES:
                     self._stats["received"] += 1
                     logger.info("PDD CS 收到买家消息: uid=%s, content=%s", msg.from_uid, msg.content[:50])
-                    await self._queue.put(msg)
-            except json.JSONDecodeError:
+                    try:
+                        self._queue.put_nowait(msg)
+                    except asyncio.QueueFull:
+                        try:
+                            self._queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                        self._queue.put_nowait(msg)
+                        logger.warning("PDD CS 消息队列已满，丢弃最旧消息")
+            except json.JSONDecodeError as e:
+                logger.warning("PDD CS recv: malformed JSON: %s", e)
                 continue
             except Exception as e:
                 if self._running:
@@ -287,7 +296,8 @@ class PddCSClient:
                     await self._ws.ping()
             except Exception as e:
                 if self._running:
-                    logger.warning("PDD CS heartbeat failed: %s", e)
+                    logger.warning("PDD CS heartbeat failed: %s — triggering reconnect", e)
+                    asyncio.create_task(self._try_reconnect())
                 break
 
     async def _enter_standby(self) -> None:
@@ -418,25 +428,27 @@ class PddCSClient:
         return await self._send_message(uid, image_url, msg_type=1)
 
     async def _send_message(self, uid: str, content: str, msg_type: int = 0) -> bool:
-        try:
-            import aiohttp
-            cookie_str = "; ".join(f"{k}={v}" for k, v in self._cookies.items())
-            payload = self._build_send_payload(uid, content, msg_type)
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    SEND_MSG_URL,
-                    headers={"Cookie": cookie_str, "Content-Type": "application/json"},
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    data = await resp.json()
-                    if data.get("success"):
-                        return True
-                    logger.warning("PDD send_message failed: %s", data)
-                    return False
-        except Exception as e:
-            logger.error("PDD send_message error: %s", e)
-            return False
+        for attempt in range(2):
+            try:
+                import aiohttp
+                cookie_str = "; ".join(f"{k}={v}" for k, v in self._cookies.items())
+                payload = self._build_send_payload(uid, content, msg_type)
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        SEND_MSG_URL,
+                        headers={"Cookie": cookie_str, "Content-Type": "application/json"},
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        data = await resp.json()
+                        if data.get("success"):
+                            return True
+                        logger.warning("PDD send_message failed (attempt %d): %s", attempt + 1, data)
+            except Exception as e:
+                logger.error("PDD send_message error (attempt %d): %s", attempt + 1, e)
+            if attempt == 0:
+                await asyncio.sleep(1)
+        return False
 
     async def send_product_card(self, uid: str, goods_id: str) -> bool:
         try:

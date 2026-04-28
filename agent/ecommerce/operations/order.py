@@ -79,7 +79,7 @@ class OrderManager:
         delay: float = 1.0,
     ) -> OperationResult:
         results: list[dict] = []
-        for o in orders:
+        for i, o in enumerate(orders):
             oid = o.get("order_id", "")
             tracking = o.get("tracking_number", "")
             carrier = o.get("carrier", "")
@@ -89,7 +89,8 @@ class OrderManager:
             r = await self._platform.ship_order(oid, {"tracking_number": tracking, "carrier": carrier})
             results.append({"order_id": oid, "success": r.success, "error": r.error})
             if len(orders) > 1:
-                await asyncio.sleep(delay)
+                wait = min(delay * (1.5 ** min(i // 10, 3)), 10.0)
+                await asyncio.sleep(wait)
         succeeded = sum(1 for r in results if r["success"])
         return OperationResult.ok(
             "batch_ship",
