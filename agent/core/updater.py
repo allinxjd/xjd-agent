@@ -93,6 +93,17 @@ def _git_repo_dir() -> Optional["Path"]:
     repo_dir = Path(__file__).parent.parent.parent
     if (repo_dir / ".git").exists():
         return repo_dir
+    cwd = Path.cwd()
+    if (cwd / ".git").exists() and (cwd / "pyproject.toml").exists():
+        try:
+            text = (cwd / "pyproject.toml").read_text()
+            if PACKAGE_NAME in text:
+                return cwd
+        except Exception:
+            pass
+    for d in [Path.home() / "xjd-agent", Path("/opt/xjd-agent")]:
+        if (d / ".git").exists() and (d / "pyproject.toml").exists():
+            return d
     return None
 
 
@@ -179,6 +190,24 @@ async def check_latest_version() -> Optional[str]:
     except Exception as e:
         logger.debug("PyPI check failed: %s", e)
 
+    # PyPI 未发布 — 通过 GitHub tags 检查
+    try:
+        from urllib.request import urlopen, Request
+        import json
+        req = Request(GITHUB_TAGS_URL, headers={"User-Agent": "xjd-agent-updater"})
+        proxy = _detect_system_proxy()
+        if proxy:
+            from urllib.request import build_opener, ProxyHandler
+            opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
+            resp = opener.open(req, timeout=15)
+        else:
+            resp = urlopen(req, timeout=15)
+        tags = json.loads(resp.read())
+        if tags and isinstance(tags, list):
+            return tags[0].get("name", "").lstrip("v") or None
+    except Exception as e:
+        logger.debug("GitHub tags check failed: %s", e)
+
     return None
 
 async def auto_update(method: str = "auto") -> bool:
@@ -191,10 +220,7 @@ async def auto_update(method: str = "auto") -> bool:
         是否更新成功
     """
     if method == "auto":
-        # 检测是否在 git 仓库中
-        from pathlib import Path
-        repo_dir = Path(__file__).parent.parent.parent
-        if (repo_dir / ".git").exists():
+        if _git_repo_dir():
             method = "git"
         else:
             method = "pip"
