@@ -388,12 +388,12 @@ def check_update(auto: bool = False):
                         else:
                             console.print("  [yellow]服务重启失败，请手动运行: xjd-agent gateway[/yellow]")
                     else:
-                        console.print("  运行 [bold]xjd-agent gateway[/bold] 启动服务")
+                        console.print("  [yellow]如果 gateway 正在运行，请手动重启: Ctrl+C 后重新运行 xjd-agent gateway[/yellow]")
                 else:
-                    console.print("  [red]自动更新失败，请手动运行: git pull && pip install -e .[/red]")
+                    console.print("  [red]自动更新失败，请手动运行: git pull && pip install .[/red]")
             else:
                 console.print("  运行 [bold]xjd-agent update --auto[/bold] 自动更新")
-                console.print("  或手动: [bold]git pull && pip install -e .[/bold]")
+                console.print("  或手动: [bold]git pull && pip install .[/bold]")
 
     except Exception as e:
         console.print(f"  [red]检查失败: {e}[/red]")
