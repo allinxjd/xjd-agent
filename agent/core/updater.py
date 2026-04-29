@@ -211,11 +211,12 @@ async def auto_update(method: str = "auto") -> bool:
     return False
 
 def _update_pip() -> bool:
-    """通过 pip 更新."""
+    """通过 pip 更新（PyPI 用户）."""
     import sys as _sys
+    in_venv = _sys.prefix != _sys.base_prefix
     try:
         pip_args = [_sys.executable, "-m", "pip", "install", "--upgrade", PACKAGE_NAME]
-        if _sys.prefix == _sys.base_prefix:
+        if not in_venv:
             pip_args.append("--break-system-packages")
         result = subprocess.run(
             pip_args, capture_output=True, text=True, timeout=120,
@@ -223,7 +224,18 @@ def _update_pip() -> bool:
         if result.returncode == 0:
             logger.info("pip upgrade succeeded")
             return True
-        logger.warning("pip upgrade failed: %s", result.stderr[:200])
+        logger.warning("pip upgrade failed: %s", result.stderr[:300])
+        if not in_venv:
+            pip_user = [_sys.executable, "-m", "pip", "install", "--upgrade",
+                        "--user", PACKAGE_NAME, "--break-system-packages"]
+            result = subprocess.run(
+                pip_user, capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0:
+                logger.info("pip upgrade --user succeeded")
+                _check_user_bin_in_path()
+                return True
+            logger.warning("pip upgrade --user also failed: %s", result.stderr[:300])
         return False
     except Exception as e:
         logger.error("pip upgrade error: %s", e)
@@ -266,26 +278,61 @@ def _update_git() -> bool:
 
 
 def _run_pip_install(cwd: str) -> bool:
-    """运行 pip install -e .，自动处理 externally-managed-environment."""
+    """运行 pip install . (非 editable)，自动处理各种环境问题.
+
+    生产用户使用非 editable 安装（pip install .），而非 -e（开发模式）。
+    -e 模式不兼容 --user，且创建的是符号链接而非复制文件，不适合终端用户。
+    """
     import sys as _sys
-    pip_args = [_sys.executable, "-m", "pip", "install", "-e", ".",
+
+    in_venv = _sys.prefix != _sys.base_prefix
+    pip_base = [_sys.executable, "-m", "pip", "install", ".",
                 "-i", "https://mirrors.aliyun.com/pypi/simple/",
                 "--trusted-host", "mirrors.aliyun.com"]
-    if _sys.prefix == _sys.base_prefix:
-        pip_args.append("--break-system-packages")
+
+    if not in_venv:
+        pip_base.append("--break-system-packages")
+
     result = subprocess.run(
-        pip_args, capture_output=True, text=True, timeout=120, cwd=cwd,
+        pip_base, capture_output=True, text=True, timeout=120, cwd=cwd,
     )
-    if result.returncode != 0:
-        logger.warning("pip install failed, trying --user: %s", result.stderr[:200])
-        pip_args_user = [_sys.executable, "-m", "pip", "install", "--user", "-e", ".",
-                         "-i", "https://mirrors.aliyun.com/pypi/simple/",
-                         "--trusted-host", "mirrors.aliyun.com",
-                         "--break-system-packages"]
+    if result.returncode == 0:
+        return True
+
+    logger.warning("pip install failed: %s", result.stderr[:300])
+
+    if not in_venv:
+        pip_user = [_sys.executable, "-m", "pip", "install", "--user", ".",
+                    "-i", "https://mirrors.aliyun.com/pypi/simple/",
+                    "--trusted-host", "mirrors.aliyun.com",
+                    "--break-system-packages"]
         result = subprocess.run(
-            pip_args_user, capture_output=True, text=True, timeout=120, cwd=cwd,
+            pip_user, capture_output=True, text=True, timeout=120, cwd=cwd,
         )
-    return result.returncode == 0
+        if result.returncode == 0:
+            _check_user_bin_in_path()
+            return True
+        logger.warning("pip install --user also failed: %s", result.stderr[:300])
+
+    return False
+
+
+def _check_user_bin_in_path() -> None:
+    """检查 --user 安装后 CLI 是否在 PATH 中，给出提示."""
+    import os
+    import site
+    user_bin = site.getusersitepackages().replace("/lib/python", "/bin").rsplit("/lib/", 1)[0] + "/bin"
+    if platform.system() == "Darwin":
+        user_bin = os.path.expanduser("~/Library/Python/{}.{}/bin".format(
+            *platform.python_version_tuple()[:2]))
+    path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    if user_bin not in path_dirs:
+        logger.warning(
+            "xjd-agent 已安装到 %s，但该目录不在 PATH 中。\n"
+            "请运行: export PATH=\"%s:$PATH\"\n"
+            "或添加到 ~/.zshrc (macOS) / ~/.bashrc (Linux)",
+            user_bin, user_bin,
+        )
 
 
 def _update_tarball(repo_dir: "Path") -> bool:
@@ -311,7 +358,7 @@ def _update_tarball(repo_dir: "Path") -> bool:
     try:
         tmp_dir = Path(tempfile.mkdtemp(prefix="xjd-update-"))
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
-            tf.extractall(tmp_dir)
+            tf.extractall(tmp_dir, filter="data" if hasattr(tarfile, "data_filter") else None)
         extracted = list(tmp_dir.iterdir())
         if len(extracted) != 1 or not extracted[0].is_dir():
             logger.error("Unexpected tarball structure")

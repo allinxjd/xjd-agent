@@ -62,7 +62,7 @@ def main():
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="xjd-bootstrap-"))
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
-        tf.extractall(tmp_dir)
+        tf.extractall(tmp_dir, filter="data" if hasattr(tarfile, "data_filter") else None)
 
     extracted = list(tmp_dir.iterdir())
     if len(extracted) != 1 or not extracted[0].is_dir():
@@ -90,22 +90,46 @@ def main():
     print(f"[bootstrap] 已更新 {updated} 个文件/目录")
 
     print("[bootstrap] 安装依赖...")
-    pip_args = [sys.executable, "-m", "pip", "install", "-e", ".",
+    pip_args = [sys.executable, "-m", "pip", "install", ".",
                 "-i", "https://mirrors.aliyun.com/pypi/simple/",
                 "--trusted-host", "mirrors.aliyun.com"]
-    # 非 venv 环境下需要 --break-system-packages（macOS Homebrew Python）
-    if sys.prefix == sys.base_prefix:
+    in_venv = sys.prefix != sys.base_prefix
+    if not in_venv:
         pip_args.append("--break-system-packages")
     r = subprocess.run(pip_args, cwd=str(install_dir), capture_output=True, text=True)
     if r.returncode != 0:
         print(f"[bootstrap] pip install 失败，尝试 --user 模式...")
-        pip_args_user = [sys.executable, "-m", "pip", "install", "--user", "-e", ".",
+        pip_args_user = [sys.executable, "-m", "pip", "install", "--user", ".",
                          "-i", "https://mirrors.aliyun.com/pypi/simple/",
                          "--trusted-host", "mirrors.aliyun.com"]
-        if sys.prefix == sys.base_prefix:
+        if not in_venv:
             pip_args_user.append("--break-system-packages")
-        subprocess.run(pip_args_user, cwd=str(install_dir))
+        r = subprocess.run(pip_args_user, cwd=str(install_dir), capture_output=True, text=True)
+        if r.returncode == 0:
+            _print_path_hint()
+        else:
+            print(f"[bootstrap] pip install --user 也失败: {r.stderr[:300]}")
+            print("[bootstrap] 请手动运行: cd {} && pip install .".format(install_dir))
+            return
     print("[bootstrap] 更新完成!")
+    print("[bootstrap] 运行 xjd-agent --version 验证")
+
+
+def _print_path_hint():
+    """提示用户将 bin 目录加入 PATH."""
+    import platform as _plat
+    import site
+    if _plat.system() == "Darwin":
+        ver = _plat.python_version_tuple()
+        user_bin = os.path.expanduser(f"~/Library/Python/{ver[0]}.{ver[1]}/bin")
+    else:
+        user_bin = site.getusersitepackages().replace("/lib/python", "/bin").rsplit("/lib/", 1)[0] + "/bin"
+    path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    if user_bin not in path_dirs:
+        print(f"[bootstrap] xjd-agent 安装到了 {user_bin}")
+        print(f"[bootstrap] 请运行: export PATH=\"{user_bin}:$PATH\"")
+        shell_rc = "~/.zshrc" if _plat.system() == "Darwin" else "~/.bashrc"
+        print(f"[bootstrap] 永久生效: echo 'export PATH=\"{user_bin}:$PATH\"' >> {shell_rc}")
 
 
 if __name__ == "__main__":
