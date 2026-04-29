@@ -427,7 +427,23 @@ def gateway(host: str, port: int, foreground: bool) -> None:
 
     from cli.commands.service import _get_log_path
     import subprocess as _sp
+    import signal as _sig
     log_path = _get_log_path()
+
+    # kill stale tail processes on the same log file
+    try:
+        _stale = _sp.run(
+            ["pgrep", "-f", f"tail.*{log_path.name}"],
+            capture_output=True, text=True,
+        )
+        for pid_str in _stale.stdout.strip().splitlines():
+            try:
+                os.kill(int(pid_str), _sig.SIGTERM)
+            except (ProcessLookupError, ValueError):
+                pass
+    except Exception:
+        pass
+
     try:
         _sp.run(["tail", "-f", "-n", "20", str(log_path)])
     except KeyboardInterrupt:

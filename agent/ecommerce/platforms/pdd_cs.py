@@ -177,8 +177,8 @@ class PddCSClient:
             self._shop_id = mall_id
         try:
             import websockets
+            # API 返回的 use_ip (ws://...:88) 不可用，始终用 wss
             url = f"{WS_URL}?access_token={token}&role=mall_cs&client=web&version=3"
-            logger.info("PDD CS: connecting to %s", url[:80])
             self._ws = await websockets.connect(
                 url,
                 ping_interval=20,

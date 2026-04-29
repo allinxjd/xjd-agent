@@ -2,8 +2,7 @@
 
 所有工具已拆分到独立模块 (web_tools, code_tools, file_tools 等)。
 此文件保留 register_extended_tools() 入口，内部委托给各子模块。
-
-迁移完成后可删除此文件。
+同时 re-export 各子模块的 handler 函数，保持测试 import 兼容。
 """
 
 from __future__ import annotations
@@ -11,6 +10,13 @@ from __future__ import annotations
 import logging
 
 logger = logging.getLogger(__name__)
+
+# re-export handler 函数供测试使用
+from agent.tools.code_tools import execute_code, grep_search, _git_command  # noqa: F401
+from agent.tools.system_tools import _system_info, _env_variable  # noqa: F401
+from agent.tools.file_tools import _diff_files, _regex_replace, _file_compress, _archive_extract  # noqa: F401
+from agent.tools.data_tools import _database_query, _template_render, _text_transform, _json_query  # noqa: F401
+from agent.tools.network_tools import _dns_lookup  # noqa: F401
 
 # 子模块注册函数列表
 _SUB_MODULES = [

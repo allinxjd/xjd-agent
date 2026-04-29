@@ -92,7 +92,8 @@ class TestRenderHTML:
         a = mgr.create(CanvasType.MERMAID, "Flow", "graph TD; A-->B")
         html = mgr.render_html(a.artifact_id)
         assert "mermaid" in html
-        assert "graph TD; A-->B" in html
+        # Content is HTML-escaped inside <pre> tag
+        assert "graph TD; A--&gt;B" in html
 
     def test_render_chart(self):
         mgr = CanvasManager()

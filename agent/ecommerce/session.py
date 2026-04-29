@@ -240,6 +240,26 @@ class BrowserSessionManager:
         page = self._context.pages[0] if self._context.pages else await self._context.new_page()
         session = BrowserSession(platform, account, self._context, page)
         self._sessions[key] = session
+
+        # 恢复已保存的 cookies（绑定过的店铺无需重新扫码）
+        saved = self.load_cookies(platform, account)
+        if not saved and account == "default":
+            accounts = self.list_accounts(platform)
+            if accounts:
+                newest = max(
+                    accounts,
+                    key=lambda a: (self._data_dir / platform / a / "cookies.json").stat().st_mtime,
+                )
+                saved = self.load_cookies(platform, newest)
+                if saved:
+                    logger.info("Cookies fallback: %s/%s → %s", platform, account, newest)
+        if saved:
+            try:
+                await self._context.add_cookies(saved)
+                logger.info("Cookies restored: %s/%s (%d cookies)", platform, account, len(saved))
+            except Exception as e:
+                logger.warning("Cookies restore failed: %s/%s: %s", platform, account, e)
+
         return session
 
     async def save_cookies(self, platform: str, account: str = "default") -> None:

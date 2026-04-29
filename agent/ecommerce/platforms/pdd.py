@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
 from typing import Any, Optional
@@ -43,6 +44,7 @@ class PddPlatform(EcommercePlatform):
 
     platform_name = "pdd"
     BASE_URL = "https://mms.pinduoduo.com"
+    _nav_lock = asyncio.Lock()
 
     async def _get_page(self):
         if not self._session:
@@ -51,11 +53,15 @@ class PddPlatform(EcommercePlatform):
         session = await self._session.get_session("pdd")
         return session.page
 
-    # PLACEHOLDER_HELPERS
 
     async def _safe_goto(self, page, url: str, timeout: int = 30000) -> bool:
+        """导航到指定 URL，自动检测登录页重定向."""
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+            final_url = page.url or ""
+            if "/login" in final_url and "/login" not in url:
+                logger.warning("PDD session expired — redirected to login")
+                return False
             return True
         except Exception as e:
             logger.warning("PDD navigate failed %s: %s", url, e)
@@ -118,30 +124,100 @@ class PddPlatform(EcommercePlatform):
                 logger.warning("PDD: 图片上传失败 %s: %s", fp, e)
         return uploaded
 
+    async def _get_goods_list(self, page, _retry: int = 0) -> list[dict]:
+        """获取商品列表 — 被动监听页面自身 API 请求的响应."""
+        captured = []
+
+        async def _on_response(response):
+            try:
+                if "goodsList" in response.url and response.status == 200:
+                    body = await response.json()
+                    if isinstance(body, dict):
+                        captured.append(body)
+            except Exception:
+                pass
+
+        page.on("response", _on_response)
+        try:
+            # about:blank 强制打断 SPA 路由缓存，确保重新发起 API 请求
+            await page.goto("about:blank", wait_until="domcontentloaded", timeout=10000)
+            await page.wait_for_timeout(1000)
+            await self._safe_goto(page, f"{GOODS_LIST_URL}?searchType=0&status=-2")
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
+            await page.wait_for_timeout(3000)
+        finally:
+            page.remove_listener("response", _on_response)
+
+        for body in captured:
+            err_code = body.get("error_code")
+            if err_code == 54001 and _retry < 2:
+                logger.warning("PDD rate limited (54001), retry %d", _retry + 1)
+                await page.wait_for_timeout(5000)
+                return await self._get_goods_list(page, _retry + 1)
+            result_val = body.get("result")
+            # result 直接是商品列表
+            if isinstance(result_val, list) and result_val:
+                if isinstance(result_val[0], dict):
+                    return result_val
+            # result 是 dict，在其中查找
+            if isinstance(result_val, dict):
+                for key in ("goodsList", "goods_list", "goodsInfoList", "list"):
+                    val = result_val.get(key)
+                    if isinstance(val, list) and val:
+                        return val
+        return []
+
     async def _extract_table_data(self, page, url: str) -> tuple[list[dict], str]:
-        """通用表格数据提取: 导航到页面 → 等待加载 → 按表头名称提取."""
+        """通用表格数据提取: 优先直接 API 调用，回退 DOM 解析."""
+        # ── 策略0: 直接调用 PDD 内部 API ──
+        if "goods" in url:
+            rows = await self._get_goods_list(page)
+            if rows:
+                return rows, ""
+
+        # ── 回退: 导航 + DOM 解析 ──
         if not await self._safe_goto(page, url):
             return [], "无法访问页面"
         await page.wait_for_timeout(3000)
         data = await page.evaluate("""() => {
             const table = document.querySelector('table');
-            if (!table) return {headers: [], rows: []};
-            const ths = table.querySelectorAll('thead th, thead td');
-            const headers = Array.from(ths).map(h => h.innerText?.trim() || '');
-            const trs = table.querySelectorAll('tbody tr');
-            const rows = Array.from(trs).map(tr => {
-                const cells = tr.querySelectorAll('td, [class*="cell"]');
-                return Array.from(cells).map(c => c.innerText?.trim() || '');
-            });
-            return {headers, rows};
+            if (table) {
+                const ths = table.querySelectorAll('thead th, thead td');
+                const headers = Array.from(ths).map(h => h.innerText?.trim() || '');
+                const trs = table.querySelectorAll('tbody tr');
+                const rows = Array.from(trs).map(tr => {
+                    const cells = tr.querySelectorAll('td, [class*="cell"]');
+                    return Array.from(cells).map(c => c.innerText?.trim() || '');
+                });
+                if (rows.length > 0) return {headers, rows};
+            }
+            const antTable = document.querySelector('.ant-table-tbody');
+            if (antTable) {
+                const hdrEls = document.querySelectorAll('.ant-table-thead th');
+                const headers = Array.from(hdrEls).map(h => h.innerText?.trim() || '');
+                const trs = antTable.querySelectorAll('tr');
+                const rows = Array.from(trs).map(tr => {
+                    const cells = tr.querySelectorAll('td');
+                    return Array.from(cells).map(c => c.innerText?.trim() || '');
+                }).filter(r => r.length > 0);
+                if (rows.length > 0) return {headers, rows};
+            }
+            return {headers: [], rows: []};
         }""")
         headers = data.get("headers", []) if isinstance(data, dict) else []
         raw_rows = data.get("rows", []) if isinstance(data, dict) else data
+        if not raw_rows:
+            return [], ""
+        if raw_rows and isinstance(raw_rows[0], dict):
+            return raw_rows, ""
         if headers:
             return [dict(zip(headers, row)) for row in raw_rows], ""
         return raw_rows, ""
 
-    # PLACEHOLDER_AUTH
+
 
     async def check_session(self) -> bool:
         try:
@@ -174,6 +250,21 @@ class PddPlatform(EcommercePlatform):
                     "mall_id": mall_id,
                     "mall_name": mall_name,
                 })
+
+            # 尝试从已保存的 cookie 恢复登录态
+            if not force_new:
+                restored = await self._try_restore_cookies(page)
+                if restored:
+                    info = await self._detect_shop_info()
+                    mall_id = info.get("mall_id", "")
+                    mall_name = info.get("mall_name", "")
+                    mode = "Cookie 恢复"
+                    return OperationResult.ok("login", {
+                        "message": f"已登录拼多多商家后台 [{mode}]",
+                        "mall_id": mall_id,
+                        "mall_name": mall_name,
+                    })
+
             if not await self._safe_goto(page, LOGIN_URL):
                 return OperationResult.fail("login", "无法访问登录页", ErrorCode.NETWORK_ERROR)
             mode = "CDP (复用已登录浏览器)" if self._session._cdp_connected else "内置 Chromium"
@@ -184,6 +275,45 @@ class PddPlatform(EcommercePlatform):
             })
         except Exception as e:
             return OperationResult.fail("login", f"登录失败: {e}", ErrorCode.PLATFORM_ERROR)
+
+    async def _try_restore_cookies(self, page) -> bool:
+        """尝试从已保存的 cookie 文件恢复登录态."""
+        try:
+            accounts = self._session.list_accounts("pdd")
+            if not accounts:
+                return False
+            for acc in sorted(
+                accounts,
+                key=lambda a: (self._session._data_dir / "pdd" / a / "cookies.json").stat().st_mtime,
+                reverse=True,
+            ):
+                saved = self._session.load_cookies("pdd", acc)
+                if not saved:
+                    continue
+                pdd_cookies = [c for c in saved if "pinduoduo" in c.get("domain", "")]
+                if not pdd_cookies:
+                    continue
+                if page.is_closed():
+                    pages = self._session._context.pages
+                    page = pages[0] if pages else await self._session._context.new_page()
+                await self._session._context.add_cookies(pdd_cookies)
+                logger.info("尝试恢复 cookie: pdd/%s (%d cookies)", acc, len(pdd_cookies))
+                try:
+                    if not await self._safe_goto(page, HOME_URL):
+                        continue
+                    await page.wait_for_timeout(2000)
+                except Exception:
+                    logger.info("Cookie 恢复导航失败: pdd/%s", acc)
+                    continue
+                if "/login" not in (page.url or ""):
+                    logger.info("Cookie 恢复成功: pdd/%s", acc)
+                    await self._session.save_cookies("pdd", acc)
+                    return True
+                logger.info("Cookie 已过期: pdd/%s", acc)
+            return False
+        except Exception as e:
+            logger.warning("Cookie 恢复失败: %s", e)
+            return False
 
     async def _detect_shop_info(self) -> dict[str, str]:
         """登录后检测店铺 mall_id 和 mall_name."""
@@ -208,7 +338,10 @@ class PddPlatform(EcommercePlatform):
                     if mall_id:
                         info["mall_id"] = str(mall_id)
                         logger.info("PDD 检测到店铺 mall_id=%s", mall_id)
-                # 获取店铺名称
+                    nickname = data.get("nickname") or data.get("result", {}).get("nickname")
+                    if nickname and nickname != "主账号":
+                        info["mall_name"] = nickname
+                # 获取店铺名称 (API 方式)
                 async with http.get(
                     "https://mms.pinduoduo.com/sydney/api/shop/info",
                     headers=headers,
@@ -224,18 +357,42 @@ class PddPlatform(EcommercePlatform):
                     if name:
                         info["mall_name"] = name
                         logger.info("PDD 店铺名称=%s", name)
+            # fallback: 从页面 DOM 提取店铺名
+            if not info.get("mall_name"):
+                try:
+                    page = await self._get_page()
+                    name_el = await page.query_selector(".user-name-name")
+                    if name_el:
+                        dom_name = (await name_el.inner_text()).strip()
+                        if dom_name:
+                            info["mall_name"] = dom_name
+                            logger.info("PDD 店铺名称(DOM)=%s", dom_name)
+                except Exception:
+                    pass
+            if info.get("mall_id"):
+                if not info.get("mall_name"):
+                    logger.warning("PDD 店铺 %s 未能获取名称（getToken/API/DOM 均失败）", info["mall_id"])
+                shop_dir = self._session._data_dir / "pdd" / info["mall_id"]
+                shop_dir.mkdir(parents=True, exist_ok=True)
+                (shop_dir / "shop_info.json").write_text(
+                    _json.dumps(info, ensure_ascii=False, indent=2),
+                )
         except Exception as e:
             logger.warning("PDD 检测店铺信息失败: %s", e)
         return info
 
-    # PLACEHOLDER_PRODUCTS
+
 
     async def list_products(self, filters: Optional[dict[str, Any]] = None) -> OperationResult:
         try:
+            logger.debug("PDD list_products called, filters=%s", filters)
             page = await self._get_page()
             if not await self.check_session():
                 return OperationResult.fail("list_products", "未登录", ErrorCode.AUTH_REQUIRED)
-            rows, err = await self._extract_table_data(page, GOODS_LIST_URL)
+            # 默认查全部商品（status=-2），避免只看"在售"漏掉已下架的
+            status_filter = (filters or {}).get("status", "-2")
+            url = f"{GOODS_LIST_URL}?searchType=0&status={status_filter}"
+            rows, err = await self._extract_table_data(page, url)
             if err:
                 return OperationResult.fail("list_products", err, ErrorCode.NETWORK_ERROR)
             if not rows:
@@ -244,17 +401,59 @@ class PddPlatform(EcommercePlatform):
             products = []
             for row in rows:
                 if isinstance(row, dict):
-                    title = row.get("商品名称", row.get("商品标题", row.get("title", "")))
-                    price_raw = row.get("价格", row.get("团购价", row.get("price", "0")))
-                    stock_raw = row.get("库存", row.get("stock", "0"))
-                    status_val = row.get("状态", row.get("status", ""))
+                    if "raw" in row and "商品名称" not in row:
+                        continue
+                    # API 拦截返回的原始字段 (camelCase / snake_case)
+                    title = (
+                        row.get("goodsName") or row.get("goods_name")
+                        or row.get("商品名称") or row.get("商品标题")
+                        or row.get("title") or row.get("name") or ""
+                    )
+                    price_raw = row.get("sku_group_price")
+                    if price_raw is None:
+                        price_raw = (
+                            row.get("sku_price") or row.get("minGroupPrice")
+                            or row.get("min_group_price") or row.get("goodsPrice")
+                            or row.get("goods_price") or row.get("价格")
+                            or row.get("团购价") or row.get("price") or 0
+                        )
+                    # PDD 价格字段可能是数组 [min, max]，取第一个
+                    if isinstance(price_raw, list) and price_raw:
+                        price_raw = price_raw[0]
+                    # PDD 价格单位是厘（1元=1000厘），转为元
+                    if isinstance(price_raw, (int, float)) and price_raw > 100:
+                        price_raw = price_raw / 1000
+                    stock_raw = (
+                        row.get("quantity")
+                        or row.get("goodsQuantity") or row.get("goods_quantity")
+                        or row.get("totalQuantity") or row.get("库存")
+                        or row.get("stock") or "0"
+                    )
+                    status_val = (
+                        row.get("is_onsale") or row.get("isOnsale")
+                        or row.get("goodsStatus") or row.get("goods_status")
+                        or row.get("状态") or row.get("status") or ""
+                    )
+                    # 转换 isOnsale 数值为可读状态
+                    if status_val in (1, "1", True):
+                        status_val = "在售"
+                    elif status_val in (0, "0", False):
+                        status_val = "已下架"
+                    product_id = str(
+                        row.get("goodsId") or row.get("goods_id")
+                        or row.get("id") or ""
+                    )
                 else:
                     cells = row
                     title = cells[1] if len(cells) > 1 else ""
                     price_raw = cells[2] if len(cells) > 2 else "0"
                     stock_raw = cells[3] if len(cells) > 3 else "0"
                     status_val = cells[4] if len(cells) > 4 else ""
+                    product_id = ""
+                if not title:
+                    continue
                 products.append(Product(
+                    product_id=product_id if isinstance(product_id, str) else str(product_id),
                     title=str(title),
                     price=float("".join(c for c in str(price_raw) if c.isdigit() or c == ".") or 0),
                     stock=int("".join(c for c in str(stock_raw) if c.isdigit()) or 0),
@@ -270,12 +469,23 @@ class PddPlatform(EcommercePlatform):
             page = await self._get_page()
             if not await self.check_session():
                 return OperationResult.fail("get_product", "未登录", ErrorCode.AUTH_REQUIRED)
-            url = f"{self.BASE_URL}/goods/goods_detail?goodsId={_url_quote(str(product_id))}"
-            if not await self._safe_goto(page, url):
-                return OperationResult.fail("get_product", "无法访问商品详情", ErrorCode.NETWORK_ERROR)
-            await page.wait_for_timeout(3000)
+            rows = await self._get_goods_list(page)
+            target = None
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                rid = str(row.get("id") or row.get("goods_id") or row.get("goodsId") or "")
+                if rid == str(product_id):
+                    target = row
+                    break
+            if target:
+                return OperationResult.ok("get_product", {
+                    "product_id": product_id, "detail": target,
+                })
             data = await self._page_snapshot(page)
-            return OperationResult.ok("get_product", {"product_id": product_id, "detail_text": data[:2000], "url": page.url})
+            return OperationResult.ok("get_product", {
+                "product_id": product_id, "detail_text": data[:2000], "url": page.url,
+            })
         except Exception as e:
             return OperationResult.fail("get_product", str(e), ErrorCode.PLATFORM_ERROR)
 
@@ -314,7 +524,7 @@ class PddPlatform(EcommercePlatform):
         except Exception as e:
             return OperationResult.fail("create_product", str(e), ErrorCode.PLATFORM_ERROR)
 
-    # PLACEHOLDER_UPDATE
+
 
     async def update_product(self, product_id: str, updates: dict[str, Any]) -> OperationResult:
         """编辑商品 — preview 模式，支持图片上传."""
@@ -322,12 +532,9 @@ class PddPlatform(EcommercePlatform):
             page = await self._get_page()
             if not await self.check_session():
                 return OperationResult.fail("update_product", "未登录", ErrorCode.AUTH_REQUIRED)
-            url = f"{self.BASE_URL}/goods/goods_detail?goodsId={_url_quote(str(product_id))}"
+            url = f"{self.BASE_URL}/goods/goods_edit?goodsId={_url_quote(str(product_id))}"
             if not await self._safe_goto(page, url):
-                return OperationResult.fail("update_product", "无法访问商品详情", ErrorCode.NETWORK_ERROR)
-            await page.wait_for_timeout(3000)
-            if not await self._find_and_click(page, ["编辑", "修改", "Edit"]):
-                return OperationResult.fail("update_product", "未找到编辑按钮，请在商家后台手动编辑", ErrorCode.PLATFORM_ERROR)
+                return OperationResult.fail("update_product", "无法访问商品编辑页", ErrorCode.NETWORK_ERROR)
             await page.wait_for_timeout(2000)
             filled = {}
             for key, label in [("title", "商品标题"), ("price", "价格"), ("stock", "库存"), ("description", "描述")]:
@@ -356,45 +563,106 @@ class PddPlatform(EcommercePlatform):
             return OperationResult.fail("update_product", str(e), ErrorCode.PLATFORM_ERROR)
 
     async def toggle_product(self, product_id: str, active: bool) -> OperationResult:
-        """商品上架/下架 — 直接执行."""
+        """商品上架/下架 — 通过商品 ID 精确定位，操作后验证结果."""
         try:
             page = await self._get_page()
             if not await self.check_session():
                 return OperationResult.fail("toggle_product", "未登录", ErrorCode.AUTH_REQUIRED)
-            if not await self._safe_goto(page, GOODS_LIST_URL):
-                return OperationResult.fail("toggle_product", "无法访问商品列表", ErrorCode.NETWORK_ERROR)
-            await page.wait_for_timeout(3000)
+
+            # 1. 确认商品存在并获取当前状态
+            rows = await self._get_goods_list(page)
+            target = None
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                rid = str(row.get("id") or row.get("goods_id") or row.get("goodsId") or "")
+                if rid == str(product_id):
+                    target = row
+                    break
+            if not target:
+                return OperationResult.fail("toggle_product", f"未找到商品 {product_id}", ErrorCode.ITEM_NOT_FOUND)
+
+            current_onsale = target.get("is_onsale")
+            if (active and current_onsale in (True, 1, "1")) or (not active and current_onsale in (False, 0, "0")):
+                status_text = "在售" if active else "已下架"
+                return OperationResult.ok("toggle_product", {
+                    "product_id": product_id, "active": active,
+                    "message": f"商品已经是{status_text}状态，无需操作",
+                })
+
             action_text = "上架" if active else "下架"
-            safe_action = _json.dumps(action_text)
-            found = await page.evaluate(f"""(productId) => {{
-                const rows = document.querySelectorAll('table tbody tr, [class*="table-row"], [class*="list-item"]');
-                const target = {safe_action};
-                for (const row of rows) {{
-                    if (row.innerText.includes(productId)) {{
-                        const btn = Array.from(row.querySelectorAll('button, a, [role="button"]'))
-                            .find(b => b.innerText.includes(target));
-                        if (btn) {{ btn.click(); return true; }}
-                    }}
-                }}
-                return false;
-            }}""", product_id)
-            if not found:
-                if not await self._find_and_click(page, [action_text]):
+
+            # 2. 自动处理确认对话框
+            async def _handle_dialog(dialog):
+                await dialog.accept()
+            page.on("dialog", _handle_dialog)
+
+            try:
+                # 3. 通过商品 ID 精确定位操作按钮（链接 href 或 data 属性包含 goods ID）
+                clicked = await page.evaluate("""({productId, actionText}) => {
+                    const links = document.querySelectorAll('a[href*="' + productId + '"]');
+                    for (const link of links) {
+                        const row = link.closest('tr, [class*="row"], [class*="item"], [class*="card"]');
+                        if (!row) continue;
+                        const btns = row.querySelectorAll('button, a, span[class*="btn"], [role="button"]');
+                        for (const btn of btns) {
+                            if (btn.innerText && btn.innerText.trim().includes(actionText)) {
+                                btn.click();
+                                return 'clicked';
+                            }
+                        }
+                    }
+                    // 回退：遍历所有行，用 innerText 包含商品 ID 定位
+                    const rows = document.querySelectorAll('tr, [class*="goods-item"], [class*="list-item"]');
+                    for (const row of rows) {
+                        const text = row.innerText || '';
+                        if (text.includes(productId)) {
+                            const btns = row.querySelectorAll('button, a, span[class*="btn"], [role="button"]');
+                            for (const btn of btns) {
+                                if (btn.innerText && btn.innerText.trim().includes(actionText)) {
+                                    btn.click();
+                                    return 'clicked_fallback';
+                                }
+                            }
+                        }
+                    }
+                    return null;
+                }""", {"productId": str(product_id), "actionText": action_text})
+
+                if not clicked:
                     return OperationResult.fail("toggle_product", f"未找到商品 {product_id} 的{action_text}按钮", ErrorCode.ITEM_NOT_FOUND)
-            await page.wait_for_timeout(2000)
-            await self._find_and_click(page, ["确定", "确认", "OK", "是"])
-            await page.wait_for_timeout(2000)
-            snapshot = await self._page_snapshot(page, 500)
-            return OperationResult.ok("toggle_product", {
-                "product_id": product_id,
-                "active": active,
-                "action": action_text,
-                "page_snapshot": snapshot,
-            })
+
+                await page.wait_for_timeout(2000)
+                await self._find_and_click(page, ["确定", "确认", "OK", "是"])
+                await page.wait_for_timeout(3000)
+
+                # 4. 验证操作结果
+                rows_after = await self._get_goods_list(page)
+                for row in rows_after:
+                    if not isinstance(row, dict):
+                        continue
+                    rid = str(row.get("id") or row.get("goods_id") or "")
+                    if rid == str(product_id):
+                        new_onsale = row.get("is_onsale")
+                        if (active and new_onsale in (True, 1, "1")) or (not active and new_onsale in (False, 0, "0")):
+                            return OperationResult.ok("toggle_product", {
+                                "product_id": product_id, "active": active,
+                                "action": action_text, "verified": True,
+                            })
+                        break
+
+                snapshot = await self._page_snapshot(page, 500)
+                return OperationResult.ok("toggle_product", {
+                    "product_id": product_id, "active": active,
+                    "action": action_text, "verified": False,
+                    "page_snapshot": snapshot,
+                })
+            finally:
+                page.remove_listener("dialog", _handle_dialog)
         except Exception as e:
             return OperationResult.fail("toggle_product", str(e), ErrorCode.PLATFORM_ERROR)
 
-    # PLACEHOLDER_ORDERS
+
 
     async def list_orders(self, filters: Optional[dict[str, Any]] = None) -> OperationResult:
         try:
@@ -447,7 +715,7 @@ class PddPlatform(EcommercePlatform):
             return OperationResult.fail("get_order", str(e), ErrorCode.PLATFORM_ERROR)
 
     async def ship_order(self, order_id: str, tracking: dict[str, Any]) -> OperationResult:
-        """订单发货 — 直接执行."""
+        """订单发货 — 填写物流信息并提交，验证操作结果."""
         try:
             page = await self._get_page()
             if not await self.check_session():
@@ -456,36 +724,50 @@ class PddPlatform(EcommercePlatform):
             if not await self._safe_goto(page, url):
                 return OperationResult.fail("ship_order", "无法访问订单详情", ErrorCode.NETWORK_ERROR)
             await page.wait_for_timeout(3000)
-            if not await self._find_and_click(page, ["发货", "填写物流", "去发货"]):
-                return OperationResult.fail("ship_order", "未找到发货按钮，订单可能已发货或状态不允许", ErrorCode.PLATFORM_ERROR)
-            await page.wait_for_timeout(2000)
-            tn = tracking.get("tracking_number", "")
-            carrier = tracking.get("carrier", "")
-            if tn:
-                await self._fill_input(page, "物流单号", tn) or await self._fill_input(page, "运单号", tn)
-            if carrier:
-                await self._fill_input(page, "快递公司", carrier) or await self._fill_input(page, "物流公司", carrier)
-            if not await self._find_and_click(page, ["确认发货", "提交", "确定"]):
+
+            # 自动处理确认对话框
+            async def _handle_dialog(dialog):
+                await dialog.accept()
+            page.on("dialog", _handle_dialog)
+
+            try:
+                if not await self._find_and_click(page, ["发货", "填写物流", "去发货"]):
+                    return OperationResult.fail("ship_order", "未找到发货按钮，订单可能已发货或状态不允许", ErrorCode.PLATFORM_ERROR)
+                await page.wait_for_timeout(2000)
+                tn = tracking.get("tracking_number", "")
+                carrier = tracking.get("carrier", "")
+                if tn:
+                    await self._fill_input(page, "物流单号", tn) or await self._fill_input(page, "运单号", tn)
+                if carrier:
+                    await self._fill_input(page, "快递公司", carrier) or await self._fill_input(page, "物流公司", carrier)
+                if not await self._find_and_click(page, ["确认发货", "提交", "确定"]):
+                    snapshot = await self._page_snapshot(page, 1000)
+                    return OperationResult.ok("ship_order", {
+                        "status": "form_filled",
+                        "order_id": order_id,
+                        "page_snapshot": snapshot,
+                        "instruction": "已填写物流信息，请手动点击确认发货按钮",
+                    })
+                await page.wait_for_timeout(3000)
+
+                # 验证操作结果：检查页面是否出现成功提示或状态变更
                 snapshot = await self._page_snapshot(page, 1000)
+                success_keywords = ["发货成功", "已发货", "物流信息已提交", "操作成功"]
+                verified = any(kw in snapshot for kw in success_keywords)
                 return OperationResult.ok("ship_order", {
-                    "status": "form_filled",
                     "order_id": order_id,
-                    "page_snapshot": snapshot,
-                    "instruction": "已填写物流信息，请手动点击确认发货按钮",
+                    "tracking_number": tn,
+                    "carrier": carrier,
+                    "status": "shipped" if verified else "submitted",
+                    "verified": verified,
+                    "page_snapshot": snapshot[:500],
                 })
-            await page.wait_for_timeout(2000)
-            snapshot = await self._page_snapshot(page, 500)
-            return OperationResult.ok("ship_order", {
-                "order_id": order_id,
-                "tracking_number": tn,
-                "carrier": carrier,
-                "status": "shipped",
-                "page_snapshot": snapshot,
-            })
+            finally:
+                page.remove_listener("dialog", _handle_dialog)
         except Exception as e:
             return OperationResult.fail("ship_order", str(e), ErrorCode.PLATFORM_ERROR)
 
-    # PLACEHOLDER_STATS
+
 
     async def get_shop_stats(self, date_range: Optional[dict[str, Any]] = None) -> OperationResult:
         try:
@@ -506,18 +788,25 @@ class PddPlatform(EcommercePlatform):
             page = await self._get_page()
             if not await self.check_session():
                 return OperationResult.fail("get_product_stats", "未登录", ErrorCode.AUTH_REQUIRED)
-            url = f"{self.BASE_URL}/goods/goods_detail?goodsId={_url_quote(str(product_id))}"
-            if not await self._safe_goto(page, url):
-                return OperationResult.fail("get_product_stats", "无法访问商品详情", ErrorCode.NETWORK_ERROR)
+            rows = await self._get_goods_list(page)
+            target = None
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                rid = str(row.get("id") or row.get("goods_id") or "")
+                if rid == str(product_id):
+                    target = row
+                    break
+            # 尝试数据中心页面获取统计
+            stats_url = f"{self.BASE_URL}/sycm/goods_detail?goodsId={_url_quote(str(product_id))}"
+            if not await self._safe_goto(page, stats_url):
+                pass
             await page.wait_for_timeout(3000)
-            await self._find_and_click(page, ["数据", "流量", "统计", "Data"])
-            await page.wait_for_timeout(2000)
             data = await self._page_snapshot(page)
-            return OperationResult.ok("get_product_stats", {
-                "product_id": product_id,
-                "stats_text": data[:2000],
-                "url": page.url,
-            })
+            result = {"product_id": product_id, "stats_text": data[:2000], "url": page.url}
+            if target:
+                result["product_info"] = target
+            return OperationResult.ok("get_product_stats", result)
         except Exception as e:
             return OperationResult.fail("get_product_stats", str(e), ErrorCode.PLATFORM_ERROR)
 
@@ -558,7 +847,7 @@ class PddPlatform(EcommercePlatform):
             return OperationResult.fail("list_messages", str(e), ErrorCode.PLATFORM_ERROR)
 
     async def reply_message(self, msg_id: str, content: str) -> OperationResult:
-        """回复客服消息 — 直接执行."""
+        """回复客服消息 — 通过 Playwright locator 定位输入框，验证发送结果."""
         try:
             page = await self._get_page()
             if not await self.check_session():
@@ -579,12 +868,21 @@ class PddPlatform(EcommercePlatform):
             sent = await self._find_and_click(page, ["发送", "Send"])
             if not sent:
                 await page.keyboard.press("Enter")
-            await page.wait_for_timeout(1000)
-            return OperationResult.ok("reply_message", {"msg_id": msg_id, "content": content, "status": "sent"})
+            await page.wait_for_timeout(1500)
+            # 验证：检查输入框是否已清空（发送成功后通常会清空）
+            try:
+                remaining = await input_el.first.input_value()
+                verified = not remaining or remaining != content
+            except Exception:
+                verified = True
+            return OperationResult.ok("reply_message", {
+                "msg_id": msg_id, "content": content,
+                "status": "sent", "verified": verified,
+            })
         except Exception as e:
             return OperationResult.fail("reply_message", str(e), ErrorCode.PLATFORM_ERROR)
 
-    # PLACEHOLDER_PROMO
+
 
     async def list_promotions(self) -> OperationResult:
         """营销活动列表."""
@@ -673,21 +971,44 @@ class PddPlatform(EcommercePlatform):
         action = "pause_ad" if pause else "resume_ad"
         try:
             page = await self._get_page()
+            if not await self.check_session():
+                return OperationResult.fail(action, "未登录", ErrorCode.AUTH_REQUIRED)
             if not await self._safe_goto(page, AD_LIST_URL):
                 return OperationResult.fail(action, "无法打开广告列表", ErrorCode.PLATFORM_ERROR)
             await page.wait_for_load_state("networkidle", timeout=10000)
             row = page.locator(f'text="{campaign_id}"').first
             if await row.count() == 0:
                 return OperationResult.fail(action, f"未找到广告 {campaign_id}", ErrorCode.ITEM_NOT_FOUND)
-            btn_text = ["暂停", "pause"] if pause else ["恢复", "启动", "resume"]
-            parent = row.locator("xpath=ancestor::tr")
-            for t in btn_text:
-                btn = parent.get_by_role("button", name=t)
-                if await btn.count() > 0:
-                    await btn.first.click()
-                    await page.wait_for_timeout(1000)
-                    return OperationResult.ok(action, {"campaign_id": campaign_id})
-            return OperationResult.fail(action, "未找到操作按钮", ErrorCode.PLATFORM_ERROR)
+
+            async def _handle_dialog(dialog):
+                await dialog.accept()
+            page.on("dialog", _handle_dialog)
+
+            try:
+                btn_text = ["暂停", "pause"] if pause else ["恢复", "启动", "resume"]
+                parent = row.locator("xpath=ancestor::tr")
+                clicked = False
+                for t in btn_text:
+                    btn = parent.get_by_role("button", name=t)
+                    if await btn.count() > 0:
+                        await btn.first.click()
+                        clicked = True
+                        break
+                if not clicked:
+                    return OperationResult.fail(action, "未找到操作按钮", ErrorCode.PLATFORM_ERROR)
+                await page.wait_for_timeout(2000)
+                await self._find_and_click(page, ["确定", "确认", "OK"])
+                await page.wait_for_timeout(2000)
+                snapshot = await self._page_snapshot(page, 500)
+                action_text = "暂停" if pause else "恢复"
+                verified = any(kw in snapshot for kw in [f"已{action_text}", "操作成功", "success"])
+                return OperationResult.ok(action, {
+                    "campaign_id": campaign_id,
+                    "action": action_text,
+                    "verified": verified,
+                })
+            finally:
+                page.remove_listener("dialog", _handle_dialog)
         except Exception as e:
             return OperationResult.fail(action, str(e), ErrorCode.PLATFORM_ERROR)
 

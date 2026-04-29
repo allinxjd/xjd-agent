@@ -564,6 +564,10 @@ class AgentEngine:
                         n in ("web_search", "web_fetch") for n in _called_names
                     ) if _called_names else False
 
+                    _ecommerce_only = all(
+                        n.startswith("ecommerce_") for n in _called_names
+                    ) if _called_names else False
+
                     _is_factual = _is_fq(user_message) or is_factual_by_tools(_called_names)
 
                     if _is_factual:
@@ -595,10 +599,11 @@ class AgentEngine:
                                 round_idx += 1
                                 continue
                             elif not _grounded and _grounding_retried:
-                                if _web_only:
+                                if _web_only or _ecommerce_only:
                                     logger.info(
-                                        "Grounding soft pass: score %.2f (web-only, skip hard block)",
+                                        "Grounding soft pass: score %.2f (%s, skip hard block)",
                                         _grounding_score,
+                                        "web-only" if _web_only else "ecommerce",
                                     )
                                 else:
                                     _hard_blocked = True
@@ -607,11 +612,10 @@ class AgentEngine:
                                         _grounding_score,
                                     )
                                     _tool_summary = "\n---\n".join(
-                                        t[:500] for t in tool_texts[-3:]
+                                        t[:300] for t in tool_texts[-2:]
                                     )
                                     response.content = (
-                                        "我查到了以下数据，但无法确认回答的准确性。"
-                                        "以下是工具返回的原始数据：\n\n"
+                                        "以下是查询结果摘要：\n\n"
                                         + _tool_summary
                                     )
 

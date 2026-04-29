@@ -54,11 +54,13 @@ class TestMemoryIntegration:
         await provider.close()
 
     @pytest.mark.asyncio
-    async def test_memory_manager_remember_recall(self):
+    async def test_memory_manager_remember_recall(self, tmp_path):
         """MemoryManager 高层 API: remember → recall."""
         from agent.memory.manager import MemoryManager
+        from agent.memory.provider import BuiltinMemoryProvider
 
-        mgr = MemoryManager()
+        provider = BuiltinMemoryProvider(db_path=str(tmp_path / "recall_test.db"))
+        mgr = MemoryManager(provider=provider)
         await mgr.initialize()
 
         mid = await mgr.remember("张三的生日是 3 月 15 日", user_id="test_user")
@@ -68,8 +70,8 @@ class TestMemoryIntegration:
         assert len(results) >= 1
         assert "3 月 15 日" in results[0].memory.content
 
-        # 注入上下文
-        ctx = await mgr.get_memory_context("张三的生日是 3 月 15 日", user_id="test_user")
+        # 注入上下文 — returns (text, memory_ids) tuple
+        ctx, memory_ids = await mgr.get_memory_context("张三的生日是 3 月 15 日", user_id="test_user")
         assert "3 月 15 日" in ctx
 
         await mgr.close()

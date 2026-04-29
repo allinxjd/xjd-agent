@@ -296,6 +296,7 @@ SKILL_EXTRACTION_PROMPT = """分析以下成功完成的任务对话，提取可
 1. 只提取包含工具调用的、多步骤的任务流程
 2. 简单问答不需要提取
 3. 技能应该是通用可复用的 (不要包含具体的文件名/路径等)
+4. tools 字段必须列出对话中实际调用过的工具名（精确匹配，不要编造）
 
 返回 SKILL.md 格式 (如果没有值得提取的技能，返回 null):
 
@@ -304,14 +305,13 @@ SKILL_EXTRACTION_PROMPT = """分析以下成功完成的任务对话，提取可
 name: 技能名称
 description: 一句话描述
 version: 1.0.0
+tools: [tool_name_1, tool_name_2]
 category: general|code|file|web|data|deploy
 tags: [标签1, 标签2]
 trigger: 什么情况下应该使用这个技能
 examples:
   - 触发示例1
   - 触发示例2
-metadata:
-  tools: [用到的工具名]
 ---
 
 # 技能名称
@@ -551,6 +551,7 @@ class SkillManager:
         category: str = "general",
         tags: list[str] | None = None,
         examples: list[str] | None = None,
+        tools: list[str] | None = None,
         source: str = "manual",
         author: str = "",
         status: str = "active",
@@ -568,6 +569,7 @@ class SkillManager:
                 trigger=trigger,
                 category=category,
                 body=body,
+                tools=tools or [],
                 steps=steps or [],
                 tags=tags or [],
                 examples=examples or [],
@@ -789,20 +791,27 @@ class SkillManager:
         if not self._skills:
             return None
 
+        active_skills = {
+            sid: s for sid, s in self._skills.items()
+            if s.status == "active"
+        }
+        if not active_skills:
+            return None
+
         lower_msg = user_message.lower().strip()
         norm = self._normalize_prompt(user_message)
 
         # ── L1: Learn Cache — 精确 prompt 命中 (跨 session 持久化) ──
         cached_id = self._learn_cache.get(norm)
-        if cached_id and cached_id in self._skills:
-            skill = self._skills[cached_id]
+        if cached_id and cached_id in active_skills:
+            skill = active_skills[cached_id]
             logger.info("L1 learn_cache hit: %s", skill.name)
             self._last_matched_skill = cached_id
             self._last_match_time = time.time()
             return skill
 
         # ── L2: Exact Name — 用户消息包含技能全名 ──
-        for skill in self._skills.values():
+        for skill in active_skills.values():
             if skill.name and skill.name in user_message:
                 logger.info("L2 exact_name matched: %s", skill.name)
                 self._last_matched_skill = skill.skill_id
@@ -811,14 +820,14 @@ class SkillManager:
 
         # ── L3: Trivial Fast-Path — 短消息继承上一轮技能 ──
         if _TRIVIAL_PATTERNS.match(lower_msg) and self._last_matched_skill:
-            skill = self._skills.get(self._last_matched_skill)
+            skill = active_skills.get(self._last_matched_skill)
             if skill:
                 logger.info("L3 trivial_fast inherited: %s", skill.name)
                 return skill
 
         # ── L4: Keyword Saturation Scoring ──
         scored: list[tuple[float, Skill]] = []
-        for skill in self._skills.values():
+        for skill in active_skills.values():
             # 条件激活过滤
             if skill.requires_tools and available_tools is not None:
                 if not all(t in available_tools for t in skill.requires_tools):
@@ -902,18 +911,18 @@ class SkillManager:
                 return best_skill
             # 低置信度继承上一轮
             elif best_sat < 0.55:
-                prior = self._skills.get(self._last_matched_skill)
+                prior = active_skills.get(self._last_matched_skill)
                 if prior:
                     logger.info("L5 prior_intent inherited: %s (best_sat=%.2f < 0.55)",
                                 prior.name, best_sat)
                     return prior
 
         # ── L6: LLM Semantic Fallback ──
-        if model_router and self._skills:
+        if model_router and active_skills:
             try:
                 skills_desc = "\n".join(
                     f"- ID: {s.skill_id}, Name: {s.name}, Trigger: {s.trigger}"
-                    for s in self._skills.values()
+                    for s in active_skills.values()
                 )
                 prompt = SKILL_MATCHING_PROMPT.format(
                     user_message=user_message, skills_list=skills_desc,
@@ -932,7 +941,7 @@ class SkillManager:
                 matched_id = result.get("matched_skill_id")
                 confidence = result.get("confidence", 0)
                 if matched_id and confidence >= 0.85:
-                    skill = self._skills.get(matched_id)
+                    skill = active_skills.get(matched_id)
                     if skill:
                         logger.info("L6 llm_semantic matched: %s (confidence=%.2f)",
                                     skill.name, confidence)
@@ -1014,7 +1023,7 @@ class SkillManager:
                     logger.debug("Skill '%s' already exists, skipping", skill.name)
                     return None
 
-            # 创建
+            # 创建 (draft 状态，需用户激活后才参与匹配)
             created = await self.create_skill(
                 name=skill.name,
                 description=skill.description,
@@ -1023,6 +1032,9 @@ class SkillManager:
                 category=skill.category,
                 tags=skill.tags,
                 examples=skill.examples,
+                tools=skill.tools,
+                source="auto_extracted",
+                status="draft",
             )
             logger.info("Auto-extracted skill: %s", created.name)
             return created

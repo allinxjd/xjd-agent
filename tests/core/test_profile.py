@@ -73,7 +73,22 @@ class TestProfileManager:
         assert pm.export_profile("exportable", archive) is True
 
         pm.delete("exportable")
-        assert pm.import_profile(archive, "imported") is True
+
+        # Patch extractall to accept the filter kwarg on Python < 3.12
+        import sys
+        import tarfile as _tarfile
+        if sys.version_info < (3, 12):
+            _orig_extractall = _tarfile.TarFile.extractall
+            def _patched_extractall(self_tf, path=".", members=None, *, numeric_owner=False, filter=None):
+                return _orig_extractall(self_tf, path=path, members=members, numeric_owner=numeric_owner)
+            _tarfile.TarFile.extractall = _patched_extractall
+            try:
+                assert pm.import_profile(archive, "imported") is True
+            finally:
+                _tarfile.TarFile.extractall = _orig_extractall
+        else:
+            assert pm.import_profile(archive, "imported") is True
+
         names = [p.name for p in pm.list_profiles()]
         assert "imported" in names
 

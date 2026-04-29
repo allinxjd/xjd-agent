@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -16,6 +17,16 @@ from agent.tools.registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 _platform_instances: dict[str, Any] = {}
+_browser_lock: asyncio.Lock | None = None
+
+
+async def _with_browser(coro):
+    """序列化浏览器操作，防止并发导航冲突."""
+    global _browser_lock
+    if _browser_lock is None:
+        _browser_lock = asyncio.Lock()
+    async with _browser_lock:
+        return await coro
 
 
 def _get_platform(platform: str) -> Any:
@@ -58,7 +69,7 @@ async def _login(platform: str, credentials: str = "") -> str:
     creds, err = _parse_json_param(credentials) if credentials else ({}, "")
     if err:
         return json.dumps({"success": False, "error": err})
-    return _result_json(await p.login(creds))
+    return _result_json(await _with_browser(p.login(creds)))
 
 
 async def _list_products(platform: str, status: str = "", page: int = 1) -> str:
@@ -70,14 +81,14 @@ async def _list_products(platform: str, status: str = "", page: int = 1) -> str:
         filters["status"] = status
     if page > 1:
         filters["page"] = page
-    return _result_json(await p.list_products(filters))
+    return _result_json(await _with_browser(p.list_products(filters)))
 
 
 async def _get_product(platform: str, product_id: str) -> str:
     p = _get_platform(platform)
     if not p:
         return _no_platform(platform)
-    return _result_json(await p.get_product(product_id))
+    return _result_json(await _with_browser(p.get_product(product_id)))
 
 
 async def _create_product(platform: str, product_data: str) -> str:
@@ -87,7 +98,7 @@ async def _create_product(platform: str, product_data: str) -> str:
     data, err = _parse_json_param(product_data)
     if err:
         return json.dumps({"success": False, "error": err})
-    return _result_json(await p.create_product(data))
+    return _result_json(await _with_browser(p.create_product(data)))
 
 
 async def _update_product(platform: str, product_id: str, updates: str) -> str:
@@ -97,14 +108,14 @@ async def _update_product(platform: str, product_id: str, updates: str) -> str:
     data, err = _parse_json_param(updates)
     if err:
         return json.dumps({"success": False, "error": err})
-    return _result_json(await p.update_product(product_id, data))
+    return _result_json(await _with_browser(p.update_product(product_id, data)))
 
 
 async def _toggle_product(platform: str, product_id: str, active: bool = True) -> str:
     p = _get_platform(platform)
     if not p:
         return _no_platform(platform)
-    return _result_json(await p.toggle_product(product_id, active))
+    return _result_json(await _with_browser(p.toggle_product(product_id, active)))
 
 
 async def _list_orders(platform: str, status: str = "", page: int = 1) -> str:
@@ -116,7 +127,7 @@ async def _list_orders(platform: str, status: str = "", page: int = 1) -> str:
         filters["status"] = status
     if page > 1:
         filters["page"] = page
-    return _result_json(await p.list_orders(filters))
+    return _result_json(await _with_browser(p.list_orders(filters)))
 
 
 async def _ship_order(
@@ -125,9 +136,9 @@ async def _ship_order(
     p = _get_platform(platform)
     if not p:
         return _no_platform(platform)
-    return _result_json(await p.ship_order(order_id, {
+    return _result_json(await _with_browser(p.ship_order(order_id, {
         "tracking_number": tracking_number, "carrier": carrier,
-    }))
+    })))
 
 
 async def _shop_stats(
@@ -141,7 +152,7 @@ async def _shop_stats(
         dr["start"] = start_date
     if end_date:
         dr["end"] = end_date
-    return _result_json(await p.get_shop_stats(dr))
+    return _result_json(await _with_browser(p.get_shop_stats(dr)))
 
 
 async def _list_messages(platform: str, page: int = 1) -> str:
@@ -164,7 +175,7 @@ async def _list_messages(platform: str, page: int = 1) -> str:
     p = _get_platform(platform)
     if not p:
         return _no_platform(platform)
-    return _result_json(await p.list_messages({"page": page} if page > 1 else {}))
+    return _result_json(await _with_browser(p.list_messages({"page": page} if page > 1 else {})))
 
 
 async def _reply_message(platform: str, msg_id: str, content: str) -> str:
@@ -177,7 +188,7 @@ async def _reply_message(platform: str, msg_id: str, content: str) -> str:
     p = _get_platform(platform)
     if not p:
         return _no_platform(platform)
-    return _result_json(await p.reply_message(msg_id, content))
+    return _result_json(await _with_browser(p.reply_message(msg_id, content)))
 
 
 async def _create_promotion(platform: str, promo_data: str) -> str:
@@ -187,21 +198,21 @@ async def _create_promotion(platform: str, promo_data: str) -> str:
     data, err = _parse_json_param(promo_data)
     if err:
         return json.dumps({"success": False, "error": err})
-    return _result_json(await p.create_promotion(data))
+    return _result_json(await _with_browser(p.create_promotion(data)))
 
 
 async def _list_promotions(platform: str) -> str:
     p = _get_platform(platform)
     if not p:
         return _no_platform(platform)
-    return _result_json(await p.list_promotions())
+    return _result_json(await _with_browser(p.list_promotions()))
 
 
 async def _get_product_stats(platform: str, product_id: str) -> str:
     p = _get_platform(platform)
     if not p:
         return _no_platform(platform)
-    return _result_json(await p.get_product_stats(product_id))
+    return _result_json(await _with_browser(p.get_product_stats(product_id)))
 
 
 async def _list_platforms_handler() -> str:
@@ -224,9 +235,7 @@ def _get_active_cs(platform: str) -> dict[str, Any]:
     return {k: v for k, v in _cs_clients.items()
             if k.startswith(prefix) and (v.connected or v.standby)}
 
-
-import asyncio
-_cs_start_lock = asyncio.Lock()
+_cs_start_lock: asyncio.Lock | None = None
 
 
 async def _build_cs_llm_fn(system_prompt: str = ""):
@@ -297,6 +306,18 @@ async def _start_cs(platform: str = "pdd", shop_id: str = "") -> str:
     from agent.ecommerce.session import get_session_manager
     from pathlib import Path
 
+    def _get_shop_name(acct: str) -> str:
+        """从 shop_info.json 读取店铺名称."""
+        try:
+            info_path = Path.home() / ".xjd-agent" / "ecommerce" / platform / acct / "shop_info.json"
+            if info_path.exists():
+                import json as _json
+                data = _json.loads(info_path.read_text())
+                return data.get("mall_name", "")
+        except Exception:
+            pass
+        return ""
+
     p = _get_platform(platform)
     if not p:
         return _no_platform(platform)
@@ -323,11 +344,18 @@ async def _start_cs(platform: str = "pdd", shop_id: str = "") -> str:
             }, ensure_ascii=False)
 
     results = []
+    global _cs_start_lock
+    if _cs_start_lock is None:
+        _cs_start_lock = asyncio.Lock()
     async with _cs_start_lock:
         for account in accounts:
             key = _cs_key(platform, account)
             if key in _cs_clients and (_cs_clients[key].connected or _cs_clients[key].standby):
-                results.append({"mall_id": account, "status": "already_running"})
+                entry = {"mall_id": account, "status": "already_running"}
+                name = _get_shop_name(account)
+                if name:
+                    entry["mall_name"] = name
+                results.append(entry)
                 continue
 
             cookies_list = sm.load_cookies(platform, account)
@@ -337,7 +365,11 @@ async def _start_cs(platform: str = "pdd", shop_id: str = "") -> str:
                 cookies = {}
 
             if not cookies:
-                results.append({"mall_id": account, "status": "no_cookies", "error": "无可用 cookies，请先登录"})
+                entry = {"mall_id": account, "status": "no_cookies", "error": "无可用 cookies，请先登录"}
+                name = _get_shop_name(account)
+                if name:
+                    entry["mall_name"] = name
+                results.append(entry)
                 continue
 
             kb = KnowledgeBase(kb_path if kb_path else None)
@@ -356,10 +388,10 @@ async def _start_cs(platform: str = "pdd", shop_id: str = "") -> str:
                             return
                         msg = f"⚠️ 拼多多客服离线\n店铺: {shop_id}\n原因: {detail}"
                         sent = set()
-                        for s in gw._session_manager._sessions.values():
+                        for s in list(gw._session_manager._sessions.values()):
                             if not s.is_active:
                                 continue
-                            for plat, cid in s.platform_bindings.items():
+                            for plat, cid in list(s.platform_bindings.items()):
                                 key = f"{plat}:{cid}"
                                 if key in sent or plat not in gw._notifier._send_callbacks:
                                     continue
@@ -375,9 +407,19 @@ async def _start_cs(platform: str = "pdd", shop_id: str = "") -> str:
                 actual_id = client.mall_id or account
                 actual_key = _cs_key(platform, actual_id)
                 _cs_clients[actual_key] = client
-                results.append({"mall_id": actual_id, "status": "connected"})
+                if actual_id != account:
+                    _cs_clients[_cs_key(platform, account)] = client
+                entry = {"mall_id": actual_id, "status": "connected"}
+                name = _get_shop_name(account) or _get_shop_name(actual_id)
+                if name:
+                    entry["mall_name"] = name
+                results.append(entry)
             else:
-                results.append({"mall_id": account, "status": "failed", "error": "WebSocket 连接失败"})
+                entry = {"mall_id": account, "status": "failed", "error": "WebSocket 连接失败"}
+                name = _get_shop_name(account)
+                if name:
+                    entry["mall_name"] = name
+                results.append(entry)
 
     return json.dumps({"platform": platform, "shops": results}, ensure_ascii=False)
 
@@ -452,7 +494,17 @@ async def _list_shops(platform: str = "pdd") -> str:
                 cs_status = "connected"
             else:
                 cs_status = "disconnected"
-        shops.append({"mall_id": acc, "has_cookies": True, "cs_status": cs_status})
+        entry = {"mall_id": acc, "has_cookies": True, "cs_status": cs_status}
+        try:
+            from pathlib import Path as _P
+            info_path = _P.home() / ".xjd-agent" / "ecommerce" / platform / acc / "shop_info.json"
+            if info_path.exists():
+                _data = json.loads(info_path.read_text())
+                if _data.get("mall_name"):
+                    entry["mall_name"] = _data["mall_name"]
+        except Exception:
+            pass
+        shops.append(entry)
     return json.dumps({"platform": platform, "shops": shops}, ensure_ascii=False)
 
 
@@ -465,7 +517,7 @@ async def _create_ad(platform: str = "pdd", config: str = "{}") -> str:
         return json.dumps({"success": False, "error": err}, ensure_ascii=False)
     from agent.ecommerce.operations.promotion import AdCampaignManager
     mgr = AdCampaignManager(p)
-    return _result_json(await mgr.create_campaign(data))
+    return _result_json(await _with_browser(mgr.create_campaign(data)))
 
 
 async def _manage_ad(platform: str = "pdd", campaign_id: str = "", action: str = "pause") -> str:
@@ -475,9 +527,9 @@ async def _manage_ad(platform: str = "pdd", campaign_id: str = "", action: str =
     from agent.ecommerce.operations.promotion import AdCampaignManager
     mgr = AdCampaignManager(p)
     if action == "pause":
-        return _result_json(await mgr.pause_campaign(campaign_id))
+        return _result_json(await _with_browser(mgr.pause_campaign(campaign_id)))
     elif action == "resume":
-        return _result_json(await mgr.resume_campaign(campaign_id))
+        return _result_json(await _with_browser(mgr.resume_campaign(campaign_id)))
     return json.dumps({"error": f"未知操作: {action}"}, ensure_ascii=False)
 
 
@@ -487,7 +539,7 @@ async def _ad_stats(platform: str = "pdd", campaign_id: str = "") -> str:
         return _no_platform(platform)
     from agent.ecommerce.operations.promotion import AdCampaignManager
     mgr = AdCampaignManager(p)
-    return _result_json(await mgr.get_stats(campaign_id))
+    return _result_json(await _with_browser(mgr.get_stats(campaign_id)))
 
 
 async def _batch_ship(platform: str = "pdd", orders: str = "[]") -> str:
@@ -499,7 +551,7 @@ async def _batch_ship(platform: str = "pdd", orders: str = "[]") -> str:
         return json.dumps({"success": False, "error": err}, ensure_ascii=False)
     from agent.ecommerce.operations.order import OrderManager
     mgr = OrderManager(p)
-    return _result_json(await mgr.batch_ship(data))
+    return _result_json(await _with_browser(mgr.batch_ship(data)))
 
 
 async def _daily_report(platform: str = "pdd") -> str:
@@ -508,7 +560,7 @@ async def _daily_report(platform: str = "pdd") -> str:
         return _no_platform(platform)
     from agent.ecommerce.operations.analytics import AnalyticsAggregator
     agg = AnalyticsAggregator(p)
-    return _result_json(await agg.generate_report())
+    return _result_json(await _with_browser(agg.generate_report()))
 
 
 # ── 注册 ──
@@ -885,4 +937,4 @@ def register_ecommerce_ops_tools(registry: ToolRegistry) -> None:
         category="ecommerce_ops",
     )
 
-    logger.info("电商运营工具已注册: 22 个工具")
+    logger.info("电商运营工具已注册: 24 个工具")
