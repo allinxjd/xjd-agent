@@ -420,3 +420,45 @@ class Config:
             value = os.environ.get(env_key)
             if value:
                 setter(value)
+
+
+def get_proxy() -> Optional[str]:
+    """获取代理配置: 环境变量 > config.yaml > macOS 系统代理 > None.
+
+    全局统一入口，updater / web_tools / hub_client 等均应调用此函数。
+    用户可在 ~/.xjd-agent/config.yaml 中设置:
+        proxy: "http://127.0.0.1:10900"
+    """
+    import re as _re
+    import subprocess as _sp
+    import platform as _plat
+
+    for key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                "ALL_PROXY", "all_proxy"):
+        val = os.environ.get(key)
+        if val:
+            return val
+    try:
+        cfg = Config.load()
+        if cfg.proxy:
+            return cfg.proxy
+    except Exception:
+        pass
+    if _plat.system() == "Darwin":
+        try:
+            r = _sp.run(["scutil", "--proxy"], capture_output=True, text=True, timeout=3)
+            if r.returncode == 0:
+                out = r.stdout
+                if "HTTPSEnable : 1" in out:
+                    host = _re.search(r"HTTPSProxy\s*:\s*(\S+)", out)
+                    port = _re.search(r"HTTPSPort\s*:\s*(\d+)", out)
+                    if host and port:
+                        return f"http://{host.group(1)}:{port.group(1)}"
+                if "HTTPEnable : 1" in out:
+                    host = _re.search(r"HTTPProxy\s*:\s*(\S+)", out)
+                    port = _re.search(r"HTTPPort\s*:\s*(\d+)", out)
+                    if host and port:
+                        return f"http://{host.group(1)}:{port.group(1)}"
+        except Exception:
+            pass
+    return None

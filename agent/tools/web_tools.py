@@ -18,38 +18,16 @@ logger = logging.getLogger(__name__)
 
 
 def _get_proxy() -> str | None:
-    """读取代理配置: 环境变量 > config.yaml > macOS 系统代理 > None."""
+    """读取代理配置 — 委托给 config.get_proxy()."""
+    try:
+        from agent.core.config import get_proxy
+        return get_proxy()
+    except Exception:
+        pass
     for key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
         val = os.environ.get(key)
         if val:
             return val
-    try:
-        from agent.core.config import Config
-        cfg = Config.load()
-        if getattr(cfg, "proxy", None):
-            return cfg.proxy
-    except Exception:
-        pass
-    # macOS: 读取系统代理设置
-    try:
-        import subprocess
-        r = subprocess.run(
-            ["scutil", "--proxy"], capture_output=True, text=True, timeout=3,
-        )
-        if r.returncode == 0:
-            out = r.stdout
-            if "HTTPSEnable : 1" in out:
-                host = re.search(r"HTTPSProxy\s*:\s*(\S+)", out)
-                port = re.search(r"HTTPSPort\s*:\s*(\d+)", out)
-                if host and port:
-                    return f"http://{host.group(1)}:{port.group(1)}"
-            if "HTTPEnable : 1" in out:
-                host = re.search(r"HTTPProxy\s*:\s*(\S+)", out)
-                port = re.search(r"HTTPPort\s*:\s*(\d+)", out)
-                if host and port:
-                    return f"http://{host.group(1)}:{port.group(1)}"
-    except Exception:
-        pass
     return None
 
 

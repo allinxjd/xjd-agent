@@ -29,28 +29,16 @@ GITHUB_TAGS_URL = f"https://api.github.com/repos/{GITHUB_REPO}/tags"
 
 
 def _detect_system_proxy() -> Optional[str]:
-    """检测系统 HTTP 代理（macOS networksetup / 环境变量）."""
-    import os
+    """检测代理 — 委托给 config.get_proxy()."""
+    try:
+        from agent.core.config import get_proxy
+        return get_proxy()
+    except Exception:
+        pass
     for var in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
         val = os.environ.get(var)
         if val:
             return val
-    if platform.system() == "Darwin":
-        try:
-            r = subprocess.run(
-                ["networksetup", "-getsecurewebproxy", "Wi-Fi"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if r.returncode == 0:
-                lines = {l.split(":")[0].strip(): l.split(":", 1)[1].strip()
-                         for l in r.stdout.splitlines() if ":" in l}
-                if lines.get("Enabled") == "Yes":
-                    server = lines.get("Server", "")
-                    port = lines.get("Port", "")
-                    if server and port:
-                        return f"http://{server}:{port}"
-        except Exception:
-            pass
     return None
 
 
@@ -176,7 +164,8 @@ async def check_latest_version() -> Optional[str]:
     # pip 用户 — 查 PyPI
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        proxy = _detect_system_proxy()
+        async with httpx.AsyncClient(timeout=10.0, proxy=proxy) as client:
             resp = await client.get(PYPI_JSON_URL)
             if resp.status_code == 200:
                 data = resp.json()
