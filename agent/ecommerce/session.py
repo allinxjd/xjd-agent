@@ -67,6 +67,7 @@ class BrowserSessionManager:
         "taobao": ["myseller.taobao.com", "seller.taobao.com"],
         "jd": ["shop.jd.com", "sz.jd.com"],
         "douyin": ["buyin.jinritemai.com", "fxg.jinritemai.com"],
+        "1688": ["1688.com", "detail.1688.com", "s.1688.com", "login.1688.com"],
     }
 
     def __init__(self) -> None:

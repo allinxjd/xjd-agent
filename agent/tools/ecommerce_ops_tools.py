@@ -567,8 +567,51 @@ async def _daily_report(platform: str = "pdd") -> str:
 
 _PLATFORM_PARAM = {
     "type": "string",
-    "description": "电商平台 (pdd/taobao/jd/douyin)",
+    "description": "电商平台 (pdd/taobao/jd/douyin/1688)",
 }
+
+
+async def _search_image(platform: str = "1688", image_source: str = "") -> str:
+    p = _get_platform(platform)
+    if not p:
+        return _no_platform(platform)
+    if not hasattr(p, "search_by_image"):
+        return _result_json(OperationResult.fail("search_image", "该平台不支持以图搜货"))
+    return _result_json(await _with_browser(p.search_by_image(image_source)))
+
+
+async def _source_product(
+    product_id: str = "", platform: str = "1688",
+    markup: str = "2.0", min_profit: str = "5.0",
+) -> str:
+    p = _get_platform(platform)
+    if not p:
+        return _no_platform(platform)
+    detail = await _with_browser(p.get_product(product_id))
+    if not detail.success:
+        return _result_json(detail)
+    from agent.ecommerce.operations.sourcing import ProductSourcer
+    sourcer = ProductSourcer(markup=float(markup), min_profit=float(min_profit))
+    draft = sourcer.generate_pdd_draft(detail.data, {"markup": float(markup), "min_profit": float(min_profit)})
+    return _result_json(OperationResult.ok("source_product", draft))
+
+
+async def _download_assets(product_id: str = "", platform: str = "1688") -> str:
+    p = _get_platform(platform)
+    if not p:
+        return _no_platform(platform)
+    if not hasattr(p, "download_product_assets"):
+        return _result_json(OperationResult.fail("download_assets", "该平台不支持资产下载"))
+    return _result_json(await _with_browser(p.download_product_assets(product_id)))
+
+
+async def _supplier_info(supplier_id: str = "", platform: str = "1688") -> str:
+    p = _get_platform(platform)
+    if not p:
+        return _no_platform(platform)
+    if not hasattr(p, "get_supplier_info"):
+        return _result_json(OperationResult.fail("supplier_info", "该平台不支持供应商查询"))
+    return _result_json(await _with_browser(p.get_supplier_info(supplier_id)))
 
 
 def register_ecommerce_ops_tools(registry: ToolRegistry) -> None:
@@ -937,4 +980,66 @@ def register_ecommerce_ops_tools(registry: ToolRegistry) -> None:
         category="ecommerce_ops",
     )
 
-    logger.info("电商运营工具已注册: 24 个工具")
+    registry.register(
+        name="ecommerce_search_image",
+        description="以图搜货 — 上传图片或提供竞品链接，在 1688 搜索同款/相似商品",
+        parameters={
+            "type": "object",
+            "properties": {
+                "platform": _PLATFORM_PARAM,
+                "image_source": {"type": "string", "description": "图片路径或 URL（支持 PDD 竞品链接）"},
+            },
+            "required": ["image_source"],
+        },
+        handler=_search_image,
+        category="ecommerce_ops",
+    )
+
+    registry.register(
+        name="ecommerce_source_product",
+        description="选品转换 — 将 1688 商品转换为 PDD 上架草稿（标题改写/价格加价/SKU映射）",
+        parameters={
+            "type": "object",
+            "properties": {
+                "product_id": {"type": "string", "description": "1688 商品 ID"},
+                "platform": _PLATFORM_PARAM,
+                "markup": {"type": "string", "description": "加价倍率 (默认 2.0)"},
+                "min_profit": {"type": "string", "description": "最低利润 (默认 5.0 元)"},
+            },
+            "required": ["product_id"],
+        },
+        handler=_source_product,
+        category="ecommerce_ops",
+    )
+
+    registry.register(
+        name="ecommerce_download_assets",
+        description="下载商品图片资产（主图 + 详情图 + SKU 图）",
+        parameters={
+            "type": "object",
+            "properties": {
+                "product_id": {"type": "string", "description": "商品 ID"},
+                "platform": _PLATFORM_PARAM,
+            },
+            "required": ["product_id"],
+        },
+        handler=_download_assets,
+        category="ecommerce_ops",
+    )
+
+    registry.register(
+        name="ecommerce_supplier_info",
+        description="查询 1688 供应商信息（信誉/资质/经营模式）",
+        parameters={
+            "type": "object",
+            "properties": {
+                "supplier_id": {"type": "string", "description": "供应商 ID"},
+                "platform": _PLATFORM_PARAM,
+            },
+            "required": ["supplier_id"],
+        },
+        handler=_supplier_info,
+        category="ecommerce_ops",
+    )
+
+    logger.info("电商运营工具已注册: 28 个工具")
