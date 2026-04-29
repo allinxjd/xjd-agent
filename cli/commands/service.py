@@ -94,6 +94,37 @@ def _check_port_available(port: int) -> bool:
         sock.close()
 
 
+def _kill_port_occupant(port: int) -> bool:
+    """杀掉占用指定端口的 xjd-agent 进程，返回是否成功释放."""
+    if _check_port_available(port):
+        return True
+    try:
+        r = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        pids = [p.strip() for p in r.stdout.strip().splitlines() if p.strip()]
+        if not pids:
+            return False
+        for pid in pids:
+            try:
+                cmd_r = subprocess.run(
+                    ["ps", "-p", pid, "-o", "command="],
+                    capture_output=True, text=True, timeout=5,
+                )
+                cmd_line = cmd_r.stdout.strip()
+                if "xjd" in cmd_line or "cli.main" in cmd_line:
+                    os.kill(int(pid), 15)  # SIGTERM
+                    logger.info("Killed old xjd-agent process %s on port %d", pid, port)
+            except (ProcessLookupError, ValueError):
+                pass
+        time.sleep(1)
+        return _check_port_available(port)
+    except Exception as e:
+        logger.debug("_kill_port_occupant error: %s", e)
+        return False
+
+
 # ── Linux (systemd --user) ──────────────────────────────────────
 
 def _systemd_unit_path() -> Path:
@@ -209,6 +240,7 @@ def _launchd_install(port: int) -> None:
     """)
     plist_file.write_text(plist)
     subprocess.run(["launchctl", "unload", str(plist_file)], capture_output=True)
+    _kill_port_occupant(port)
     subprocess.run(["launchctl", "load", "-w", str(plist_file)], check=True)
     console.print(f"  launchd 服务已安装: {plist_file}")
     console.print(f"  服务已启动，访问 http://localhost:{port}")

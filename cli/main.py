@@ -392,8 +392,13 @@ def gateway(host: str, port: int, foreground: bool) -> None:
         return
 
     from rich.console import Console
-    from cli.commands.service import is_service_installed, install_service_silent, restart_service
+    from cli.commands.service import (
+        is_service_installed, install_service_silent, restart_service,
+        _kill_port_occupant,
+    )
     console = Console()
+
+    _kill_port_occupant(port)
 
     if not is_service_installed():
         console.print("  将注册为系统服务（开机自启 + 后台运行）")
