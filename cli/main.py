@@ -1069,13 +1069,14 @@ async def _start_api(host: str, port: int, api_key: str) -> None:
 
 # 注册子命令组
 try:
-    from cli.commands.subcommands import model, config, plugin, skill, profile, identity
+    from cli.commands.subcommands import model, config, plugin, skill, profile, identity, company
     cli.add_command(model)
     cli.add_command(config)
     cli.add_command(plugin)
     cli.add_command(skill)
     cli.add_command(profile)
     cli.add_command(identity)
+    cli.add_command(company)
 except ImportError:
     pass
 

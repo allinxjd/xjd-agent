@@ -11,6 +11,9 @@
   xjd-agent update              检查更新
   xjd-agent plugin list         列出插件
   xjd-agent plugin enable       启用插件
+  xjd-agent company run         AI 公司执行任务
+  xjd-agent company interactive AI 公司交互模式
+  xjd-agent company team        查看团队角色
 """
 
 from __future__ import annotations
@@ -832,3 +835,183 @@ def identity_use(name: str):
     config.identity = name
     config.save()
     console.print(f"[green]已切换身份: {name}[/green]")
+
+# ═══════════════════════════════════════════════════════════════════
+#  company 子命令 (AI 公司)
+# ═══════════════════════════════════════════════════════════════════
+
+@click.group()
+def company():
+    """AI 公司 — 多 Agent 协作."""
+    pass
+
+
+def _load_feishu_config(config):
+    """从 config.yaml 加载飞书配置."""
+    from agent.company.feishu_bridge import FeishuBotConfig
+
+    company_cfg = getattr(config, "company", None) or {}
+    feishu_cfg = company_cfg.get("feishu", {}) if isinstance(company_cfg, dict) else {}
+    chat_id = feishu_cfg.get("group_chat_id", "")
+    roles_cfg = feishu_cfg.get("roles", {})
+
+    if not chat_id or not roles_cfg:
+        console.print("[yellow]飞书配置未找到，请在 config.yaml 中配置 company.feishu[/yellow]")
+        return "", None
+
+    bots = []
+    for role_name, bot_cfg in roles_cfg.items():
+        bots.append(FeishuBotConfig(
+            app_id=bot_cfg.get("app_id", ""),
+            app_secret=bot_cfg.get("app_secret", ""),
+            role_name=role_name.upper() if len(role_name) <= 3 else role_name.capitalize(),
+            verification_token=bot_cfg.get("verification_token", ""),
+            encrypt_key=bot_cfg.get("encrypt_key", ""),
+        ))
+    return chat_id, bots
+
+
+@company.command("run")
+@click.argument("requirement")
+@click.option("--max-rounds", "-r", default=20, help="最大轮次")
+@click.option("--feishu", is_flag=True, help="启用飞书桥接")
+def company_run(requirement: str, max_rounds: int, feishu: bool):
+    """执行任务（自动编排）."""
+    from agent.core.config import Config
+    from agent.providers.model_router import ModelRouter
+    from agent.tools.registry import ToolRegistry
+    from agent.tools.builtin import register_builtin_tools
+    from agent.company import Company
+    from agent.company.roles import create_default_team
+
+    config = Config.load()
+    router = ModelRouter(config)
+    registry = ToolRegistry()
+    register_builtin_tools(registry)
+
+    feishu_chat_id, feishu_bots = "", None
+    if feishu:
+        feishu_chat_id, feishu_bots = _load_feishu_config(config)
+
+    co = Company(
+        router=router, tool_registry=registry,
+        feishu_chat_id=feishu_chat_id, feishu_bots=feishu_bots,
+    )
+    co.hire_team(create_default_team())
+
+    console.print(f"[bold cyan]AI 公司启动[/bold cyan] — 任务: {requirement[:80]}")
+    feishu_tag = " | 飞书已连接" if feishu_bots else ""
+    console.print(f"[dim]团队: PM, Developer, Reviewer, QA, DevOps | 最大轮次: {max_rounds}{feishu_tag}[/dim]\n")
+
+    async def _run():
+        if feishu_bots:
+            await co.start_feishu()
+        try:
+            return await co.run(requirement, max_rounds=max_rounds)
+        finally:
+            await co.stop_feishu()
+
+    result = asyncio.run(_run())
+    if result:
+        console.print(Panel(result[:2000], title="最终结果", border_style="green"))
+    else:
+        console.print("[yellow]任务未产出结果[/yellow]")
+
+
+@company.command("interactive")
+@click.argument("requirement", default="")
+@click.option("--feishu", is_flag=True, help="启用飞书桥接")
+def company_interactive(requirement: str, feishu: bool):
+    """交互模式（可随时干预）."""
+    from agent.core.config import Config
+    from agent.providers.model_router import ModelRouter
+    from agent.tools.registry import ToolRegistry
+    from agent.tools.builtin import register_builtin_tools
+    from agent.company import Company
+    from agent.company.roles import create_default_team
+
+    config = Config.load()
+    router = ModelRouter(config)
+    registry = ToolRegistry()
+    register_builtin_tools(registry)
+
+    feishu_chat_id, feishu_bots = "", None
+    if feishu:
+        feishu_chat_id, feishu_bots = _load_feishu_config(config)
+
+    co = Company(
+        router=router, tool_registry=registry,
+        feishu_chat_id=feishu_chat_id, feishu_bots=feishu_bots,
+    )
+    co.hire_team(create_default_team())
+
+    if not requirement:
+        requirement = click.prompt("请输入需求")
+
+    console.print(f"[bold cyan]AI 公司 (交互模式)[/bold cyan] — {requirement[:80]}\n")
+
+    async def _run():
+        if feishu_bots:
+            await co.start_feishu()
+        try:
+            return await co.run_interactive(requirement)
+        finally:
+            await co.stop_feishu()
+
+    result = asyncio.run(_run())
+    if result:
+        console.print(Panel(result[:2000], title="最终结果", border_style="green"))
+
+
+@company.command("team")
+def company_team():
+    """查看团队角色."""
+    from agent.company.roles import create_default_team
+
+    team = create_default_team()
+    table = Table(title="AI 公司团队")
+    table.add_column("角色", style="bold cyan")
+    table.add_column("职责")
+    table.add_column("监听", style="dim")
+    table.add_column("动作", style="green")
+
+    for role in team:
+        table.add_row(
+            role.name,
+            role.description,
+            ", ".join(role.watch_actions),
+            ", ".join(a.name for a in role.actions),
+        )
+
+    console.print(table)
+
+
+@company.command("status")
+def company_status():
+    """查看 AI 公司配置状态."""
+    from agent.core.config import Config
+
+    config = Config.load()
+    company_cfg = getattr(config, "company", None) or {}
+    feishu_cfg = company_cfg.get("feishu", {}) if isinstance(company_cfg, dict) else {}
+
+    console.print("[bold]AI 公司配置状态[/bold]\n")
+
+    from agent.company.company import _load_karpathy_guidelines
+    guidelines = _load_karpathy_guidelines()
+    if guidelines:
+        console.print(f"  Karpathy 准则: [green]已加载[/green] ({len(guidelines)} chars)")
+    else:
+        console.print("  Karpathy 准则: [red]未找到[/red]")
+
+    chat_id = feishu_cfg.get("group_chat_id", "")
+    roles_cfg = feishu_cfg.get("roles", {})
+    if chat_id:
+        console.print(f"  飞书群: [green]{chat_id}[/green]")
+        console.print(f"  飞书 Bot: {len(roles_cfg)} 个 ({', '.join(roles_cfg.keys())})")
+    else:
+        console.print("  飞书: [dim]未配置[/dim] (在 config.yaml 中添加 company.feishu)")
+
+    from agent.company.roles import create_default_team
+    team = create_default_team()
+    console.print(f"  团队角色: {len(team)} 个 ({', '.join(r.name for r in team)})")

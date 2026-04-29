@@ -1,0 +1,164 @@
+"""Action — 角色可执行的原子操作.
+
+每个 Action 内部创建 AgentEngine 执行任务（复用 multi_agent.py 的 spawn_agent 模式）。
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from agent.company.role import CompanyRole
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Action:
+    """角色可执行的原子操作."""
+
+    name: str
+    description: str = ""
+    prompt_template: str = ""
+    tools_filter: list[str] = field(default_factory=list)
+
+    async def run(self, context: str, role: CompanyRole) -> str:
+        from agent.core.engine import AgentEngine
+
+        prompt = self.prompt_template.format(context=context) if self.prompt_template else context
+        system_prompt = role.build_system_prompt()
+
+        engine = AgentEngine(
+            router=role._runtime_router,
+            system_prompt=system_prompt,
+            max_tool_rounds=role.max_tool_rounds,
+        )
+
+        registry = role._runtime_registry
+        if registry:
+            filters = self.tools_filter or role.tools_filter
+            for tool in registry.list_tools():
+                if not filters or tool.category in filters:
+                    engine.register_tool(
+                        name=tool.name,
+                        description=tool.description,
+                        parameters=tool.parameters,
+                        handler=tool.handler,
+                        requires_approval=tool.requires_approval,
+                    )
+
+        result = await engine.run_turn(prompt)
+        return result.content if hasattr(result, "content") else str(result)
+
+
+# ── 内置 Actions ─────────────────────────────────────────────
+
+USER_REQUIREMENT = Action(
+    name="UserRequirement",
+    description="用户原始需求",
+)
+
+WRITE_PRD = Action(
+    name="WritePRD",
+    description="编写产品需求文档",
+    prompt_template=(
+        "根据以下需求，编写一份简洁的产品需求文档 (PRD)。\n"
+        "必须包含：功能描述、用户故事、验收标准（可测试的条件列表）。\n"
+        "不要过度设计，只覆盖需求本身。\n\n"
+        "## 需求\n{context}"
+    ),
+    tools_filter=["web", "file"],
+)
+
+WRITE_DESIGN = Action(
+    name="WriteDesign",
+    description="编写技术设计方案",
+    prompt_template=(
+        "根据以下 PRD，编写技术设计方案。\n"
+        "包含：技术选型、文件结构、核心接口、数据流。\n"
+        "保持简洁，不要过度抽象。\n\n"
+        "## PRD\n{context}"
+    ),
+    tools_filter=["web", "file"],
+)
+
+WRITE_CODE = Action(
+    name="WriteCode",
+    description="编写代码",
+    prompt_template=(
+        "根据以下设计方案和需求，编写代码实现。\n"
+        "原则：最少代码解决问题，不加未要求的功能，匹配项目现有风格。\n"
+        "使用工具读取现有代码、创建/编辑文件。\n\n"
+        "## 设计与需求\n{context}"
+    ),
+    tools_filter=["code", "file", "terminal"],
+)
+
+CODE_REVIEW = Action(
+    name="CodeReview",
+    description="代码审查",
+    prompt_template=(
+        "审查以下代码变更。检查：\n"
+        "1. 每行改动是否都能追溯到需求（不允许顺手改无关代码）\n"
+        "2. 安全漏洞（注入、XSS、硬编码密钥等）\n"
+        "3. 逻辑正确性\n"
+        "4. 是否过度工程\n\n"
+        "输出格式：APPROVED 或 REJECTED + 具体修改意见。\n\n"
+        "## 代码变更\n{context}"
+    ),
+    tools_filter=["code", "file"],
+)
+
+WRITE_TEST = Action(
+    name="WriteTest",
+    description="编写测试",
+    prompt_template=(
+        "根据以下代码和验收标准，编写测试。\n"
+        "原则：先写测试复现问题/验证功能，再确认通过。\n"
+        "覆盖正常路径和边界情况。\n\n"
+        "## 代码与验收标准\n{context}"
+    ),
+    tools_filter=["code", "file", "terminal"],
+)
+
+RUN_TEST = Action(
+    name="RunTest",
+    description="运行测试",
+    prompt_template=(
+        "运行以下测试并报告结果。\n"
+        "如果测试失败，分析原因并给出修复建议。\n\n"
+        "## 测试信息\n{context}"
+    ),
+    tools_filter=["code", "terminal"],
+)
+
+DEPLOY_PLAN = Action(
+    name="DeployPlan",
+    description="制定部署方案",
+    prompt_template=(
+        "根据以下测试通过的代码，制定部署方案。\n"
+        "必须包含：部署步骤、回滚方案、健康检查命令。\n\n"
+        "## 部署信息\n{context}"
+    ),
+    tools_filter=["system", "terminal"],
+)
+
+EXECUTE_DEPLOY = Action(
+    name="ExecuteDeploy",
+    description="执行部署",
+    prompt_template=(
+        "按照以下部署方案执行部署。\n"
+        "每一步执行后验证，失败则回滚。\n\n"
+        "## 部署方案\n{context}"
+    ),
+    tools_filter=["system", "terminal", "network"],
+)
+
+ALL_ACTIONS: dict[str, Action] = {
+    a.name: a for a in [
+        USER_REQUIREMENT, WRITE_PRD, WRITE_DESIGN, WRITE_CODE,
+        CODE_REVIEW, WRITE_TEST, RUN_TEST, DEPLOY_PLAN, EXECUTE_DEPLOY,
+    ]
+}
