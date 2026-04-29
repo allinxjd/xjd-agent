@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import platform
 import subprocess
 from typing import Optional
 
@@ -25,6 +26,40 @@ PACKAGE_NAME = "xjd-agent"
 GITHUB_REPO = "allinxjd/xjd-agent"
 PYPI_JSON_URL = f"https://pypi.org/pypi/{PACKAGE_NAME}/json"
 GITHUB_TAGS_URL = f"https://api.github.com/repos/{GITHUB_REPO}/tags"
+
+
+def _detect_system_proxy() -> Optional[str]:
+    """检测系统 HTTP 代理（macOS networksetup / 环境变量）."""
+    import os
+    for var in ("https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"):
+        val = os.environ.get(var)
+        if val:
+            return val
+    if platform.system() == "Darwin":
+        try:
+            r = subprocess.run(
+                ["networksetup", "-getsecurewebproxy", "Wi-Fi"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0:
+                lines = {l.split(":")[0].strip(): l.split(":", 1)[1].strip()
+                         for l in r.stdout.splitlines() if ":" in l}
+                if lines.get("Enabled") == "Yes":
+                    server = lines.get("Server", "")
+                    port = lines.get("Port", "")
+                    if server and port:
+                        return f"http://{server}:{port}"
+        except Exception:
+            pass
+    return None
+
+
+def _git_proxy_args() -> list[str]:
+    """返回 git -c http.proxy=... 参数（如果检测到代理）."""
+    proxy = _detect_system_proxy()
+    if proxy:
+        return ["-c", f"http.proxy={proxy}", "-c", f"https.proxy={proxy}"]
+    return []
 
 def get_current_version() -> str:
     """获取当前安装版本."""
@@ -74,10 +109,11 @@ def _git_repo_dir() -> Optional["Path"]:
 
 
 def _git_fetch(repo_dir: "Path") -> bool:
+    proxy_args = _git_proxy_args()
     for attempt in range(2):
         try:
             r = subprocess.run(
-                ["git", "-c", "http.version=HTTP/1.1", "fetch", "origin", "main"],
+                ["git", "-c", "http.version=HTTP/1.1", *proxy_args, "fetch", "origin", "main"],
                 capture_output=True, text=True, timeout=45,
                 cwd=str(repo_dir),
             )
@@ -187,8 +223,9 @@ def _update_git() -> bool:
     repo = str(repo_dir)
 
     try:
+        proxy_args = _git_proxy_args()
         result = subprocess.run(
-            ["git", "-c", "http.version=HTTP/1.1", "pull", "--ff-only", "origin", "main"],
+            ["git", "-c", "http.version=HTTP/1.1", *proxy_args, "pull", "--ff-only", "origin", "main"],
             capture_output=True, text=True, timeout=60,
             cwd=repo,
         )
