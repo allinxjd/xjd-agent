@@ -212,15 +212,18 @@ async def auto_update(method: str = "auto") -> bool:
 
 def _update_pip() -> bool:
     """通过 pip 更新."""
+    import sys as _sys
     try:
+        pip_args = [_sys.executable, "-m", "pip", "install", "--upgrade", PACKAGE_NAME]
+        if _sys.prefix == _sys.base_prefix:
+            pip_args.append("--break-system-packages")
         result = subprocess.run(
-            ["pip", "install", "--upgrade", PACKAGE_NAME],
-            capture_output=True, text=True, timeout=120,
+            pip_args, capture_output=True, text=True, timeout=120,
         )
         if result.returncode == 0:
             logger.info("pip upgrade succeeded")
             return True
-        logger.warning("pip upgrade failed: %s", result.stderr)
+        logger.warning("pip upgrade failed: %s", result.stderr[:200])
         return False
     except Exception as e:
         logger.error("pip upgrade error: %s", e)
@@ -258,15 +261,31 @@ def _update_git() -> bool:
     if not pulled:
         return False
 
-    _pip_args = ["pip", "install", "-e", ".",
-                 "-i", "https://mirrors.aliyun.com/pypi/simple/",
-                 "--trusted-host", "mirrors.aliyun.com"]
+    _run_pip_install(repo)
+    return True
+
+
+def _run_pip_install(cwd: str) -> bool:
+    """运行 pip install -e .，自动处理 externally-managed-environment."""
+    import sys as _sys
+    pip_args = [_sys.executable, "-m", "pip", "install", "-e", ".",
+                "-i", "https://mirrors.aliyun.com/pypi/simple/",
+                "--trusted-host", "mirrors.aliyun.com"]
+    if _sys.prefix == _sys.base_prefix:
+        pip_args.append("--break-system-packages")
     result = subprocess.run(
-        _pip_args, capture_output=True, text=True, timeout=120, cwd=repo,
+        pip_args, capture_output=True, text=True, timeout=120, cwd=cwd,
     )
     if result.returncode != 0:
-        logger.warning("pip install failed: %s", result.stderr)
-    return True
+        logger.warning("pip install failed, trying --user: %s", result.stderr[:200])
+        pip_args_user = [_sys.executable, "-m", "pip", "install", "--user", "-e", ".",
+                         "-i", "https://mirrors.aliyun.com/pypi/simple/",
+                         "--trusted-host", "mirrors.aliyun.com",
+                         "--break-system-packages"]
+        result = subprocess.run(
+            pip_args_user, capture_output=True, text=True, timeout=120, cwd=cwd,
+        )
+    return result.returncode == 0
 
 
 def _update_tarball(repo_dir: "Path") -> bool:

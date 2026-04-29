@@ -90,12 +90,21 @@ def main():
     print(f"[bootstrap] 已更新 {updated} 个文件/目录")
 
     print("[bootstrap] 安装依赖...")
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", ".",
-         "-i", "https://mirrors.aliyun.com/pypi/simple/",
-         "--trusted-host", "mirrors.aliyun.com"],
-        cwd=str(install_dir),
-    )
+    pip_args = [sys.executable, "-m", "pip", "install", "-e", ".",
+                "-i", "https://mirrors.aliyun.com/pypi/simple/",
+                "--trusted-host", "mirrors.aliyun.com"]
+    # 非 venv 环境下需要 --break-system-packages（macOS Homebrew Python）
+    if sys.prefix == sys.base_prefix:
+        pip_args.append("--break-system-packages")
+    r = subprocess.run(pip_args, cwd=str(install_dir), capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"[bootstrap] pip install 失败，尝试 --user 模式...")
+        pip_args_user = [sys.executable, "-m", "pip", "install", "--user", "-e", ".",
+                         "-i", "https://mirrors.aliyun.com/pypi/simple/",
+                         "--trusted-host", "mirrors.aliyun.com"]
+        if sys.prefix == sys.base_prefix:
+            pip_args_user.append("--break-system-packages")
+        subprocess.run(pip_args_user, cwd=str(install_dir))
     print("[bootstrap] 更新完成!")
 
 
