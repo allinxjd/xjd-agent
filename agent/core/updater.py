@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import subprocess
 from typing import Optional
@@ -88,22 +89,52 @@ def compare_versions(current: str, latest: str) -> bool:
 
     return parse(latest) > parse(current)
 
+def _repo_cache_path() -> "Path":
+    from pathlib import Path
+    return Path(os.environ.get("XJD_AGENT_HOME", Path.home() / ".xjd-agent")) / ".repo_path"
+
+
+def _save_repo_path(repo_dir: "Path") -> None:
+    try:
+        cache = _repo_cache_path()
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(str(repo_dir))
+    except Exception:
+        pass
+
+
+def _is_xjd_repo(d: "Path") -> bool:
+    if not (d / ".git").exists() or not (d / "pyproject.toml").exists():
+        return False
+    try:
+        return PACKAGE_NAME in (d / "pyproject.toml").read_text()
+    except Exception:
+        return False
+
+
 def _git_repo_dir() -> Optional["Path"]:
     from pathlib import Path
     repo_dir = Path(__file__).parent.parent.parent
-    if (repo_dir / ".git").exists():
+    if _is_xjd_repo(repo_dir):
+        _save_repo_path(repo_dir)
         return repo_dir
     cwd = Path.cwd()
-    if (cwd / ".git").exists() and (cwd / "pyproject.toml").exists():
-        try:
-            text = (cwd / "pyproject.toml").read_text()
-            if PACKAGE_NAME in text:
-                return cwd
-        except Exception:
-            pass
+    if _is_xjd_repo(cwd):
+        _save_repo_path(cwd)
+        return cwd
     for d in [Path.home() / "xjd-agent", Path("/opt/xjd-agent")]:
-        if (d / ".git").exists() and (d / "pyproject.toml").exists():
+        if _is_xjd_repo(d):
+            _save_repo_path(d)
             return d
+    try:
+        cached = _repo_cache_path()
+        if cached.exists():
+            d = Path(cached.read_text().strip())
+            if _is_xjd_repo(d):
+                return d
+            cached.unlink(missing_ok=True)
+    except Exception:
+        pass
     return None
 
 
