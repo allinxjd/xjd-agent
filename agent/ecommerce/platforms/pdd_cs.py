@@ -194,8 +194,20 @@ class PddCSClient:
                 self._consumer_task = asyncio.create_task(self._consumer_loop())
             logger.info("PDD CS WebSocket connected (shop=%s)", self._shop_id)
             return True
+        except ConnectionResetError:
+            logger.error("PDD CS WebSocket 连接被重置 — 可能是 token 无效或 IP 被限 (shop=%s)", self._shop_id)
+            return False
         except Exception as e:
-            logger.error("PDD CS WebSocket connect failed: %s", e)
+            etype = type(e).__name__
+            msg = str(e) or "(无详细信息)"
+            import re
+            msg = re.sub(r"access_token=[^&\s]+", "access_token=***", msg)
+            if "InvalidStatus" in etype or "InvalidStatusCode" in etype:
+                logger.error("PDD CS WebSocket 握手失败 (HTTP 状态码异常): %s — %s", etype, msg)
+            elif "Timeout" in etype:
+                logger.error("PDD CS WebSocket 连接超时: %s", msg)
+            else:
+                logger.error("PDD CS WebSocket connect failed [%s]: %s", etype, msg)
             return False
 
     async def disconnect(self) -> None:
@@ -362,7 +374,9 @@ class PddCSClient:
                     logger.info("PDD CS: 待命重连成功，自动接手客服")
                     return
                 except Exception as e:
-                    logger.info("PDD CS: 待命重连失败 — %s，继续等待", e)
+                    import re
+                    _msg = re.sub(r"access_token=[^&\s]+", "access_token=***", str(e))
+                    logger.info("PDD CS: 待命重连失败 — %s，继续等待", _msg)
         self._standby = False
         if not self._running and not self._graceful_disconnect and self.on_offline:
             asyncio.create_task(self._fire_offline("standby_exit", "待命模式退出，客服已离线"))

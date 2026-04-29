@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from typing import Any, AsyncIterator, Optional
 
+import httpx
 from openai import AsyncOpenAI
 
 from agent.providers.base import (
@@ -82,6 +83,7 @@ class OpenAIProvider(BaseProvider):
                 "X-Title": "XJD Agent",
             }
 
+        self._http = httpx.AsyncClient(trust_env=False)
         self._client = AsyncOpenAI(
             api_key=api_key,
             base_url=self._base_url,
@@ -89,6 +91,7 @@ class OpenAIProvider(BaseProvider):
             default_headers=extra_headers or None,
             timeout=120.0,
             max_retries=0,
+            http_client=self._http,
         )
 
     @property
@@ -178,6 +181,7 @@ class OpenAIProvider(BaseProvider):
                 base_url=self._base_url,
                 timeout=120.0,
                 max_retries=0,
+                http_client=self._http,
             )
 
         response = await retry_with_backoff(
@@ -253,6 +257,7 @@ class OpenAIProvider(BaseProvider):
                 base_url=self._base_url,
                 timeout=120.0,
                 max_retries=0,
+                http_client=self._http,
             )
 
         stream = await retry_with_backoff(

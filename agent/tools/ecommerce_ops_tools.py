@@ -482,8 +482,16 @@ async def _list_shops(platform: str = "pdd") -> str:
     from agent.ecommerce.session import get_session_manager
     sm = get_session_manager()
     accounts = sm.list_accounts(platform)
+    if not accounts:
+        return json.dumps({"platform": platform, "shops": []}, ensure_ascii=False)
+
+    import asyncio
+    validity = await asyncio.gather(
+        *[_validate_cookies(sm, platform, acc) for acc in accounts]
+    )
+
     shops = []
-    for acc in accounts:
+    for acc, cookies_valid in zip(accounts, validity):
         key = _cs_key(platform, acc)
         client = _cs_clients.get(key)
         cs_status = "not_running"
@@ -494,7 +502,7 @@ async def _list_shops(platform: str = "pdd") -> str:
                 cs_status = "connected"
             else:
                 cs_status = "disconnected"
-        entry = {"mall_id": acc, "has_cookies": True, "cs_status": cs_status}
+        entry = {"mall_id": acc, "cookies_valid": cookies_valid, "cs_status": cs_status}
         try:
             from pathlib import Path as _P
             info_path = _P.home() / ".xjd-agent" / "ecommerce" / platform / acc / "shop_info.json"
@@ -506,6 +514,34 @@ async def _list_shops(platform: str = "pdd") -> str:
             pass
         shops.append(entry)
     return json.dumps({"platform": platform, "shops": shops}, ensure_ascii=False)
+
+
+async def _validate_cookies(sm, platform: str, account: str) -> bool:
+    """实际请求验证 cookies 是否有效."""
+    cookies_list = sm.load_cookies(platform, account)
+    if not cookies_list:
+        return False
+    if platform == "pdd":
+        import httpx
+        try:
+            cookie_dict = {c["name"]: c["value"] for c in cookies_list
+                           if "pinduoduo" in c.get("domain", "")}
+            if not cookie_dict:
+                return False
+            async with httpx.AsyncClient(timeout=10.0, cookies=cookie_dict) as client:
+                resp = await client.post(
+                    "https://mms.pinduoduo.com/chats/getToken",
+                    json={},
+                )
+                data = resp.json()
+                return data.get("error_code", -1) == 0
+        except (httpx.TimeoutException, httpx.ConnectError) as e:
+            logger.debug("Cookie validation network error for %s: %s", account, e)
+            return False
+        except Exception as e:
+            logger.warning("Cookie validation failed for %s: %s", account, e)
+            return False
+    return len(cookies_list) > 0
 
 
 async def _create_ad(platform: str = "pdd", config: str = "{}") -> str:

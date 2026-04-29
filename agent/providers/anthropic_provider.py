@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Any, AsyncIterator, Optional
 
+import httpx
 from anthropic import AsyncAnthropic
 
 from agent.providers.base import (
@@ -78,10 +79,12 @@ class AnthropicProvider(BaseProvider):
         **kwargs: Any,
     ) -> None:
         super().__init__(ProviderType.ANTHROPIC, **kwargs)
+        self._http = httpx.AsyncClient(trust_env=False)
         self._client = AsyncAnthropic(
             api_key=api_key,
             base_url=base_url,
             timeout=120.0,
+            http_client=self._http,
         )
         self._available_models = dict(CLAUDE_MODELS)
 
@@ -196,6 +199,7 @@ class AnthropicProvider(BaseProvider):
                 api_key=api_key_override,
                 base_url=self._client.base_url,
                 timeout=120.0,
+                http_client=self._http,
             )
 
         response = await retry_with_backoff(
@@ -280,6 +284,7 @@ class AnthropicProvider(BaseProvider):
                 api_key=api_key_override,
                 base_url=self._client.base_url,
                 timeout=120.0,
+                http_client=self._http,
             )
 
         async with client.messages.stream(**params) as stream:

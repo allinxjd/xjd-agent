@@ -53,6 +53,16 @@ def _get_python() -> str:
             if (parent / "pyvenv.cfg").exists():
                 venv = str(parent)
                 break
+    if not venv:
+        try:
+            install_dir = _get_install_dir()
+            for name in (".venv", "venv"):
+                candidate = install_dir / name
+                if (candidate / "pyvenv.cfg").exists():
+                    venv = str(candidate)
+                    break
+        except Exception:
+            pass
     if venv:
         for candidate in [
             Path(venv) / "bin" / "python3",
