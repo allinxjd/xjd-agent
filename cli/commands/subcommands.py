@@ -371,11 +371,11 @@ def check_update(auto: bool = False):
         elif latest:
             console.print(f"  [green]已是最新版本 ({current})[/green]")
         else:
-            console.print("  [yellow]无法连接 GitHub，请检查网络后重试[/yellow]")
-            console.print("  [dim]如果使用代理，请先设置环境变量:[/dim]")
-            console.print("  [dim]  export https_proxy=http://你的代理地址:端口[/dim]")
-            console.print("  [dim]  xjd-agent update --auto[/dim]")
-            console.print("  [dim]或在 ~/.xjd-agent/config.yaml 中添加: proxy: \"http://代理地址:端口\"[/dim]")
+            console.print("  [yellow]无法检查更新 — 网络不通或代理未配置[/yellow]")
+            console.print("  [dim]解决方法:[/dim]")
+            console.print("  [dim]  1. 设置代理: export https_proxy=http://代理地址:端口[/dim]")
+            console.print("  [dim]  2. 或在 ~/.xjd-agent/config.yaml 中添加: proxy: \"http://代理地址:端口\"[/dim]")
+            console.print("  [dim]  3. 或手动更新: pip install --upgrade xjd-agent[/dim]")
 
         if has_update:
             if auto:
@@ -392,10 +392,10 @@ def check_update(auto: bool = False):
                     else:
                         console.print("  [yellow]如果 gateway 正在运行，请手动重启: Ctrl+C 后重新运行 xjd-agent gateway[/yellow]")
                 else:
-                    console.print("  [red]自动更新失败，请手动运行: git pull && pip install .[/red]")
+                    console.print("  [red]自动更新失败[/red]")
+                    console.print("  [dim]手动更新: pip install --upgrade xjd-agent[/dim]")
             else:
                 console.print("  运行 [bold]xjd-agent update --auto[/bold] 自动更新")
-                console.print("  或手动: [bold]git pull && pip install .[/bold]")
 
     except Exception as e:
         console.print(f"  [red]检查失败: {e}[/red]")

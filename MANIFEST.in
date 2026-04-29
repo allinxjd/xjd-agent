@@ -1,0 +1,6 @@
+include LICENSE README.md CHANGELOG.md
+recursive-include agent *.yaml *.json *.jinja2
+recursive-include web *.html *.css *.js
+recursive-include cli *.yaml *.json
+recursive-include gateway *.yaml *.json
+recursive-include sdk *.yaml *.json

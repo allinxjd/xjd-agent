@@ -1,8 +1,9 @@
 """自动更新 — 版本检查 + 一键升级.
 
-支持两种更新源:
-1. PyPI (pip install --upgrade)
-2. Git (git pull + pip install .)
+支持三种更新路径 (按优先级):
+1. PyPI pip install --upgrade (最可靠)
+2. Git pull + pip install . (开发者)
+3. GitHub tarball 下载 + pip install (兜底)
 
 用法:
     from agent.core.updater import check_latest_version, auto_update
@@ -193,8 +194,14 @@ def _git_pending_commits(repo_dir: "Path") -> list[str]:
 async def check_latest_version() -> Optional[str]:
     """检查最新版本.
 
-    优先 git fetch 比较 commit 差异，失败则通过 GitHub API (urllib) 检查。
+    优先级: PyPI → git fetch → GitHub tags API.
     """
+    # 1. PyPI — 最权威的版本源
+    latest_pypi = await _check_pypi()
+    if latest_pypi:
+        return latest_pypi
+
+    # 2. git fetch — 开发者安装
     repo_dir = _git_repo_dir()
     if repo_dir:
         if _git_fetch(repo_dir):
@@ -202,44 +209,25 @@ async def check_latest_version() -> Optional[str]:
             if pending:
                 return f"commit:{len(pending)}"
             return get_current_version() or "0.0.0"
-        # git fetch 失败 → 通过 GitHub API 检查
-        try:
-            from urllib.request import urlopen, Request
-            import json
-            api_url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
-            req = Request(api_url, headers={"User-Agent": "xjd-agent-updater"})
-            proxy = _detect_system_proxy()
-            if proxy:
-                from urllib.request import build_opener, ProxyHandler
-                opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
-                resp = opener.open(req, timeout=15)
-            else:
-                resp = urlopen(req, timeout=15)
-            remote_sha = json.loads(resp.read()).get("sha", "")[:7]
-            local_sha = subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                capture_output=True, text=True, timeout=5,
-                cwd=str(repo_dir),
-            ).stdout.strip()
-            if remote_sha and local_sha and remote_sha != local_sha:
-                return "commit:?"
-        except Exception as e:
-            logger.debug("GitHub API check failed: %s", e)
-        return None
 
-    # pip 用户 — 查 PyPI
+    # 3. GitHub tags API — 兜底
+    return _check_github_tags()
+
+
+async def _check_pypi() -> Optional[str]:
     try:
         import httpx
         proxy = _detect_system_proxy()
         async with httpx.AsyncClient(timeout=10.0, proxy=proxy) as client:
             resp = await client.get(PYPI_JSON_URL)
             if resp.status_code == 200:
-                data = resp.json()
-                return data.get("info", {}).get("version")
+                return resp.json().get("info", {}).get("version")
     except Exception as e:
         logger.debug("PyPI check failed: %s", e)
+    return None
 
-    # PyPI 未发布 — 通过 GitHub tags 检查
+
+def _check_github_tags() -> Optional[str]:
     try:
         from urllib.request import urlopen, Request
         import json
@@ -256,29 +244,34 @@ async def check_latest_version() -> Optional[str]:
             return tags[0].get("name", "").lstrip("v") or None
     except Exception as e:
         logger.debug("GitHub tags check failed: %s", e)
-
     return None
 
 async def auto_update(method: str = "auto") -> bool:
-    """执行自动更新.
+    """执行自动更新 — 三级 fallback 确保至少一条路走通.
 
-    Args:
-        method: "pip" | "git" | "auto"
-
-    Returns:
-        是否更新成功
+    优先级: pip upgrade (PyPI) → git pull → tarball 下载.
     """
-    if method == "auto":
-        if _git_repo_dir():
-            method = "git"
-        else:
-            method = "pip"
+    if method != "auto":
+        if method == "pip":
+            return _update_pip()
+        elif method == "git":
+            return _update_git()
+        elif method == "tarball":
+            return _update_tarball_standalone()
+        return False
 
-    if method == "pip":
-        return _update_pip()
-    elif method == "git":
-        return _update_git()
-    return False
+    # auto: 按优先级尝试
+    if _update_pip():
+        return True
+    logger.debug("pip upgrade failed or not on PyPI, trying git...")
+
+    repo_dir = _git_repo_dir()
+    if repo_dir:
+        if _update_git():
+            return True
+        logger.debug("git update failed, trying tarball...")
+
+    return _update_tarball_standalone()
 
 def _update_pip() -> bool:
     """通过 pip 更新（PyPI 用户）."""
@@ -462,6 +455,63 @@ def _update_tarball(repo_dir: "Path") -> bool:
     except Exception as e:
         logger.error("Tarball extract failed: %s", e)
         return False
+
+
+def _download_tarball() -> Optional["Path"]:
+    """下载 GitHub tarball 到临时目录，返回解压后的源码路径."""
+    import io
+    import shutil
+    import tarfile
+    import tempfile
+    from pathlib import Path
+    from urllib.request import urlopen, Request
+
+    tarball_url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.tar.gz"
+    try:
+        logger.info("Downloading %s ...", tarball_url)
+        req = Request(tarball_url, headers={"User-Agent": "xjd-agent-updater"})
+        proxy = _detect_system_proxy()
+        if proxy:
+            from urllib.request import build_opener, ProxyHandler
+            opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
+            resp = opener.open(req, timeout=120)
+        else:
+            resp = urlopen(req, timeout=120)
+        data = resp.read()
+        logger.info("Downloaded %.1f KB", len(data) / 1024)
+    except Exception as e:
+        logger.error("Tarball download failed: %s", e)
+        return None
+
+    try:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="xjd-update-"))
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+            tf.extractall(tmp_dir, filter="data" if hasattr(tarfile, "data_filter") else None)
+        extracted = list(tmp_dir.iterdir())
+        if len(extracted) != 1 or not extracted[0].is_dir():
+            logger.error("Unexpected tarball structure")
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return None
+        return extracted[0]
+    except Exception as e:
+        logger.error("Tarball extract failed: %s", e)
+        return None
+
+
+def _update_tarball_standalone() -> bool:
+    """无 git 仓库时的更新: 下载 tarball → pip install."""
+    import shutil
+    src = _download_tarball()
+    if not src:
+        return False
+    try:
+        ok = _run_pip_install(str(src))
+        if ok:
+            logger.info("Tarball standalone update succeeded")
+        return ok
+    finally:
+        shutil.rmtree(src.parent, ignore_errors=True)
+
 
 async def check_and_notify() -> Optional[str]:
     """静默检查更新，返回提示消息 (无更新返回 None)."""

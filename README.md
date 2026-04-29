@@ -67,9 +67,11 @@
 > 需要 Python 3.11+
 
 ```bash
-# 克隆 & 安装
+# 方式一: PyPI 安装 (推荐)
+pip install xjd-agent
+
+# 方式二: 源码安装 (开发者)
 git clone https://github.com/allinxjd/xjd-agent.git && cd xjd-agent
-python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 
 # 引导式配置 (选择 Provider + 模型 + API Key)
@@ -77,6 +79,9 @@ xjd-agent setup
 
 # 交互对话
 xjd-agent chat
+
+# 更新到最新版本
+xjd-agent update --auto
 
 # 启动 Web 聊天服务 (浏览器打开 http://localhost:8080)
 xjd-agent web --port 8080
