@@ -372,8 +372,10 @@ def check_update(auto: bool = False):
             console.print(f"  [green]已是最新版本 ({current})[/green]")
         else:
             console.print("  [yellow]无法连接 GitHub，请检查网络后重试[/yellow]")
-            console.print("  [dim]手动更新: cd {} && git pull && pip install .[/dim]".format(
-                _git_repo_dir() or "项目目录"))
+            console.print("  [dim]如果使用代理，请先设置环境变量:[/dim]")
+            console.print("  [dim]  export https_proxy=http://你的代理地址:端口[/dim]")
+            console.print("  [dim]  xjd-agent update --auto[/dim]")
+            console.print("  [dim]或在 ~/.xjd-agent/config.yaml 中添加: proxy: \"http://代理地址:端口\"[/dim]")
 
         if has_update:
             if auto:
