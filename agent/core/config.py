@@ -461,4 +461,20 @@ def get_proxy() -> Optional[str]:
                         return f"http://{host.group(1)}:{port.group(1)}"
         except Exception:
             pass
+        for iface in ("Ethernet", "Wi-Fi", "USB 10/100/1000 LAN", "iPhone USB"):
+            try:
+                r = _sp.run(
+                    ["networksetup", "-getsecurewebproxy", iface],
+                    capture_output=True, text=True, timeout=3,
+                )
+                if r.returncode == 0:
+                    lines = {l.split(":")[0].strip(): l.split(":", 1)[1].strip()
+                             for l in r.stdout.splitlines() if ":" in l}
+                    if lines.get("Enabled") == "Yes":
+                        server = lines.get("Server", "")
+                        port = lines.get("Port", "")
+                        if server and port:
+                            return f"http://{server}:{port}"
+            except Exception:
+                continue
     return None

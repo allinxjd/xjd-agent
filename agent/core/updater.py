@@ -2,7 +2,7 @@
 
 支持两种更新源:
 1. PyPI (pip install --upgrade)
-2. Git (git pull + pip install -e .)
+2. Git (git pull + pip install .)
 
 用法:
     from agent.core.updater import check_latest_version, auto_update

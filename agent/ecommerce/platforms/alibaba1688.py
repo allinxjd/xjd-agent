@@ -100,19 +100,16 @@ class Alibaba1688Platform(EcommercePlatform):
     async def check_session(self) -> bool:
         try:
             page = await self._get_page()
-            if not await self._safe_goto(page, HOME_URL, timeout=15000):
-                return False
-            text = await self._page_snapshot(page, 500)
-            if "登录" in text and "我的阿里" not in text:
-                return False
-            return True
+            return await self._is_logged_in(page)
         except Exception:
             return False
 
     async def login(self, credentials: dict[str, Any]) -> OperationResult:
         try:
             page = await self._get_page()
-            if await self.check_session():
+
+            logged_in = await self._is_logged_in(page)
+            if logged_in:
                 await self._session.save_cookies("1688")
                 mode = "CDP" if self._session._cdp_connected else "内置 Chromium"
                 return OperationResult.ok("login", {
@@ -138,6 +135,29 @@ class Alibaba1688Platform(EcommercePlatform):
             })
         except Exception as e:
             return OperationResult.fail("login", f"登录失败: {e}", ErrorCode.PLATFORM_ERROR)
+
+    async def _is_logged_in(self, page) -> bool:
+        """导航到首页，处理验证码，判断是否已登录."""
+        if not await self._safe_goto(page, HOME_URL, timeout=15000):
+            return False
+        final_url = page.url or ""
+        if "login.1688.com" in final_url or "login.taobao.com" in final_url:
+            return False
+        await page.wait_for_timeout(1500)
+        text = await self._page_snapshot(page, 500)
+        if "拖动" in text and "滑块" in text:
+            captcha_ok = await self._solve_captcha(page)
+            if not captcha_ok:
+                return False
+            await page.wait_for_timeout(1500)
+            text = await self._page_snapshot(page, 500)
+        if not text.strip():
+            return False
+        if "我的阿里" in text or "已登录" in text or "会员中心" in text:
+            return True
+        if "登录" in text and "注册" in text:
+            return False
+        return False
 
     async def _try_restore_cookies(self, page) -> bool:
         try:
@@ -179,21 +199,27 @@ class Alibaba1688Platform(EcommercePlatform):
                 return True
 
             logger.info("1688 captcha detected, attempt %d", attempt + 1)
-            screenshot = await page.screenshot(type="png")
 
             try:
-                from agent.tools.extended import _vision_analyze_impl
-                result = await _vision_analyze_impl({
-                    "image": screenshot,
-                    "prompt": (
+                import tempfile
+                tmp = Path(tempfile.mktemp(suffix=".png", prefix="captcha_"))
+                await page.screenshot(path=str(tmp), type="png")
+
+                from agent.tools.media_tools import _vision_analyze
+                result = await _vision_analyze(
+                    str(tmp),
+                    prompt=(
                         "这是一个网页验证码截图。"
-                        "如果是滑块验证码，返回JSON: {\"type\":\"slider\",\"distance\":像素数}"
-                        "如果是文字点选验证码，返回JSON: {\"type\":\"text\",\"chars\":[\"字1\",\"字2\",...]}"
-                        "如果没有验证码，返回JSON: {\"type\":\"none\"}"
+                        "如果是滑块验证码，只返回JSON: {\"type\":\"slider\",\"distance\":像素数}"
+                        "如果是文字点选验证码，只返回JSON: {\"type\":\"text\",\"chars\":[\"字1\",\"字2\",...]}"
+                        "如果没有验证码，只返回JSON: {\"type\":\"none\"}"
                     ),
-                })
+                )
+                tmp.unlink(missing_ok=True)
+
                 import json as _json
-                info = _json.loads(result.get("analysis", "{}"))
+                json_match = re.search(r'\{[^}]+\}', result)
+                info = _json.loads(json_match.group()) if json_match else {"type": "none"}
             except Exception as e:
                 logger.warning("AI captcha analysis failed: %s", e)
                 await page.wait_for_timeout(2000)
