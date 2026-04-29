@@ -145,13 +145,8 @@ def _git_pending_commits(repo_dir: "Path") -> list[str]:
 async def check_latest_version() -> Optional[str]:
     """检查最新版本.
 
-    git clone 用户: fetch 后比较 commit 差异 (最可靠)
-    pip 用户: 查 PyPI
-
-    Returns:
-        版本号字符串，或 "commit:<N>" 表示有 N 个新提交，None 表示无法检查
+    优先 git fetch 比较 commit 差异，失败则通过 GitHub API (urllib) 检查。
     """
-    # git clone 用户 — 直接比较 commit 差异，不依赖 tag
     repo_dir = _git_repo_dir()
     if repo_dir:
         if _git_fetch(repo_dir):
@@ -159,6 +154,23 @@ async def check_latest_version() -> Optional[str]:
             if pending:
                 return f"commit:{len(pending)}"
             return get_current_version() or "0.0.0"
+        # git fetch 失败 → 通过 GitHub API 检查（urllib 自动走系统代理）
+        try:
+            from urllib.request import urlopen, Request
+            import json
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
+            req = Request(api_url, headers={"User-Agent": "xjd-agent-updater"})
+            resp = urlopen(req, timeout=15)
+            remote_sha = json.loads(resp.read()).get("sha", "")[:7]
+            local_sha = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=5,
+                cwd=str(repo_dir),
+            ).stdout.strip()
+            if remote_sha and local_sha and remote_sha != local_sha:
+                return "commit:?"
+        except Exception as e:
+            logger.debug("GitHub API check failed: %s", e)
         return None
 
     # pip 用户 — 查 PyPI
@@ -215,13 +227,14 @@ def _update_pip() -> bool:
         return False
 
 def _update_git() -> bool:
-    """通过 git pull 更新."""
+    """通过 git pull 更新，失败则回退到 tarball 下载."""
     repo_dir = _git_repo_dir()
     if not repo_dir:
         logger.warning("Not a git repository")
         return False
     repo = str(repo_dir)
 
+    pulled = False
     try:
         proxy_args = _git_proxy_args()
         result = subprocess.run(
@@ -229,25 +242,83 @@ def _update_git() -> bool:
             capture_output=True, text=True, timeout=60,
             cwd=repo,
         )
-        if result.returncode != 0:
-            logger.warning("git pull failed: %s", result.stderr)
-            return False
-
-        _pip_args = ["pip", "install", "-e", ".",
-                     "-i", "https://mirrors.aliyun.com/pypi/simple/",
-                     "--trusted-host", "mirrors.aliyun.com"]
-        result = subprocess.run(
-            _pip_args,
-            capture_output=True, text=True, timeout=120,
-            cwd=repo,
-        )
         if result.returncode == 0:
-            logger.info("git update succeeded")
-            return True
-        logger.warning("pip install failed: %s", result.stderr)
-        return False
+            pulled = True
+        else:
+            logger.warning("git pull failed: %s", result.stderr)
+    except subprocess.TimeoutExpired:
+        logger.warning("git pull timed out")
     except Exception as e:
-        logger.error("git update error: %s", e)
+        logger.warning("git pull error: %s", e)
+
+    if not pulled:
+        logger.info("git pull failed, falling back to tarball download...")
+        pulled = _update_tarball(repo_dir)
+
+    if not pulled:
+        return False
+
+    _pip_args = ["pip", "install", "-e", ".",
+                 "-i", "https://mirrors.aliyun.com/pypi/simple/",
+                 "--trusted-host", "mirrors.aliyun.com"]
+    result = subprocess.run(
+        _pip_args, capture_output=True, text=True, timeout=120, cwd=repo,
+    )
+    if result.returncode != 0:
+        logger.warning("pip install failed: %s", result.stderr)
+    return True
+
+
+def _update_tarball(repo_dir: "Path") -> bool:
+    """通过 GitHub tarball 更新（Python urllib 自动走 macOS 系统代理）."""
+    import io
+    import shutil
+    import tarfile
+    import tempfile
+    from pathlib import Path
+    from urllib.request import urlopen, Request
+
+    tarball_url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.tar.gz"
+    try:
+        logger.info("Downloading %s ...", tarball_url)
+        req = Request(tarball_url, headers={"User-Agent": "xjd-agent-updater"})
+        resp = urlopen(req, timeout=120)
+        data = resp.read()
+        logger.info("Downloaded %.1f KB", len(data) / 1024)
+    except Exception as e:
+        logger.error("Tarball download failed: %s", e)
+        return False
+
+    try:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="xjd-update-"))
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+            tf.extractall(tmp_dir)
+        extracted = list(tmp_dir.iterdir())
+        if len(extracted) != 1 or not extracted[0].is_dir():
+            logger.error("Unexpected tarball structure")
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return False
+        src = extracted[0]
+        preserve = {".git", ".env", ".env.local", "node_modules",
+                    "__pycache__", ".xjd-agent"}
+        for item in src.iterdir():
+            if item.name in preserve:
+                continue
+            dest = repo_dir / item.name
+            if dest.exists():
+                if dest.is_dir():
+                    shutil.rmtree(dest)
+                else:
+                    dest.unlink()
+            if item.is_dir():
+                shutil.copytree(item, dest)
+            else:
+                shutil.copy2(item, dest)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        logger.info("Tarball update applied successfully")
+        return True
+    except Exception as e:
+        logger.error("Tarball extract failed: %s", e)
         return False
 
 async def check_and_notify() -> Optional[str]:
