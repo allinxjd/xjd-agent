@@ -27,6 +27,62 @@ PRESERVE = {".git", ".env", ".env.local", "node_modules", "__pycache__",
             ".xjd-agent", ".venv", "venv"}
 
 
+def _detect_proxy() -> str | None:
+    """检测代理: 环境变量 > config.yaml > scutil > networksetup 多接口."""
+    import platform as _plat
+    import re as _re
+    for key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+                "ALL_PROXY", "all_proxy"):
+        val = os.environ.get(key)
+        if val:
+            return val
+    try:
+        import yaml
+        cfg_path = Path(os.environ.get("XJD_AGENT_HOME",
+                                       Path.home() / ".xjd-agent")) / "config.yaml"
+        if cfg_path.exists():
+            with open(cfg_path) as f:
+                data = yaml.safe_load(f) or {}
+            if data.get("proxy"):
+                return data["proxy"]
+    except Exception:
+        pass
+    if _plat.system() == "Darwin":
+        try:
+            r = subprocess.run(["scutil", "--proxy"],
+                               capture_output=True, text=True, timeout=3)
+            if r.returncode == 0:
+                out = r.stdout
+                if "HTTPSEnable : 1" in out:
+                    host = _re.search(r"HTTPSProxy\s*:\s*(\S+)", out)
+                    port = _re.search(r"HTTPSPort\s*:\s*(\d+)", out)
+                    if host and port:
+                        return f"http://{host.group(1)}:{port.group(1)}"
+                if "HTTPEnable : 1" in out:
+                    host = _re.search(r"HTTPProxy\s*:\s*(\S+)", out)
+                    port = _re.search(r"HTTPPort\s*:\s*(\d+)", out)
+                    if host and port:
+                        return f"http://{host.group(1)}:{port.group(1)}"
+        except Exception:
+            pass
+        for iface in ("Ethernet", "Wi-Fi", "USB 10/100/1000 LAN", "iPhone USB"):
+            try:
+                r = subprocess.run(
+                    ["networksetup", "-getsecurewebproxy", iface],
+                    capture_output=True, text=True, timeout=3)
+                if r.returncode == 0:
+                    lines = {l.split(":")[0].strip(): l.split(":", 1)[1].strip()
+                             for l in r.stdout.splitlines() if ":" in l}
+                    if lines.get("Enabled") == "Yes":
+                        server = lines.get("Server", "")
+                        port = lines.get("Port", "")
+                        if server and port:
+                            return f"http://{server}:{port}"
+            except Exception:
+                continue
+    return None
+
+
 def find_install_dir() -> Path:
     """查找 xjd-agent 安装目录."""
     # 1. 当前目录
@@ -54,9 +110,18 @@ def main():
     install_dir = find_install_dir()
     print(f"[bootstrap] 安装目录: {install_dir}")
 
+    proxy = _detect_proxy()
+    if proxy:
+        print(f"[bootstrap] 检测到代理: {proxy}")
+
     print(f"[bootstrap] 下载最新代码: {TARBALL_URL}")
     req = Request(TARBALL_URL, headers={"User-Agent": "xjd-agent-bootstrap"})
-    resp = urlopen(req, timeout=120)
+    if proxy:
+        from urllib.request import build_opener, ProxyHandler
+        opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
+        resp = opener.open(req, timeout=120)
+    else:
+        resp = urlopen(req, timeout=120)
     data = resp.read()
     print(f"[bootstrap] 下载完成: {len(data) / 1024:.1f} KB")
 

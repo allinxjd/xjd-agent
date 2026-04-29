@@ -142,13 +142,19 @@ async def check_latest_version() -> Optional[str]:
             if pending:
                 return f"commit:{len(pending)}"
             return get_current_version() or "0.0.0"
-        # git fetch 失败 → 通过 GitHub API 检查（urllib 自动走系统代理）
+        # git fetch 失败 → 通过 GitHub API 检查
         try:
             from urllib.request import urlopen, Request
             import json
             api_url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
             req = Request(api_url, headers={"User-Agent": "xjd-agent-updater"})
-            resp = urlopen(req, timeout=15)
+            proxy = _detect_system_proxy()
+            if proxy:
+                from urllib.request import build_opener, ProxyHandler
+                opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
+                resp = opener.open(req, timeout=15)
+            else:
+                resp = urlopen(req, timeout=15)
             remote_sha = json.loads(resp.read()).get("sha", "")[:7]
             local_sha = subprocess.run(
                 ["git", "rev-parse", "--short", "HEAD"],
@@ -337,7 +343,13 @@ def _update_tarball(repo_dir: "Path") -> bool:
     try:
         logger.info("Downloading %s ...", tarball_url)
         req = Request(tarball_url, headers={"User-Agent": "xjd-agent-updater"})
-        resp = urlopen(req, timeout=120)
+        proxy = _detect_system_proxy()
+        if proxy:
+            from urllib.request import build_opener, ProxyHandler
+            opener = build_opener(ProxyHandler({"http": proxy, "https": proxy}))
+            resp = opener.open(req, timeout=120)
+        else:
+            resp = urlopen(req, timeout=120)
         data = resp.read()
         logger.info("Downloaded %.1f KB", len(data) / 1024)
     except Exception as e:
