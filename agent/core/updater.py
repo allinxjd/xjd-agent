@@ -122,7 +122,25 @@ def _git_repo_dir() -> Optional["Path"]:
     if _is_xjd_repo(cwd):
         _save_repo_path(cwd)
         return cwd
-    for d in [Path.home() / "xjd-agent", Path("/opt/xjd-agent")]:
+    # pip direct_url.json — pip install . 会记录安装源路径
+    try:
+        import json
+        from importlib.metadata import distribution
+        dist = distribution(PACKAGE_NAME)
+        du = dist.read_text("direct_url.json")
+        if du:
+            url = json.loads(du).get("url", "")
+            if url.startswith("file://"):
+                d = Path(url[7:])
+                if _is_xjd_repo(d):
+                    _save_repo_path(d)
+                    return d
+    except Exception:
+        pass
+    home = Path.home()
+    for d in [home / "xjd-agent", Path("/opt/xjd-agent"),
+              home / "code" / "xjd-agent", home / "Code" / "xjd-agent",
+              home / "projects" / "xjd-agent", home / "dev" / "xjd-agent"]:
         if _is_xjd_repo(d):
             _save_repo_path(d)
             return d

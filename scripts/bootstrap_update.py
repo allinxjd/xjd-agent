@@ -98,9 +98,36 @@ def find_install_dir() -> Path:
             return p
     except Exception:
         pass
-    # 3. 常见位置
-    for d in [Path.home() / "xjd-agent", Path.home() / ".xjd-agent",
-              Path("/opt/xjd-agent")]:
+    # 3. pip direct_url.json
+    try:
+        import json
+        from importlib.metadata import distribution
+        dist = distribution("xjd-agent")
+        du = dist.read_text("direct_url.json")
+        if du:
+            url = json.loads(du).get("url", "")
+            if url.startswith("file://"):
+                d = Path(url[7:])
+                if (d / "pyproject.toml").exists():
+                    return d
+    except Exception:
+        pass
+    # 4. 缓存路径
+    try:
+        cache = Path(os.environ.get("XJD_AGENT_HOME",
+                                    Path.home() / ".xjd-agent")) / ".repo_path"
+        if cache.exists():
+            d = Path(cache.read_text().strip())
+            if (d / "pyproject.toml").exists():
+                return d
+    except Exception:
+        pass
+    # 5. 常见位置
+    home = Path.home()
+    for d in [home / "xjd-agent", home / ".xjd-agent",
+              Path("/opt/xjd-agent"),
+              home / "code" / "xjd-agent", home / "Code" / "xjd-agent",
+              home / "projects" / "xjd-agent", home / "dev" / "xjd-agent"]:
         if (d / "pyproject.toml").exists():
             return d
     return Path.cwd()
