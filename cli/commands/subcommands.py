@@ -1015,3 +1015,83 @@ def company_status():
     from agent.company.roles import create_default_team
     team = create_default_team()
     console.print(f"  团队角色: {len(team)} 个 ({', '.join(r.name for r in team)})")
+
+    from agent.company.yaml_loader import load_custom_roles, list_workflows
+    custom = load_custom_roles()
+    if custom:
+        console.print(f"  自定义角色: {len(custom)} 个 ({', '.join(r.name for r in custom)})")
+    workflows = list_workflows()
+    if workflows:
+        console.print(f"  工作流: {len(workflows)} 个")
+
+    from agent.company.store import CompanyStore
+    store = CompanyStore()
+    store.open()
+    resumable = store.get_resumable_run()
+    if resumable:
+        console.print(f"  [yellow]可续跑任务: {resumable['run_id']} — {resumable['requirement'][:50]}[/yellow]")
+    store.close()
+
+
+@company.command("history")
+@click.option("--limit", "-n", default=10, help="显示条数")
+def company_history(limit: int):
+    """查看历史运行记录."""
+    from agent.company.store import CompanyStore
+    import time
+
+    store = CompanyStore()
+    store.open()
+    runs = store.list_runs(limit=limit)
+    store.close()
+
+    if not runs:
+        console.print("[dim]暂无运行记录[/dim]")
+        return
+
+    table = Table(title="运行历史")
+    table.add_column("ID", style="dim")
+    table.add_column("需求")
+    table.add_column("状态")
+    table.add_column("轮次", justify="right")
+    table.add_column("时间")
+
+    for r in runs:
+        status_style = {"done": "green", "running": "cyan", "failed": "red"}.get(r["status"], "")
+        started = time.strftime("%m-%d %H:%M", time.localtime(r["started_at"])) if r.get("started_at") else "-"
+        table.add_row(
+            r["run_id"],
+            (r.get("requirement", "") or "")[:40],
+            f"[{status_style}]{r['status']}[/{status_style}]" if status_style else r["status"],
+            str(r.get("total_rounds", "-")),
+            started,
+        )
+    console.print(table)
+
+
+@company.command("init-role")
+def company_init_role():
+    """生成自定义角色 YAML 模板."""
+    from agent.company.yaml_loader import create_example_role_yaml, ROLES_DIR
+
+    ROLES_DIR.mkdir(parents=True, exist_ok=True)
+    example_path = ROLES_DIR / "example-architect.yaml"
+    if example_path.exists():
+        console.print(f"[yellow]文件已存在: {example_path}[/yellow]")
+        return
+    example_path.write_text(create_example_role_yaml(), encoding="utf-8")
+    console.print(f"[green]已生成角色模板: {example_path}[/green]")
+
+
+@company.command("init-workflow")
+def company_init_workflow():
+    """生成自定义工作流 YAML 模板."""
+    from agent.company.yaml_loader import create_example_workflow_yaml, WORKFLOWS_DIR
+
+    WORKFLOWS_DIR.mkdir(parents=True, exist_ok=True)
+    example_path = WORKFLOWS_DIR / "example-quick-fix.yaml"
+    if example_path.exists():
+        console.print(f"[yellow]文件已存在: {example_path}[/yellow]")
+        return
+    example_path.write_text(create_example_workflow_yaml(), encoding="utf-8")
+    console.print(f"[green]已生成工作流模板: {example_path}[/green]")

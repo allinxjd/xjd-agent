@@ -16,15 +16,19 @@
 from agent.company.company import Company
 from agent.company.environment import CompanyEnvironment
 from agent.company.feishu_bridge import FeishuBotConfig, FeishuBridge
+from agent.company.memory import CompanyMemory
 from agent.company.message import CompanyMessage
 from agent.company.role import CompanyRole
+from agent.company.store import CompanyStore
 from agent.company.task import CompanyTask
 
 __all__ = [
     "Company",
     "CompanyEnvironment",
+    "CompanyMemory",
     "CompanyMessage",
     "CompanyRole",
+    "CompanyStore",
     "CompanyTask",
     "FeishuBotConfig",
     "FeishuBridge",

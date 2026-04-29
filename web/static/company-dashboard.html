@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Company Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+.header{background:#1e293b;padding:16px 24px;border-bottom:1px solid #334155;display:flex;align-items:center;gap:16px}
+.header h1{font-size:20px;font-weight:600}
+.header .status{font-size:13px;color:#94a3b8;margin-left:auto}
+.container{max-width:1200px;margin:0 auto;padding:24px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+.card{background:#1e293b;border-radius:8px;padding:16px;border:1px solid #334155}
+.card h2{font-size:14px;color:#94a3b8;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px}
+.stat{font-size:28px;font-weight:700;color:#38bdf8}
+.stat-label{font-size:12px;color:#64748b;margin-top:2px}
+.team-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.role-card{background:#0f172a;border-radius:6px;padding:12px;border:1px solid #334155}
+.role-card .name{font-weight:600;color:#38bdf8;margin-bottom:4px}
+.role-card .desc{font-size:12px;color:#94a3b8;margin-bottom:8px}
+.role-card .tags{display:flex;flex-wrap:wrap;gap:4px}
+.tag{font-size:10px;padding:2px 6px;border-radius:3px;background:#334155;color:#cbd5e1}
+.tag.action{background:#1e3a5f;color:#7dd3fc}
+.tag.custom{background:#3b1f2b;color:#f472b6}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>AI Company Dashboard</h1>
+  <div class="status" id="statusText">Loading...</div>
+</div>
+<div class="container">
+  <div class="grid">
+    <div class="card"><h2>Karpathy</h2><div class="stat" id="karpathyStat">-</div><div class="stat-label">行为准则</div></div>
+    <div class="card"><h2>Team</h2><div class="stat" id="teamStat">-</div><div class="stat-label">角色总数</div></div>
+  </div>
+<!-- PLACEHOLDER_TEAM -->
+  <div class="card" style="grid-column:1/-1">
+    <h2>Team Roles</h2>
+    <div class="team-grid" id="teamGrid"></div>
+  </div>
+  <div class="card" style="grid-column:1/-1">
+    <h2>Recent Runs</h2>
+    <div id="runsTable" style="font-size:13px"></div>
+  </div>
+  <div class="card" style="grid-column:1/-1">
+    <h2>Recent Messages</h2>
+    <div id="messagesTable" style="font-size:13px;max-height:400px;overflow-y:auto"></div>
+  </div>
+</div>
+<script>
+async function load(){
+  try{
+    const [status,team,runs,msgs]=await Promise.all([
+      fetch('/api/company/status').then(r=>r.json()),
+      fetch('/api/company/team').then(r=>r.json()),
+      fetch('/api/company/runs').then(r=>r.json()),
+      fetch('/api/company/messages?limit=30').then(r=>r.json()),
+    ]);
+    document.getElementById('statusText').textContent=
+      status.karpathy_loaded?'Karpathy Active':'Karpathy Not Loaded';
+    document.getElementById('karpathyStat').textContent=
+      status.karpathy_loaded?'Active':'Off';
+    document.getElementById('teamStat').textContent=
+      status.builtin_roles+status.custom_roles;
+    const grid=document.getElementById('teamGrid');
+    grid.innerHTML=team.map(r=>`
+      <div class="role-card">
+        <div class="name">${r.name}${r.is_custom?' <span class="tag custom">custom</span>':''}</div>
+        <div class="desc">${r.description}</div>
+        <div class="tags">
+          ${r.actions.map(a=>`<span class="tag action">${a}</span>`).join('')}
+          ${r.watch_actions.map(w=>`<span class="tag">${w}</span>`).join('')}
+        </div>
+      </div>
+    `).join('');
+    const rt=document.getElementById('runsTable');
+    if(runs.length===0){rt.innerHTML='<div style="color:#64748b">No runs yet</div>';}
+    else{rt.innerHTML='<table style="width:100%;border-collapse:collapse">'+
+      '<tr style="color:#64748b"><td>ID</td><td>Requirement</td><td>Status</td><td>Rounds</td></tr>'+
+      runs.map(r=>`<tr style="border-top:1px solid #334155">
+        <td style="padding:4px">${r.run_id}</td>
+        <td>${(r.requirement||'').substring(0,60)}</td>
+        <td><span style="color:${r.status==='done'?'#4ade80':r.status==='running'?'#38bdf8':'#f87171'}">${r.status}</span></td>
+        <td>${r.total_rounds||'-'}</td>
+      </tr>`).join('')+'</table>';}
+    const mt=document.getElementById('messagesTable');
+    if(msgs.length===0){mt.innerHTML='<div style="color:#64748b">No messages yet</div>';}
+    else{mt.innerHTML=msgs.map(m=>`
+      <div style="padding:6px 0;border-bottom:1px solid #1e293b">
+        <span style="color:#38bdf8;font-weight:600">[${m.sent_from}]</span>
+        <span style="color:#64748b">(${m.cause_by})</span>
+        ${m.send_to?`<span style="color:#94a3b8">→${m.send_to}</span>`:''}
+        <div style="color:#cbd5e1;margin-top:2px">${m.content_preview.substring(0,200)}</div>
+      </div>
+    `).join('');}
+  }catch(e){document.getElementById('statusText').textContent='Error: '+e.message;}
+}
+load();setInterval(load,10000);
+</script>
+</body>
+</html>

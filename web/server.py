@@ -267,6 +267,13 @@ class WebServer:
         app.router.add_post("/api/admin/hub/recharge/create", self._hub_remote_recharge_create)
         app.router.add_get("/api/admin/hub/recharge/status/{order_no}", self._hub_remote_recharge_status)
 
+        # Company Dashboard API
+        try:
+            from agent.company.dashboard import register_company_routes
+            register_company_routes(app)
+        except ImportError:
+            pass
+
         # 静态文件
         app.router.add_static("/static", self._static_dir, show_index=False)
 

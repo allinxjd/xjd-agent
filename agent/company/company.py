@@ -9,8 +9,10 @@ from typing import Any, Optional
 from agent.company.action import USER_REQUIREMENT
 from agent.company.environment import CompanyEnvironment
 from agent.company.feishu_bridge import FeishuBotConfig, FeishuBridge
+from agent.company.memory import CompanyMemory
 from agent.company.message import CompanyMessage
 from agent.company.role import CompanyRole
+from agent.company.store import CompanyStore
 from agent.company.task import CompanyTask
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,9 @@ class Company:
         self._tasks: dict[str, CompanyTask] = {}
         self._karpathy_prompt = _load_karpathy_guidelines()
         self._feishu_bridge: Optional[FeishuBridge] = None
+        self._store = CompanyStore()
+        self._store.open()
+        self._shared_memory = CompanyMemory(memory_manager)
 
         if feishu_chat_id and feishu_bots:
             self._feishu_bridge = FeishuBridge(
@@ -100,6 +105,7 @@ class Company:
         """分配任务，发布触发消息."""
         self._tasks[task.task_id] = task
         task.status = "in_progress"
+        self._store.save_task(task)
 
         msg = CompanyMessage(
             content=task.description,
@@ -111,15 +117,21 @@ class Company:
             msg.send_to = task.assigned_to
 
         await self._env.publish(msg)
+        self._store.save_message(msg)
 
     async def run(self, requirement: str, max_rounds: int = 20) -> str:
         """主循环：发布需求 → 角色轮转 → 直到空闲或达到上限."""
+        import uuid
+        run_id = uuid.uuid4().hex[:8]
+
         task = CompanyTask(
             title=requirement[:60],
             description=requirement,
         )
         await self.assign(task)
+        self._store.save_run(run_id, requirement, task.task_id)
 
+        round_num = 0
         for round_num in range(1, max_rounds + 1):
             if self._env.is_idle():
                 logger.info("所有角色空闲，结束 (round %d)", round_num)
@@ -131,8 +143,10 @@ class Company:
                     continue
                 result_msg = await role.run()
                 if result_msg:
+                    result_msg.task_id = task.task_id
                     task.result = result_msg.content
                     await self._env.publish(result_msg)
+                    self._store.save_message(result_msg)
         else:
             logger.warning("达到最大轮次 %d，强制结束", max_rounds)
 
@@ -153,12 +167,16 @@ class Company:
                         task_id=task.task_id,
                     )
                     await self._env.publish(retry_msg)
+                    self._store.save_message(retry_msg)
+                    self._store.save_task(task)
                     return await self._continue_run(task, requirement, max_rounds - round_num)
                 else:
                     logger.warning("任务验证失败且已达最大重试: %s", feedback)
         else:
             task.status = "done"
 
+        self._store.save_task(task)
+        self._store.finish_run(run_id, task.status, round_num, task.result[:500] if task.result else "")
         return task.result
 
     async def _continue_run(self, task: CompanyTask, remaining_rounds: int, requirement: str = "") -> str:
