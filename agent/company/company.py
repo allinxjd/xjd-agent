@@ -274,11 +274,14 @@ class Company:
 
     _TASK_TRIGGER_KEYWORDS = [
         "开发一个", "写一个", "做一个", "帮我开发", "帮我写", "帮我做",
-        "开始开发", "开始写", "开干", "启动流水线", "开始干活",
-        "写个", "做个", "搞一个", "搞个", "实现一个",
+        "开始开发", "开始写", "开始做", "开干", "开搞", "启动流水线", "开始干活",
+        "写个", "做个", "搞一个", "搞个", "实现一个", "实现个",
         "写PRD", "写 PRD", "出PRD", "出 PRD",
         "马上开发", "立刻开发", "赶紧开发", "直接开发",
+        "马上做", "赶紧做", "赶紧搞", "快做", "快搞",
         "创建一个", "建一个", "生成一个",
+        "安排开发", "安排一下", "动手吧", "动手做", "你就开始",
+        "现在就做", "现在就开发", "现在开始",
     ]
 
     def _detect_task_intent(self, text: str) -> bool:
@@ -362,10 +365,6 @@ class Company:
             reply_msg = await role._act(CHAT_REPLY, context)
 
             self._standby_history.append((role.name, reply_msg.content))
-
-            if "[TASK_START]" in reply_msg.content:
-                reply_msg.content = reply_msg.content.replace("[TASK_START]", "").strip()
-
             await self._env.publish(reply_msg)
 
     def stop_standby(self) -> None:
