@@ -89,6 +89,9 @@ class FeishuBridge:
         if not self._started:
             return
 
+        if msg.cause_by == "HumanDirective":
+            return
+
         role_name = msg.sent_from
         adapter = self._adapters.get(role_name)
 
@@ -97,21 +100,15 @@ class FeishuBridge:
             if not adapter:
                 return
 
-        prefix = f"[{role_name}]" if role_name else ""
-        action_tag = f" ({msg.cause_by})" if msg.cause_by else ""
-        header = f"{prefix}{action_tag}\n" if prefix or action_tag else ""
-
         content = msg.content
         if len(content) > 3000:
             content = content[:3000] + "\n\n... (内容过长已截断)"
-
-        text = f"{header}{content}"
 
         try:
             from gateway.platforms.base import OutgoingMessage
             out = OutgoingMessage(
                 chat_id=self._group_chat_id,
-                content=text,
+                content=content,
                 message_type="text",
             )
             await adapter.send_message(out)

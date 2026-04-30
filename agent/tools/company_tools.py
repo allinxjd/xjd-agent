@@ -304,7 +304,7 @@ def register_company_tools(registry: Any) -> None:
         },
         handler=company_standby,
         category="company",
-        timeout=30.0,
+        timeout=60.0,
     )
 
     registry.register(
