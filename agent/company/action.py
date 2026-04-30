@@ -164,9 +164,23 @@ EXECUTE_DEPLOY = Action(
     tools_filter=["system", "terminal", "network"],
 )
 
+CHAT_REPLY = Action(
+    name="ChatReply",
+    description="回复用户消息（待命模式）",
+    prompt_template=(
+        "你当前处于待命模式。用户在飞书群发了消息，请直接回复。\n"
+        "不要启动流水线，不要写 PRD，不要写代码。像正常对话一样回复即可。\n"
+        "如果用户明确要求开始一个开发任务（如「开发一个XX」「写一个XX脚本」「帮我做一个XX功能」），\n"
+        "在回复的最开头加上 [TASK_START] 标记，然后简要确认你理解的需求。\n\n"
+        "## 用户消息\n{context}"
+    ),
+    tools_filter=[],
+)
+
 ALL_ACTIONS: dict[str, Action] = {
     a.name: a for a in [
         USER_REQUIREMENT, WRITE_PRD, WRITE_DESIGN, WRITE_CODE,
         CODE_REVIEW, WRITE_TEST, RUN_TEST, DEPLOY_PLAN, EXECUTE_DEPLOY,
+        CHAT_REPLY,
     ]
 }

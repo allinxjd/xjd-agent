@@ -161,13 +161,48 @@ async def company_run(
     return result
 
 
+async def company_standby() -> str:
+    """启动 AI Company 待命模式.
+
+    各角色在飞书群报到并持续监听消息，等待用户指令。
+    不 @人时 PM 回复，@某角色时该角色回复。
+    用户下达开发任务时自动启动流水线。
+    """
+    from agent.tools.registry import ToolRegistry
+    from agent.tools.builtin import register_builtin_tools
+    from agent.company import Company
+    from agent.company.roles import create_default_team
+
+    router, config = _build_router()
+    if not router:
+        return "Error: 未配置模型，请先运行 xjd-agent setup"
+
+    registry = ToolRegistry()
+    register_builtin_tools(registry)
+
+    feishu_chat_id, feishu_bots = _load_feishu_config(config)
+    if not feishu_chat_id or not feishu_bots:
+        return "Error: 飞书未配置，请在技能密钥页面配置飞书 Bot"
+
+    company = Company(
+        router=router,
+        tool_registry=registry,
+        feishu_chat_id=feishu_chat_id,
+        feishu_bots=feishu_bots,
+    )
+    team = create_default_team()
+    company.hire_team(team)
+
+    return await company.run_standby()
+
+
 def register_company_tools(registry: Any) -> None:
     """注册 Company 工具到 ToolRegistry."""
     registry.register(
         name="company_run",
         description=(
-            "启动 AI Company 多角色协作。5 个 AI 角色（PM、Developer、Reviewer、QA、DevOps）"
-            "按流程协作完成开发任务：PM 写 PRD → Developer 写代码 → Reviewer 审查 → QA 测试 → DevOps 部署。"
+            "执行一次性开发任务。5 个 AI 角色（PM、Developer、Reviewer、QA、DevOps）"
+            "按流水线协作完成：PM 写 PRD → Developer 写代码 → Reviewer 审查 → QA 测试 → DevOps 部署。"
         ),
         parameters={
             "type": "object",
@@ -192,4 +227,20 @@ def register_company_tools(registry: Any) -> None:
         handler=company_run,
         category="company",
         timeout=600.0,
+    )
+
+    registry.register(
+        name="company_standby",
+        description=(
+            "启动 AI Company 待命模式。各角色在飞书群报到并持续监听消息，等待用户指令。"
+            "不 @人时 PM 回复，@某角色时该角色回复。用户下达开发任务时自动启动流水线。"
+        ),
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+        handler=company_standby,
+        category="company",
+        timeout=3600.0,
     )

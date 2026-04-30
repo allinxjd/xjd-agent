@@ -213,6 +213,57 @@ class Company:
 
         return task.result
 
+    async def run_standby(self) -> str:
+        """待命模式：启动飞书 → 角色报到 → 持续监听消息循环."""
+        import asyncio
+
+        await self.start_feishu()
+
+        for role in self._env.roles.values():
+            checkin = CompanyMessage(
+                content=f"{role.name} 已就绪，等待指令。",
+                cause_by="RoleCheckin",
+                sent_from=role.name,
+            )
+            await self._env.publish(checkin)
+
+        self._standby_stop = asyncio.Event()
+        try:
+            while not self._standby_stop.is_set():
+                await self._process_standby_messages()
+                try:
+                    await asyncio.wait_for(self._standby_stop.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            await self.stop_feishu()
+        return "AI Company 待命模式已结束"
+
+    async def _process_standby_messages(self) -> None:
+        """处理待命模式下的消息：用 CHAT_REPLY 回复，检测 [TASK_START] 触发流水线."""
+        from agent.company.action import CHAT_REPLY
+
+        for role in self._env.roles.values():
+            if not role.has_pending:
+                continue
+            messages = await role._observe()
+            if not messages:
+                continue
+            context = "\n\n".join(m.content for m in messages)
+            reply_msg = await role._act(CHAT_REPLY, context)
+
+            if "[TASK_START]" in reply_msg.content:
+                reply_msg.content = reply_msg.content.replace("[TASK_START]", "").strip()
+                await self._env.publish(reply_msg)
+                await self.run(context, max_rounds=20)
+            else:
+                await self._env.publish(reply_msg)
+
+    def stop_standby(self) -> None:
+        """外部调用停止待命模式."""
+        if hasattr(self, "_standby_stop"):
+            self._standby_stop.set()
+
     async def run_interactive(self, requirement: str, max_rounds: int = 50) -> str:
         """交互模式：每轮结束后等待用户输入."""
         import asyncio
