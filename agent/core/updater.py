@@ -360,6 +360,18 @@ def _update_git() -> bool:
     if not pulled:
         logger.info("git pull failed, falling back to tarball download...")
         pulled = _update_tarball(repo_dir)
+        if pulled:
+            try:
+                subprocess.run(
+                    ["git", "fetch", "origin", "main"],
+                    capture_output=True, text=True, timeout=30, cwd=str(repo_dir),
+                )
+                subprocess.run(
+                    ["git", "reset", "--hard", "origin/main"],
+                    capture_output=True, text=True, timeout=10, cwd=str(repo_dir),
+                )
+            except Exception:
+                pass
 
     if not pulled:
         return False
