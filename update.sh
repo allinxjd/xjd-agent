@@ -21,14 +21,14 @@ if [ -z "$PY" ]; then
 fi
 echo "  Python: $PY ($($PY --version 2>&1))"
 
-# 3. pip install --force-reinstall --no-deps
+# 3. pip install --force-reinstall
 echo "  安装中..."
 IN_VENV=$($PY -c "import sys; print('yes' if sys.prefix != sys.base_prefix else 'no')")
 if [ "$IN_VENV" = "yes" ]; then
-    $PY -m pip install --force-reinstall --no-deps . -q
+    $PY -m pip install --force-reinstall . -q
 else
-    $PY -m pip install --force-reinstall --no-deps . --break-system-packages -q 2>/dev/null || \
-    $PY -m pip install --force-reinstall --no-deps --user . --break-system-packages -q
+    $PY -m pip install --force-reinstall . --break-system-packages -q 2>/dev/null || \
+    $PY -m pip install --force-reinstall --user . --break-system-packages -q
 fi
 
 # 4. 显示版本

@@ -351,7 +351,7 @@ def _update_git() -> bool:
     # 注意：不能依赖已加载的 _run_pip_install，因为它可能是旧版本
     import sys as _sys
     _force_args = [_sys.executable, "-m", "pip", "install", "--force-reinstall",
-                   "--no-deps", ".",
+                   ".",
                    "-i", "https://mirrors.aliyun.com/pypi/simple/",
                    "--trusted-host", "mirrors.aliyun.com"]
     in_venv = _sys.prefix != _sys.base_prefix
@@ -374,7 +374,7 @@ def _run_pip_install(cwd: str) -> bool:
 
     in_venv = _sys.prefix != _sys.base_prefix
     pip_base = [_sys.executable, "-m", "pip", "install", "--force-reinstall",
-                "--no-deps", ".",
+                ".",
                 "-i", "https://mirrors.aliyun.com/pypi/simple/",
                 "--trusted-host", "mirrors.aliyun.com"]
 
@@ -391,7 +391,7 @@ def _run_pip_install(cwd: str) -> bool:
 
     if not in_venv:
         pip_user = [_sys.executable, "-m", "pip", "install", "--force-reinstall",
-                    "--no-deps", "--user", ".",
+                    "--user", ".",
                     "-i", "https://mirrors.aliyun.com/pypi/simple/",
                     "--trusted-host", "mirrors.aliyun.com",
                     "--break-system-packages"]
