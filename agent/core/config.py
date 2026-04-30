@@ -42,6 +42,11 @@ def get_workspace_dir() -> Path:
     d.mkdir(exist_ok=True)
     return d
 
+def get_projects_dir() -> Path:
+    d = get_home() / "projects"
+    d.mkdir(exist_ok=True)
+    return d
+
 def get_canvas_dir() -> Path:
     d = get_workspace_dir() / "canvas"
     d.mkdir(exist_ok=True)
@@ -190,6 +195,9 @@ class Config:
     # Channel 配置 (动态加载)
     channels: dict[str, Any] = field(default_factory=dict)
 
+    # AI Company 待命模式持久化标志
+    company_standby_enabled: bool = False
+
     @classmethod
     def load(cls, path: Optional[Path] = None) -> Config:
         """从 YAML 文件加载配置."""
@@ -278,6 +286,7 @@ class Config:
             config.proxy = data.get("proxy", "")
             config.hub_url = data.get("hub_url", "https://ai.allinxjd.com")
             config.channels = data.get("channels", {})
+            config.company_standby_enabled = data.get("company_standby_enabled", False)
 
             return config
 
@@ -366,6 +375,8 @@ class Config:
 
         if self.channels:
             data["channels"] = self.channels
+
+        data["company_standby_enabled"] = self.company_standby_enabled
 
         # 不序列化敏感 key 到 YAML (api_key 通过环境变量管理)
         # voice 的 api_key 也不写入

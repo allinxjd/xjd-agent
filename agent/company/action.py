@@ -15,6 +15,36 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _apply_workspace_guard(engine: Any, prompt: str) -> None:
+    """如果 prompt 包含项目工作目录，包装 write_file/edit_file 拒绝目录外写入."""
+    import re
+    from pathlib import Path
+
+    match = re.search(r"## 项目工作目录\n(.+)\n", prompt)
+    if not match:
+        return
+
+    workspace = Path(match.group(1)).resolve()
+
+    for tool_name in ("write_file", "edit_file"):
+        tool_handler = engine._tools.get(tool_name)
+        if not tool_handler:
+            continue
+        original_fn = tool_handler.handler
+
+        def _guarded(orig=original_fn, ws=workspace):
+            async def wrapper(**kwargs):
+                file_path = kwargs.get("file_path") or kwargs.get("path") or ""
+                if file_path:
+                    resolved = Path(file_path).resolve()
+                    if not str(resolved).startswith(str(ws)):
+                        return f"错误：禁止在项目目录外写入文件。目标路径 {file_path} 不在 {ws} 下。请使用项目目录内的路径。"
+                return await orig(**kwargs)
+            return wrapper
+
+        tool_handler.handler = _guarded()
+
+
 @dataclass
 class Action:
     """角色可执行的原子操作."""
@@ -50,6 +80,8 @@ class Action:
                             requires_approval=tool.requires_approval,
                         )
 
+        _apply_workspace_guard(engine, prompt)
+
         result = await engine.run_turn(prompt)
         return result.content if hasattr(result, "content") else str(result)
 
@@ -68,7 +100,8 @@ WRITE_PRD = Action(
         "你的任务：根据需求编写一份简洁的 PRD（产品需求文档）。\n"
         "直接输出 PRD 文本，不要使用任何工具，不要读取文件。\n"
         "必须包含：功能描述、用户故事、验收标准（可测试的条件列表）。\n"
-        "不要过度设计，只覆盖需求本身。\n\n"
+        "不要过度设计，只覆盖需求本身。\n"
+        "如果上下文包含「项目工作目录」，请在 PRD 开头注明项目路径。\n\n"
         "## 需求\n{context}"
     ),
     tools_filter=[],
@@ -93,7 +126,8 @@ WRITE_CODE = Action(
     prompt_template=(
         "根据以下设计方案和需求，编写代码实现。\n"
         "原则：最少代码解决问题，不加未要求的功能，匹配项目现有风格。\n"
-        "使用工具读取现有代码、创建/编辑文件。\n\n"
+        "使用工具读取现有代码、创建/编辑文件。\n"
+        "如果上下文包含「项目工作目录」，所有文件操作必须在该目录下。代码写入 src/，配置文件放项目根目录。\n\n"
         "## 设计与需求\n{context}"
     ),
     tools_filter=["code", "file", "terminal"],
@@ -122,7 +156,8 @@ WRITE_TEST = Action(
     prompt_template=(
         "根据以下代码和验收标准，编写测试。\n"
         "原则：先写测试复现问题/验证功能，再确认通过。\n"
-        "覆盖正常路径和边界情况。\n\n"
+        "覆盖正常路径和边界情况。\n"
+        "如果上下文包含「项目工作目录」，测试文件写入该目录的 tests/ 下。\n\n"
         "## 代码与验收标准\n{context}"
     ),
     tools_filter=["code", "file", "terminal"],

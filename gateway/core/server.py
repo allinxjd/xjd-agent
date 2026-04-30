@@ -346,6 +346,15 @@ class GatewayServer:
         # 启动定期清理任务 (session locks + expired sessions)
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
 
+        # 自动恢复 AI Company 待命模式
+        try:
+            from agent.core.config import Config as _Cfg
+            _cfg = _Cfg.load()
+            if _cfg.company_standby_enabled:
+                asyncio.create_task(self._auto_recover_standby(_cfg))
+        except Exception as e:
+            logger.warning("AI Company 自动恢复检查失败: %s", e)
+
     async def _start_adapter(self, name: str, adapter: BasePlatformAdapter, max_retries: int = 3) -> None:
         """安全启动单个适配器 (带重试)."""
         for attempt in range(1, max_retries + 1):
@@ -391,6 +400,26 @@ class GatewayServer:
                 break
             except Exception as e:
                 logger.warning("Periodic cleanup error: %s", e)
+
+    async def _auto_recover_standby(self, cfg: Any) -> None:
+        """自动恢复 AI Company 待命模式，最多重试 3 次."""
+        from agent.tools.company_tools import company_standby
+
+        for attempt in range(1, 4):
+            try:
+                result = await company_standby(is_recovery=True)
+                if not result.startswith("Error"):
+                    logger.info("AI Company 待命模式已自动恢复")
+                    return
+                logger.warning("自动恢复尝试 %d/3: %s", attempt, result)
+            except Exception as e:
+                logger.warning("自动恢复尝试 %d/3 异常: %s", attempt, e)
+            if attempt < 3:
+                await asyncio.sleep(5 * attempt)
+
+        logger.error("AI Company 自动恢复失败 3 次，已关闭自动恢复")
+        cfg.company_standby_enabled = False
+        cfg.save()
 
     async def stop(self) -> None:
         """停止 Gateway."""

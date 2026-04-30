@@ -14,6 +14,7 @@ from agent.company.message import CompanyMessage
 from agent.company.role import CompanyRole
 from agent.company.store import CompanyStore
 from agent.company.task import CompanyTask
+from agent.core.config import get_projects_dir
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ class Company:
         self._store = CompanyStore()
         self._store.open()
         self._shared_memory = CompanyMemory(memory_manager)
+        self._pipeline_running = False
 
         if feishu_chat_id and feishu_bots:
             self._feishu_bridge = FeishuBridge(
@@ -141,6 +143,13 @@ class Company:
             for role in self._env.roles.values():
                 if not role.has_pending:
                     continue
+                status_msg = CompanyMessage(
+                    content=f"{role.name} 开始工作...",
+                    cause_by="StatusUpdate",
+                    sent_from=role.name,
+                    task_id=task.task_id,
+                )
+                await self._env.publish(status_msg)
                 result_msg = await role.run()
                 if result_msg:
                     result_msg.task_id = task.task_id
@@ -187,6 +196,12 @@ class Company:
             for role in self._env.roles.values():
                 if not role.has_pending:
                     continue
+                status_msg = CompanyMessage(
+                    content=f"{role.name} 开始工作...",
+                    cause_by="StatusUpdate",
+                    sent_from=role.name,
+                )
+                await self._env.publish(status_msg)
                 result_msg = await role.run()
                 if result_msg:
                     task.result = result_msg.content
@@ -213,28 +228,36 @@ class Company:
 
         return task.result
 
-    async def run_standby(self) -> str:
+    async def run_standby(self, is_recovery: bool = False) -> str:
         """待命模式：启动飞书 → 角色报到 → 持续监听消息循环."""
         import asyncio
 
         await self.start_feishu()
 
-        checkin_lines = {
-            "PM": "老板好 🫡 PM 诸葛到岗了，有什么需求随时说，我来安排～",
-            "Developer": "老板，码农就位 💪 随时开搞",
-            "Reviewer": "老板好，审查员在线 👀 代码质量我盯着",
-            "QA": "老板～测试就绪，准备找茬 🔍",
-            "DevOps": "老板，运维到位 ✅ 部署环境一切正常",
-        }
-
-        for role in self._env.roles.values():
-            line = checkin_lines.get(role.name, f"老板好，{role.name} 已就绪，等待指令。")
-            checkin = CompanyMessage(
-                content=line,
+        if is_recovery:
+            recovery_msg = CompanyMessage(
+                content="老板，系统刚重启，团队已自动恢复上线 🫡 随时待命！",
                 cause_by="RoleCheckin",
-                sent_from=role.name,
+                sent_from="PM",
             )
-            await self._env.publish(checkin)
+            await self._env.publish(recovery_msg)
+        else:
+            checkin_lines = {
+                "PM": "老板好 🫡 PM 诸葛到岗了，有什么需求随时说，我来安排～",
+                "Developer": "老板，码农就位 💪 随时开搞",
+                "Reviewer": "老板好，审查员在线 👀 代码质量我盯着",
+                "QA": "老板～测试就绪，准备找茬 🔍",
+                "DevOps": "老板，运维到位 ✅ 部署环境一切正常",
+            }
+
+            for role in self._env.roles.values():
+                line = checkin_lines.get(role.name, f"老板好，{role.name} 已就绪，等待指令。")
+                checkin = CompanyMessage(
+                    content=line,
+                    cause_by="RoleCheckin",
+                    sent_from=role.name,
+                )
+                await self._env.publish(checkin)
 
         self._standby_stop = asyncio.Event()
         self._standby_history: list[tuple[str, str]] = []
@@ -261,6 +284,16 @@ class Company:
             if not messages:
                 continue
 
+            # pipeline 运行中，自动回复
+            if self._pipeline_running:
+                auto_reply = CompanyMessage(
+                    content="团队正在开发中，请稍候... 完成后会通知老板 🫡",
+                    cause_by="StatusUpdate",
+                    sent_from="PM",
+                )
+                await self._env.publish(auto_reply)
+                continue
+
             for m in messages:
                 self._standby_history.append((m.sent_from, m.content))
 
@@ -282,7 +315,33 @@ class Company:
                 reply_msg.content = reply_msg.content.replace("[TASK_START]", "").strip()
                 await self._env.publish(reply_msg)
                 task_context = "\n\n".join(m.content for m in messages)
-                await self.run(task_context, max_rounds=20)
+                project_dir = self._create_project_workspace(task_context)
+                enriched = (
+                    f"## 项目工作目录\n{project_dir}\n"
+                    f"所有文件必须创建在此目录下。PRD 写入 docs/prd.md，设计写入 docs/design.md，"
+                    f"代码写入 src/，测试写入 tests/。\n\n{task_context}"
+                )
+
+                async def _run_pipeline(req: str, pdir: Path) -> None:
+                    self._pipeline_running = True
+                    try:
+                        result = await self.run(req, max_rounds=20)
+                        status = "done" if result else "failed"
+                    except Exception as e:
+                        logger.error("Pipeline 执行异常: %s", e)
+                        status = "failed"
+                    finally:
+                        self._pipeline_running = False
+                        self._update_project_status(pdir, status)
+                        done_msg = CompanyMessage(
+                            content=f"老板，任务{'完成' if status == 'done' else '执行出错了'}！项目目录: {pdir}",
+                            cause_by="StatusUpdate",
+                            sent_from="PM",
+                        )
+                        await self._env.publish(done_msg)
+
+                import asyncio
+                asyncio.create_task(_run_pipeline(enriched, project_dir))
             else:
                 await self._env.publish(reply_msg)
 
@@ -290,6 +349,50 @@ class Company:
         """外部调用停止待命模式."""
         if hasattr(self, "_standby_stop"):
             self._standby_stop.set()
+
+    def _create_project_workspace(self, requirement: str) -> Path:
+        """根据需求创建项目工作目录，返回项目路径."""
+        import json
+        import re
+        from datetime import datetime
+
+        date_str = datetime.now().strftime("%Y%m%d")
+        slug = requirement[:30].strip()
+        slug = re.sub(r'[^\w\u4e00-\u9fff-]', '_', slug)
+        slug = re.sub(r'_+', '_', slug).strip('_') or "project"
+        project_name = f"{date_str}-{slug}"
+
+        project_dir = get_projects_dir() / project_name
+        for sub in ("docs", "src", "tests"):
+            (project_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        meta_file = project_dir / ".project.json"
+        if not meta_file.exists():
+            meta = {
+                "requirement": requirement[:500],
+                "created_at": datetime.now().isoformat(),
+                "status": "in_progress",
+            }
+            meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+
+        logger.info("项目工作目录已创建: %s", project_dir)
+        return project_dir
+
+    def _update_project_status(self, project_dir: Path, status: str) -> None:
+        """更新项目元数据状态."""
+        import json
+        from datetime import datetime
+
+        meta_file = project_dir / ".project.json"
+        if not meta_file.exists():
+            return
+        try:
+            meta = json.loads(meta_file.read_text())
+            meta["status"] = status
+            meta["completed_at"] = datetime.now().isoformat()
+            meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+        except Exception as e:
+            logger.warning("更新项目状态失败: %s", e)
 
     async def run_interactive(self, requirement: str, max_rounds: int = 50) -> str:
         """交互模式：每轮结束后等待用户输入."""

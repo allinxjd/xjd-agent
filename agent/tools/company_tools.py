@@ -164,7 +164,7 @@ async def company_run(
 _standby_company: Any = None
 
 
-async def company_standby() -> str:
+async def company_standby(is_recovery: bool = False) -> str:
     """启动 AI Company 待命模式.
 
     各角色在飞书群报到并持续监听消息，等待用户指令。
@@ -207,7 +207,7 @@ async def company_standby() -> str:
     async def _run_standby():
         global _standby_company
         try:
-            await company.run_standby()
+            await company.run_standby(is_recovery=is_recovery)
         except Exception as e:
             logger.error("待命模式异常退出: %s", e)
         finally:
@@ -216,6 +216,15 @@ async def company_standby() -> str:
     asyncio.create_task(_run_standby())
 
     await asyncio.sleep(3)
+
+    # 持久化标志，gateway 重启后自动恢复
+    try:
+        from agent.core.config import Config as _Cfg
+        _cfg = _Cfg.load()
+        _cfg.company_standby_enabled = True
+        _cfg.save()
+    except Exception as e:
+        logger.warning("保存 company_standby_enabled 失败: %s", e)
 
     bot_count = 0
     if company._feishu_bridge:
@@ -237,6 +246,15 @@ async def company_stop_standby() -> str:
         return "当前没有运行中的待命模式"
     _standby_company.stop_standby()
     _standby_company = None
+
+    try:
+        from agent.core.config import Config as _Cfg
+        _cfg = _Cfg.load()
+        _cfg.company_standby_enabled = False
+        _cfg.save()
+    except Exception as e:
+        logger.warning("保存 company_standby_enabled 失败: %s", e)
+
     return "AI Company 待命模式已停止 👋"
 
 
