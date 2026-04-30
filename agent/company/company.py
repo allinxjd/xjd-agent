@@ -307,6 +307,7 @@ class Company:
         from agent.company.action import CHAT_REPLY
 
         if self._pipeline_running:
+            collected = []
             for role in self._env.roles.values():
                 if not role.has_pending:
                     continue
@@ -317,17 +318,21 @@ class Company:
                     m for m in messages
                     if m.cause_by == "HumanDirective" and m.sent_from not in self._env.roles
                 ]
-                if user_msgs:
-                    self._pipeline_user_msgs.extend(user_msgs)
-                    for m in user_msgs:
-                        self._standby_history.append((m.sent_from, m.content))
-                        self._store.save_message(m)
-                    ack = CompanyMessage(
-                        content="收到老板，已记录你的补充，会纳入当前开发中 🫡",
-                        cause_by="ChatReply",
-                        sent_from="PM",
-                    )
-                    await self._env.publish(ack)
+                for m in user_msgs:
+                    if m.content not in [c.content for c in collected]:
+                        collected.append(m)
+            if collected:
+                self._pipeline_user_msgs.extend(collected)
+                for m in collected:
+                    self._standby_history.append((m.sent_from, m.content))
+                    self._store.save_message(m)
+                summary = "、".join(m.content[:20] for m in collected)
+                ack = CompanyMessage(
+                    content=f"收到老板 🫡 已记录 {len(collected)} 条补充（{summary}），会纳入当前开发",
+                    cause_by="ChatReply",
+                    sent_from="PM",
+                )
+                await self._env.publish(ack)
             return
 
         for role in self._env.roles.values():
