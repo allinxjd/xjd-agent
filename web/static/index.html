@@ -2602,18 +2602,45 @@ async function renderSkillSecretSection(container, skill) {
     const data = await fetch('/api/admin/skill-secrets/' + encodeURIComponent(skill.skill_id), {headers: authHeaders()}).then(r => r.json());
     const section = document.createElement('div');
     section.className = 'settings-section';
-    const statusColor = skill.configured === skill.total_secrets ? 'var(--green)' : 'var(--orange)';
+    const statusColor = skill.configured === skill.total_secrets ? 'var(--green)' : 'var(--orange, #f59e0b)';
     const statusText = skill.configured + '/' + skill.total_secrets;
     let html = '<div class="settings-section-title">' + escapeHtml(data.skill_name) +
       ' <span style="font-size:11px;color:' + statusColor + '">(' + statusText + ')</span></div>';
     const inputStyle = 'flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;';
-    for (const sec of data.secrets) {
-      const isSensitive = /password|secret|token/i.test(sec.key);
-      const inputType = isSensitive ? 'password' : 'text';
-      const placeholder = isSensitive ? (sec.has_value ? '(configured)' : '(not set)') : (sec.default || '');
-      const val = sec.value || '';
-      html += '<div class="setting-row"><span class="setting-label" title="' + escapeHtml(sec.key) + '">' + escapeHtml(sec.description || sec.key) + '</span>' +
-        '<input type="' + inputType + '" data-secret-key="' + escapeHtml(sec.key) + '" value="' + escapeHtml(val) + '" placeholder="' + escapeHtml(placeholder) + '" style="' + inputStyle + '"></div>';
+    const hasGroups = data.secrets.some(s => s.group);
+    if (hasGroups) {
+      const groups = [];
+      const groupMap = {};
+      const ungrouped = [];
+      for (const sec of data.secrets) {
+        if (sec.group) {
+          if (!groupMap[sec.group]) { groupMap[sec.group] = []; groups.push(sec.group); }
+          groupMap[sec.group].push(sec);
+        } else { ungrouped.push(sec); }
+      }
+      for (const sec of ungrouped) {
+        html += _renderSecretInput(sec, inputStyle);
+      }
+      for (const gName of groups) {
+        const gSecrets = groupMap[gName];
+        const gConfigured = gSecrets.every(s => s.has_value);
+        const badge = gConfigured
+          ? '<span style="font-size:11px;color:var(--green);margin-left:6px">&#10003;</span>'
+          : '<span style="font-size:11px;color:var(--text-tertiary);margin-left:6px">&#9675;</span>';
+        const gId = 'sg_' + Math.random().toString(36).slice(2, 8);
+        html += '<div style="margin:8px 0 4px;cursor:pointer;display:flex;align-items:center;user-select:none" onclick="var b=document.getElementById(\'' + gId + '\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.sg-arrow\').textContent=b.style.display===\'none\'?\'\\u25B8\':\'\\u25BE\'">' +
+          '<span class="sg-arrow" style="font-size:11px;color:var(--text-tertiary);width:14px">&#9656;</span>' +
+          '<span style="font-size:12px;font-weight:600;color:var(--text-secondary)">' + escapeHtml(gName) + '</span>' + badge + '</div>';
+        html += '<div id="' + gId + '" style="display:none;padding-left:14px;border-left:2px solid var(--border);margin-left:6px">';
+        for (const sec of gSecrets) {
+          html += _renderSecretInput(sec, inputStyle);
+        }
+        html += '</div>';
+      }
+    } else {
+      for (const sec of data.secrets) {
+        html += _renderSecretInput(sec, inputStyle);
+      }
     }
     html += '<button class="settings-save-btn" data-skill-id="' + escapeHtml(skill.skill_id) + '" onclick="saveSkillSecrets(this.dataset.skillId, this)">' +
       (curLang === 'zh' ? '保存' : 'Save') + '</button>' +
@@ -2621,6 +2648,14 @@ async function renderSkillSecretSection(container, skill) {
     section.innerHTML = html;
     container.appendChild(section);
   } catch {}
+}
+function _renderSecretInput(sec, inputStyle) {
+  const isSensitive = /password|secret|token/i.test(sec.key);
+  const inputType = isSensitive ? 'password' : 'text';
+  const placeholder = isSensitive ? (sec.has_value ? '(configured)' : '(not set)') : (sec.default || '');
+  const val = sec.value || '';
+  return '<div class="setting-row"><span class="setting-label" title="' + escapeHtml(sec.key) + '">' + escapeHtml(sec.description || sec.key) + '</span>' +
+    '<input type="' + inputType + '" data-secret-key="' + escapeHtml(sec.key) + '" value="' + escapeHtml(val) + '" placeholder="' + escapeHtml(placeholder) + '" style="' + inputStyle + '"></div>';
 }
 
 async function saveSkillSecrets(skillId, btn) {

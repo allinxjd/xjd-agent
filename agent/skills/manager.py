@@ -58,6 +58,7 @@ class SkillSecret:
     key: str = ""
     description: str = ""
     default: str = ""
+    group: str = ""
 
 
 @dataclass
@@ -182,7 +183,9 @@ class Skill:
             meta["prerequisites"] = self.prerequisites
         if self.secrets:
             meta["secrets"] = [
-                {"key": s.key, "description": s.description, **({"default": s.default} if s.default else {})}
+                {"key": s.key, "description": s.description,
+                 **({"default": s.default} if s.default else {}),
+                 **({"group": s.group} if s.group else {})}
                 for s in self.secrets
             ]
         # 运行时统计 (非标准，xjd 扩展)
@@ -222,7 +225,8 @@ class Skill:
         tools = fm.get("tools", meta.get("tools", []))
         raw_secrets = fm.get("secrets", [])
         secrets = [
-            SkillSecret(key=s.get("key", ""), description=s.get("description", ""), default=s.get("default", ""))
+            SkillSecret(key=s.get("key", ""), description=s.get("description", ""),
+                        default=s.get("default", ""), group=s.get("group", ""))
             for s in raw_secrets if isinstance(s, dict)
         ]
         # 条件激活 (兼容旧版 metadata.hermes.* 格式)

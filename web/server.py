@@ -2479,6 +2479,8 @@ class WebServer:
                 "description": sec.description,
                 "has_value": bool(val or sec.default),
             }
+            if sec.group:
+                entry["group"] = sec.group
             if sec.default:
                 entry["default"] = sec.default
             if val and not is_sensitive:

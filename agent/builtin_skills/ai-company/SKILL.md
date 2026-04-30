@@ -14,26 +14,37 @@ examples:
 secrets:
   - key: FEISHU_GROUP_CHAT_ID
     description: 飞书群 chat_id（可选，配置后消息同步到飞书群）
+    group: 飞书群配置
   - key: FEISHU_PM_APP_ID
-    description: PM Bot 的 app_id
+    description: app_id
+    group: PM Bot
   - key: FEISHU_PM_APP_SECRET
-    description: PM Bot 的 app_secret
+    description: app_secret
+    group: PM Bot
   - key: FEISHU_DEVELOPER_APP_ID
-    description: Developer Bot 的 app_id
+    description: app_id
+    group: Developer Bot
   - key: FEISHU_DEVELOPER_APP_SECRET
-    description: Developer Bot 的 app_secret
+    description: app_secret
+    group: Developer Bot
   - key: FEISHU_REVIEWER_APP_ID
-    description: Reviewer Bot 的 app_id
+    description: app_id
+    group: Reviewer Bot
   - key: FEISHU_REVIEWER_APP_SECRET
-    description: Reviewer Bot 的 app_secret
+    description: app_secret
+    group: Reviewer Bot
   - key: FEISHU_QA_APP_ID
-    description: QA Bot 的 app_id
+    description: app_id
+    group: QA Bot
   - key: FEISHU_QA_APP_SECRET
-    description: QA Bot 的 app_secret
+    description: app_secret
+    group: QA Bot
   - key: FEISHU_DEVOPS_APP_ID
-    description: DevOps Bot 的 app_id
+    description: app_id
+    group: DevOps Bot
   - key: FEISHU_DEVOPS_APP_SECRET
-    description: DevOps Bot 的 app_secret
+    description: app_secret
+    group: DevOps Bot
 status: active
 source: builtin
 author: xjd-agent
