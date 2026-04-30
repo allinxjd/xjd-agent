@@ -362,14 +362,28 @@ def _update_git() -> bool:
         pulled = _update_tarball(repo_dir)
         if pulled:
             try:
-                subprocess.run(
-                    ["git", "fetch", "origin", "main"],
-                    capture_output=True, text=True, timeout=30, cwd=str(repo_dir),
+                fetch = subprocess.run(
+                    ["git", "-c", "http.version=HTTP/1.1", *proxy_args,
+                     "fetch", "origin", "main"],
+                    capture_output=True, text=True, timeout=60, cwd=str(repo_dir),
                 )
-                subprocess.run(
-                    ["git", "reset", "--hard", "origin/main"],
-                    capture_output=True, text=True, timeout=10, cwd=str(repo_dir),
-                )
+                if fetch.returncode == 0:
+                    subprocess.run(
+                        ["git", "reset", "--hard", "origin/main"],
+                        capture_output=True, text=True, timeout=10, cwd=str(repo_dir),
+                    )
+                    logger.info("git state synced after tarball update")
+                else:
+                    logger.info("git fetch failed after tarball, committing local state")
+                    subprocess.run(
+                        ["git", "add", "-A"],
+                        capture_output=True, text=True, timeout=10, cwd=str(repo_dir),
+                    )
+                    subprocess.run(
+                        ["git", "commit", "-m", "chore: sync tarball update",
+                         "--author", "xjd-agent-updater <noreply@allinxjd.com>"],
+                        capture_output=True, text=True, timeout=10, cwd=str(repo_dir),
+                    )
             except Exception:
                 pass
 
