@@ -478,11 +478,10 @@ class SkillManager:
         self._loaded = True
         logger.info("Loaded %d skills from %s", count, self._skills_dir)
 
-        # 3. 加载包内内置技能: agent/builtin_skills/*/SKILL.md (不覆盖用户同名技能)
-        #    同时复制到用户目录，确保 WebUI 和 secrets 能正常工作
-        builtin_dir = Path(__file__).resolve().parent.parent / "builtin_skills"
-        if not builtin_dir.is_dir():
-            builtin_dir = Path(__file__).resolve().parent.parent.parent / "skills"
+        # 3. 加载内置技能 (不覆盖用户同名技能)
+        #    查找顺序: 包内 builtin_skills → git 仓库 skills/ → 常见安装路径
+        #    找到后自动复制到用户目录，确保 WebUI 和 secrets 正常工作
+        builtin_dir = self._find_builtin_skills_dir()
         if builtin_dir.is_dir():
             builtin_count = 0
             for skill_dir in builtin_dir.iterdir():
@@ -510,6 +509,36 @@ class SkillManager:
                 count += builtin_count
 
         return count
+
+    def _find_builtin_skills_dir(self) -> Optional[Path]:
+        """查找内置技能目录，兼容 pip install 和开发模式."""
+        # 1. 包内 builtin_skills/
+        d = Path(__file__).resolve().parent.parent / "builtin_skills"
+        if d.is_dir() and any(d.iterdir()):
+            return d
+        # 2. 开发模式: 项目根目录 skills/
+        d = Path(__file__).resolve().parent.parent.parent / "skills"
+        if d.is_dir() and (d / "ai-company").is_dir():
+            return d
+        # 3. 通过 updater 找 git 仓库
+        try:
+            from agent.core.updater import _git_repo_dir
+            repo = _git_repo_dir()
+            if repo:
+                d = repo / "skills"
+                if d.is_dir():
+                    return d
+        except Exception:
+            pass
+        # 4. 常见路径
+        for p in [
+            Path.home() / "xjd-agent" / "skills",
+            Path.home() / "Code" / "xjd-agent" / "skills",
+            Path("/opt/xjd-agent/skills"),
+        ]:
+            if p.is_dir() and (p / "ai-company").is_dir():
+                return p
+        return None
 
     async def _migrate_yaml_to_md(self, skill: Skill, yaml_path: Path) -> None:
         """将旧 YAML 技能迁移为 SKILL.md 目录格式."""
