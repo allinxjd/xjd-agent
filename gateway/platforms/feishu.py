@@ -372,9 +372,13 @@ class FeishuAdapter(BasePlatformAdapter):
             # SDK mentions 转换
             if msg.mentions:
                 for m in msg.mentions:
+                    open_id = m.id.open_id if m.id else ""
+                    name = m.name or ""
+                    logger.info("飞书 SDK mention: open_id=%s, name=%s, key=%s",
+                                open_id, name, getattr(m, "key", ""))
                     event_dict["message"]["mentions"].append({
-                        "id": {"open_id": m.id.open_id if m.id else ""},
-                        "name": m.name or "",
+                        "id": {"open_id": open_id},
+                        "name": name,
                     })
 
             # 跨线程调度到主事件循环 (fire-and-forget, 不阻塞 SDK 回调线程)
@@ -682,13 +686,18 @@ class FeishuAdapter(BasePlatformAdapter):
 
         # 检查群聊中是否 @了机器人
         mentions = []
+        mention_details = []
         if msg.get("mentions"):
             for mention in msg["mentions"]:
-                mentions.append(mention.get("id", {}).get("open_id", ""))
-                # 去掉 @机器人 的文本
+                open_id = mention.get("id", {}).get("open_id", "")
                 mention_name = mention.get("name", "")
+                if open_id:
+                    mentions.append(open_id)
+                mention_details.append({"open_id": open_id, "name": mention_name})
                 if mention_name:
                     content = content.replace(f"@{mention_name}", "").strip()
+            import re
+            content = re.sub(r"@_user_\d+", "", content).strip()
 
         platform_msg = PlatformMessage(
             message_id=msg.get("message_id", ""),
@@ -703,6 +712,8 @@ class FeishuAdapter(BasePlatformAdapter):
             timestamp=time.time(),
             raw=event,
         )
+        if mention_details:
+            platform_msg.metadata["mention_details"] = mention_details
 
         # 语音消息: 下载音频数据
         if message_type == MessageType.VOICE and media_url:

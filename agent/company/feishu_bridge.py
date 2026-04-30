@@ -63,7 +63,11 @@ class FeishuBridge:
             try:
                 await adapter.start()
                 self._adapters[role_name] = adapter
-                logger.info("飞书 Bot 启动: %s (app=%s)", role_name, cfg.app_id)
+                bot = getattr(adapter, "_bot_user", None)
+                bot_id = getattr(bot, "user_id", "") if bot else ""
+                bot_name = getattr(bot, "display_name", "") if bot else ""
+                logger.info("飞书 Bot 启动: %s (app=%s, open_id=%s, name=%s)",
+                            role_name, cfg.app_id, bot_id, bot_name)
             except Exception as e:
                 logger.error("飞书 Bot 启动失败: %s — %s", role_name, e)
 
@@ -154,8 +158,12 @@ class FeishuBridge:
             sent_from=username or "Human",
         )
 
+        metadata = getattr(platform_msg, "metadata", {}) or {}
+        mention_details = metadata.get("mention_details", [])
         mention_ids = getattr(platform_msg, "mentions", [])
         mention_ids = [mid for mid in mention_ids if mid]
+
+        # Strategy 1: match mention open_id against bot open_id
         if mention_ids:
             for role_name, adapter in self._adapters.items():
                 bot = getattr(adapter, "_bot_user", None)
@@ -164,26 +172,50 @@ class FeishuBridge:
                 bot_open_id = getattr(bot, "user_id", "")
                 if bot_open_id and bot_open_id in mention_ids:
                     msg.send_to = role_name
-                    logger.info("飞书@匹配: open_id=%s → %s", bot_open_id, role_name)
+                    logger.info("飞书@匹配(open_id): %s → %s", bot_open_id, role_name)
                     break
 
-        if not msg.send_to and "@" in content:
-            role_nick_map = {
-                "PM": ["诸葛", "小诸葛", "pm", "PM", "产品"],
-                "Developer": ["小码", "码农", "开发", "developer"],
-                "Reviewer": ["审查", "reviewer", "审查员"],
-                "QA": ["测试", "qa", "QA", "找茬"],
-                "DevOps": ["运维", "devops", "DevOps", "部署"],
-            }
-            for role_name, nicks in role_nick_map.items():
-                if role_name in self._adapters:
-                    for nick in nicks:
-                        if f"@{nick}" in content or nick in content:
-                            msg.send_to = role_name
-                            logger.info("飞书@昵称匹配: %s → %s", nick, role_name)
-                            break
-                    if msg.send_to:
+        # Strategy 2: match mention display name against bot display name
+        if not msg.send_to and mention_details:
+            for detail in mention_details:
+                mention_name = detail.get("name", "")
+                if not mention_name:
+                    continue
+                for role_name, adapter in self._adapters.items():
+                    bot = getattr(adapter, "_bot_user", None)
+                    if not bot:
+                        continue
+                    bot_name = getattr(bot, "display_name", "") or getattr(bot, "username", "")
+                    if bot_name and bot_name == mention_name:
+                        msg.send_to = role_name
+                        logger.info("飞书@匹配(name): %s → %s", mention_name, role_name)
                         break
+                if msg.send_to:
+                    break
+
+        # Strategy 3: match mention name against role nickname map
+        if not msg.send_to and mention_details:
+            role_nick_map = {
+                "PM": ["诸葛", "小诸葛"],
+                "Developer": ["小码", "码农"],
+                "Reviewer": ["小审", "审查"],
+                "QA": ["小茬", "测试"],
+                "DevOps": ["小布", "运维"],
+            }
+            for detail in mention_details:
+                mention_name = detail.get("name", "")
+                if not mention_name:
+                    continue
+                for role_name, nicks in role_nick_map.items():
+                    if role_name in self._adapters and mention_name in nicks:
+                        msg.send_to = role_name
+                        logger.info("飞书@匹配(nick): %s → %s", mention_name, role_name)
+                        break
+                if msg.send_to:
+                    break
+
+        if mention_details:
+            logger.debug("飞书 mention_details: %s, mention_ids: %s", mention_details, mention_ids)
 
         logger.info("飞书→Company: [%s] %s (send_to=%s)",
                      msg.sent_from, content[:50], msg.send_to or "*")
