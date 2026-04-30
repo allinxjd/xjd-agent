@@ -237,6 +237,7 @@ class Company:
             await self._env.publish(checkin)
 
         self._standby_stop = asyncio.Event()
+        self._standby_history: list[tuple[str, str]] = []
         try:
             while not self._standby_stop.is_set():
                 await self._process_standby_messages()
@@ -249,7 +250,8 @@ class Company:
         return "AI Company 待命模式已结束"
 
     async def _process_standby_messages(self) -> None:
-        """处理待命模式下的消息：用 CHAT_REPLY 回复，检测 [TASK_START] 触发流水线."""
+        """处理待命模式下的消息：带上下文回复，检测 [TASK_START] 触发流水线."""
+        from datetime import datetime
         from agent.company.action import CHAT_REPLY
 
         for role in self._env.roles.values():
@@ -258,13 +260,29 @@ class Company:
             messages = await role._observe()
             if not messages:
                 continue
-            context = "\n\n".join(m.content for m in messages)
+
+            for m in messages:
+                self._standby_history.append((m.sent_from, m.content))
+
+            if len(self._standby_history) > 40:
+                self._standby_history = self._standby_history[-30:]
+
+            now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
+            history_lines = []
+            for sender, content in self._standby_history:
+                history_lines.append(f"[{sender}]: {content}")
+            history_text = "\n".join(history_lines)
+
+            context = f"当前时间: {now}\n\n## 对话记录\n{history_text}"
             reply_msg = await role._act(CHAT_REPLY, context)
+
+            self._standby_history.append((role.name, reply_msg.content))
 
             if "[TASK_START]" in reply_msg.content:
                 reply_msg.content = reply_msg.content.replace("[TASK_START]", "").strip()
                 await self._env.publish(reply_msg)
-                await self.run(context, max_rounds=20)
+                task_context = "\n\n".join(m.content for m in messages)
+                await self.run(task_context, max_rounds=20)
             else:
                 await self._env.publish(reply_msg)
 
