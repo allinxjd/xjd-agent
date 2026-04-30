@@ -615,6 +615,7 @@ function renderSkillCards() {
           <div id="pddShopList"><div class="shop-empty">加载中...</div></div>
           <button class="shop-bind-btn" id="pddBindBtn" onclick="event.stopPropagation();bindNewShop()">+ 绑定新店铺</button>
         </div>` : '';
+      const secretsArea = s.has_secrets ? `<div class="skill-secrets-area" id="secretsArea_${s.skill_id}"><div style="color:var(--text-tertiary);font-size:12px">Loading...</div></div>` : '';
       detail = `<div class="skill-detail">
         <div class="skill-detail-section"><label>Trigger</label>${_esc(s.trigger||'\u2014')}</div>
         ${tags ? `<div class="skill-detail-section"><label>Tags</label><div class="skill-detail-tags">${tags}</div></div>` : ''}
@@ -622,6 +623,7 @@ function renderSkillCards() {
         <div class="skill-detail-section"><label>Steps (${(s.steps||[]).length})</label><ul class="skill-detail-steps">${steps||'<li>No steps</li>'}</ul></div>
         <div class="skill-detail-section"><label>Stats</label>v${s.version||1} \u00b7 ${s.use_count||0} uses \u00b7 ${rate} success</div>
         ${shopMgmt}
+        ${secretsArea}
         <div class="skill-test-area">
           <input type="text" id="testInput_${s.skill_id}" placeholder="Test trigger phrase...">
           <button class="btn-secondary" onclick="testSkill('${s.skill_id}')">Test</button>
@@ -651,13 +653,16 @@ function renderSkillCards() {
 }
 
 function toggleSkillDetail(id, ev) {
-  if (ev.target.closest('button,input,label')) return;
+  if (ev.target.closest('button,input,label,.sg-arrow')) return;
   _expandedSkillId = _expandedSkillId === id ? null : id;
   renderSkillCards();
   if (_expandedSkillId) {
     const skill = _skillsCache.find(s => s.skill_id === id);
     if (skill && skill.category === 'ecommerce') {
       setTimeout(loadPddShops, 50);
+    }
+    if (skill && skill.has_secrets) {
+      setTimeout(() => _loadSkillSecretsInCard(skill), 50);
     }
   }
 }
@@ -1433,4 +1438,96 @@ function startPolling(orderNo, pkg) {
       }
     } catch(e) {}
   }, 2000);
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Skill Secrets (in-card configuration)
+// ══════════════════════════════════════════════════════════════
+
+async function _loadSkillSecretsInCard(skill) {
+  const container = document.getElementById('secretsArea_' + skill.skill_id);
+  if (!container) return;
+  try {
+    const res = await fetch('/api/admin/skill-secrets/' + encodeURIComponent(skill.skill_id));
+    if (!res.ok) throw new Error(res.statusText);
+    const data = await res.json();
+    _renderSecretsInCard(container, data, skill);
+  } catch(e) {
+    container.innerHTML = `<div style="color:var(--red);font-size:12px">Failed: ${_esc(e.message)}</div>`;
+  }
+}
+
+function _renderSecretsInCard(container, data, skill) {
+  const inputStyle = 'flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;';
+  const hasGroups = data.secrets.some(s => s.group);
+  let html = '<div class="skill-detail-section"><label>Credentials</label></div>';
+
+  if (hasGroups) {
+    const groups = [];
+    const groupMap = {};
+    for (const sec of data.secrets) {
+      const g = sec.group || '';
+      if (!groupMap[g]) { groupMap[g] = []; groups.push(g); }
+      groupMap[g].push(sec);
+    }
+    for (const gName of groups) {
+      const gSecrets = groupMap[gName];
+      if (!gName) {
+        for (const sec of gSecrets) html += _secretInput(sec, inputStyle);
+        continue;
+      }
+      const gConfigured = gSecrets.every(s => s.has_value);
+      const badge = gConfigured
+        ? '<span style="font-size:11px;color:var(--green);margin-left:6px">&#10003;</span>'
+        : '<span style="font-size:11px;color:var(--text-tertiary);margin-left:6px">&#9675;</span>';
+      const gId = 'sg_' + Math.random().toString(36).slice(2, 8);
+      html += `<div style="margin:8px 0 4px;cursor:pointer;display:flex;align-items:center;user-select:none" onclick="event.stopPropagation();var b=document.getElementById('${gId}');b.style.display=b.style.display==='none'?'block':'none';this.querySelector('.sg-arrow').textContent=b.style.display==='none'?'\\u25B8':'\\u25BE'">` +
+        `<span class="sg-arrow" style="font-size:11px;color:var(--text-tertiary);width:14px">&#9656;</span>` +
+        `<span style="font-size:12px;font-weight:600;color:var(--text-secondary)">${_esc(gName)}</span>${badge}</div>`;
+      html += `<div id="${gId}" style="display:none;padding-left:14px;border-left:2px solid var(--border);margin-left:6px">`;
+      for (const sec of gSecrets) html += _secretInput(sec, inputStyle);
+      html += '</div>';
+    }
+  } else {
+    for (const sec of data.secrets) html += _secretInput(sec, inputStyle);
+  }
+
+  html += `<div style="margin-top:8px;display:flex;align-items:center;gap:8px">` +
+    `<button class="btn-primary" style="font-size:12px;padding:4px 14px" onclick="event.stopPropagation();_saveSkillSecrets('${_esc(skill.skill_id)}')">Save</button>` +
+    `<span id="secretStatus_${_esc(skill.skill_id)}" style="font-size:12px;color:var(--text-tertiary)"></span></div>`;
+  container.innerHTML = html;
+}
+
+function _secretInput(sec, style) {
+  const sensitive = /password|secret|token/i.test(sec.key);
+  const type = sensitive ? 'password' : 'text';
+  const ph = sensitive ? (sec.has_value ? '(configured)' : '(not set)') : (sec.default || '');
+  const val = sec.value || '';
+  return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0">` +
+    `<span style="font-size:12px;color:var(--text-secondary);min-width:90px" title="${_esc(sec.key)}">${_esc(sec.description || sec.key)}</span>` +
+    `<input type="${type}" data-secret-key="${_esc(sec.key)}" value="${_esc(val)}" placeholder="${_esc(ph)}" style="${style}" onclick="event.stopPropagation()"></div>`;
+}
+
+async function _saveSkillSecrets(skillId) {
+  const area = document.getElementById('secretsArea_' + skillId);
+  if (!area) return;
+  const inputs = area.querySelectorAll('input[data-secret-key]');
+  const body = {};
+  inputs.forEach(inp => { if (inp.value) body[inp.dataset.secretKey] = inp.value; });
+  const statusEl = document.getElementById('secretStatus_' + skillId);
+  try {
+    const res = await fetch('/api/admin/skill-secrets/' + encodeURIComponent(skillId), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-XJD-Request': '1'},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      if (statusEl) { statusEl.textContent = 'Saved'; statusEl.style.color = 'var(--green)'; }
+    } else {
+      if (statusEl) { statusEl.textContent = data.error || 'Failed'; statusEl.style.color = 'var(--red)'; }
+    }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = 'Error: ' + e.message; statusEl.style.color = 'var(--red)'; }
+  }
 }

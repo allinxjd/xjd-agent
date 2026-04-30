@@ -582,7 +582,12 @@ class WebServer:
         from aiohttp import web
         index_path = self._static_dir / "index.html"
         if index_path.exists():
-            return web.FileResponse(index_path, headers={"Cache-Control": "no-cache"})
+            content = index_path.read_bytes()
+            return web.Response(
+                body=content,
+                content_type="text/html",
+                headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"},
+            )
         return web.Response(text="<h1>index.html not found</h1>", content_type="text/html", status=404)
 
     async def _health(self, request):
@@ -2906,6 +2911,9 @@ class WebServer:
                     continue
                 d = s.to_metadata()
                 d["body"] = s.to_full_content()
+                if s.secrets:
+                    d["has_secrets"] = True
+                    d["total_secrets"] = len(s.secrets)
                 result.append(d)
             return web.json_response({"skills": result, "count": len(result)})
         except Exception as e:

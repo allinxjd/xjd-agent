@@ -329,6 +329,7 @@
 .skill-detail-actions button:hover { border-color: var(--accent); }
 .skill-detail-actions button.danger { color: var(--red); }
 .skill-detail-actions button.danger:hover { border-color: var(--red); }
+.skill-secrets-area { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 /* Test result */
 .skill-test-area { margin-top: 10px; display: flex; gap: 6px; }
 .skill-test-area input { flex: 1; padding: 5px 8px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-primary); font-size: 12px; }

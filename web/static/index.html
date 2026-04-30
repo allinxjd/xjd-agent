@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>XJDAgent</title>
 <link rel="icon" href="/static/favicon.png" type="image/png">
-<link rel="stylesheet" href="/static/workspace.css?v=11">
+<link rel="stylesheet" href="/static/workspace.css?v=12">
 <style>
 /* ── Reset & Variables ── */
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1142,7 +1142,6 @@ input:checked + .toggle-slider:before { transform: translateX(18px); }
           <label class="toggle-switch"><input type="checkbox" id="ecommerceEnabled" onchange="toggleEcommerce()"><span class="toggle-slider"></span></label>
         </div>
       </div>
-      <div id="skillSecretsContainer"></div>
     </div>
   </div>
 </div>
@@ -2568,7 +2567,6 @@ async function loadEcommerceConfig() {
     const data = await fetch('/api/admin/gateway/ecommerce', {headers: authHeaders()}).then(r => r.json());
     $('ecommerceEnabled').checked = !!data.ecommerce_mode;
   } catch {}
-  loadSkillSecrets();
 }
 
 async function toggleEcommerce() {
@@ -2579,106 +2577,6 @@ async function toggleEcommerce() {
     if (data.status === 'ok') addSystemMsg(t('ecommerceToggled'));
     else addSystemMsg(data.error || 'Toggle failed');
   } catch(e) { addSystemMsg('Error: ' + e.message); }
-}
-
-async function loadSkillSecrets() {
-  const container = $('skillSecretsContainer');
-  if (!container) return;
-  try {
-    const data = await fetch('/api/admin/skill-secrets', {headers: authHeaders()}).then(r => r.json());
-    if (!data.skills || !data.skills.length) {
-      container.innerHTML = '<div class="settings-section"><div style="color:var(--text-tertiary);font-size:13px;">' +
-        (curLang === 'zh' ? '暂无需要配置凭证的技能' : 'No skills require credentials') + '</div></div>';
-      return;
-    }
-    container.innerHTML = '';
-    for (const skill of data.skills) {
-      await renderSkillSecretSection(container, skill);
-    }
-  } catch(e) { container.innerHTML = '<div style="color:var(--red);font-size:13px;">Load failed: ' + e.message + '</div>'; }
-}
-
-async function renderSkillSecretSection(container, skill) {
-  try {
-    const data = await fetch('/api/admin/skill-secrets/' + encodeURIComponent(skill.skill_id), {headers: authHeaders()}).then(r => r.json());
-    const section = document.createElement('div');
-    section.className = 'settings-section';
-    const statusColor = skill.configured === skill.total_secrets ? 'var(--green)' : 'var(--orange, #f59e0b)';
-    const statusText = skill.configured + '/' + skill.total_secrets;
-    let html = '<div class="settings-section-title">' + escapeHtml(data.skill_name) +
-      ' <span style="font-size:11px;color:' + statusColor + '">(' + statusText + ')</span></div>';
-    const inputStyle = 'flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:13px;';
-    const hasGroups = data.secrets.some(s => s.group);
-    if (hasGroups) {
-      const groups = [];
-      const groupMap = {};
-      const ungrouped = [];
-      for (const sec of data.secrets) {
-        if (sec.group) {
-          if (!groupMap[sec.group]) { groupMap[sec.group] = []; groups.push(sec.group); }
-          groupMap[sec.group].push(sec);
-        } else { ungrouped.push(sec); }
-      }
-      for (const sec of ungrouped) {
-        html += _renderSecretInput(sec, inputStyle);
-      }
-      for (const gName of groups) {
-        const gSecrets = groupMap[gName];
-        const gConfigured = gSecrets.every(s => s.has_value);
-        const badge = gConfigured
-          ? '<span style="font-size:11px;color:var(--green);margin-left:6px">&#10003;</span>'
-          : '<span style="font-size:11px;color:var(--text-tertiary);margin-left:6px">&#9675;</span>';
-        const gId = 'sg_' + Math.random().toString(36).slice(2, 8);
-        html += '<div style="margin:8px 0 4px;cursor:pointer;display:flex;align-items:center;user-select:none" onclick="var b=document.getElementById(\'' + gId + '\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.sg-arrow\').textContent=b.style.display===\'none\'?\'\\u25B8\':\'\\u25BE\'">' +
-          '<span class="sg-arrow" style="font-size:11px;color:var(--text-tertiary);width:14px">&#9656;</span>' +
-          '<span style="font-size:12px;font-weight:600;color:var(--text-secondary)">' + escapeHtml(gName) + '</span>' + badge + '</div>';
-        html += '<div id="' + gId + '" style="display:none;padding-left:14px;border-left:2px solid var(--border);margin-left:6px">';
-        for (const sec of gSecrets) {
-          html += _renderSecretInput(sec, inputStyle);
-        }
-        html += '</div>';
-      }
-    } else {
-      for (const sec of data.secrets) {
-        html += _renderSecretInput(sec, inputStyle);
-      }
-    }
-    html += '<button class="settings-save-btn" data-skill-id="' + escapeHtml(skill.skill_id) + '" onclick="saveSkillSecrets(this.dataset.skillId, this)">' +
-      (curLang === 'zh' ? '保存' : 'Save') + '</button>' +
-      '<div class="skill-secret-status" style="font-size:12px;color:var(--text-tertiary);margin-top:6px;"></div>';
-    section.innerHTML = html;
-    container.appendChild(section);
-  } catch {}
-}
-function _renderSecretInput(sec, inputStyle) {
-  const isSensitive = /password|secret|token/i.test(sec.key);
-  const inputType = isSensitive ? 'password' : 'text';
-  const placeholder = isSensitive ? (sec.has_value ? '(configured)' : '(not set)') : (sec.default || '');
-  const val = sec.value || '';
-  return '<div class="setting-row"><span class="setting-label" title="' + escapeHtml(sec.key) + '">' + escapeHtml(sec.description || sec.key) + '</span>' +
-    '<input type="' + inputType + '" data-secret-key="' + escapeHtml(sec.key) + '" value="' + escapeHtml(val) + '" placeholder="' + escapeHtml(placeholder) + '" style="' + inputStyle + '"></div>';
-}
-
-async function saveSkillSecrets(skillId, btn) {
-  const section = btn.closest('.settings-section');
-  const inputs = section.querySelectorAll('input[data-secret-key]');
-  const body = {};
-  inputs.forEach(inp => {
-    if (inp.value) body[inp.dataset.secretKey] = inp.value;
-  });
-  const statusEl = section.querySelector('.skill-secret-status');
-  try {
-    const res = await postJSON('/api/admin/skill-secrets/' + encodeURIComponent(skillId), body);
-    const data = await res.json();
-    if (data.status === 'ok') {
-      if (statusEl) { statusEl.textContent = curLang === 'zh' ? '已保存' : 'Saved'; statusEl.style.color = 'var(--green)'; }
-      addSystemMsg(curLang === 'zh' ? '技能凭证已保存' : 'Skill credentials saved');
-    } else {
-      if (statusEl) { statusEl.textContent = data.error || 'Failed'; statusEl.style.color = 'var(--red)'; }
-    }
-  } catch(e) {
-    if (statusEl) { statusEl.textContent = 'Error: ' + e.message; statusEl.style.color = 'var(--red)'; }
-  }
 }
 
 // ── Input handlers ──
@@ -2817,7 +2715,7 @@ async function checkAuthStatus() {
   } catch(e) { currentModelNameEl.textContent = t('offline'); }
 })();
 </script>
-<script src="/static/workspace.js?v=12"></script>
+<script src="/static/workspace.js?v=13"></script>
 
 <!-- Recharge Modal -->
 <div id="rechargeModal" class="recharge-overlay" style="display:none" onclick="if(event.target===this)closeRechargeModal()">
