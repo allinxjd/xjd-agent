@@ -254,7 +254,8 @@ def _check_github_tags() -> Optional[str]:
 async def auto_update(method: str = "auto") -> bool:
     """执行自动更新 — 三级 fallback 确保至少一条路走通.
 
-    优先级: pip upgrade (PyPI) → git pull → tarball 下载.
+    优先级: git pull (开发者/主要用户) → tarball 下载 → pip upgrade (PyPI).
+    xjd-agent 目前不在 PyPI 上，所以 git 是主要更新路径。
     """
     if method != "auto":
         if method == "pip":
@@ -265,24 +266,23 @@ async def auto_update(method: str = "auto") -> bool:
             return _update_tarball_standalone()
         return False
 
-    # auto: 按优先级尝试
-    if _update_pip():
-        return True
-    logger.debug("pip upgrade failed or not on PyPI, trying git...")
-
+    # auto: git 优先（xjd-agent 不在 PyPI 上）
     repo_dir = _git_repo_dir()
     if repo_dir:
         if _update_git():
             return True
         logger.debug("git update failed, trying tarball...")
 
-    return _update_tarball_standalone()
+    if _update_tarball_standalone():
+        return True
+
+    logger.debug("tarball failed, trying pip as last resort...")
+    return _update_pip()
 
 def _update_pip() -> bool:
-    """通过 pip 更新（PyPI 用户）."""
+    """通过 pip 更新（仅 PyPI 发布后有效）."""
     import sys as _sys
     in_venv = _sys.prefix != _sys.base_prefix
-    old_ver = get_current_version()
     try:
         pip_args = [_sys.executable, "-m", "pip", "install", "--upgrade", PACKAGE_NAME]
         if not in_venv:
@@ -290,31 +290,27 @@ def _update_pip() -> bool:
         result = subprocess.run(
             pip_args, capture_output=True, text=True, timeout=120,
         )
-        if result.returncode == 0:
-            # 验证版本确实变了，防止 "already satisfied" 误判
-            new_ver = _get_installed_version()
-            if new_ver and new_ver != old_ver:
-                logger.info("pip upgrade succeeded: %s → %s", old_ver, new_ver)
-                return True
-            logger.debug("pip returned 0 but version unchanged (%s), not a real upgrade", old_ver)
+        if result.returncode != 0:
+            logger.warning("pip upgrade failed: %s", result.stderr[:300])
+            if not in_venv:
+                pip_user = [_sys.executable, "-m", "pip", "install", "--upgrade",
+                            "--user", PACKAGE_NAME, "--break-system-packages"]
+                result = subprocess.run(
+                    pip_user, capture_output=True, text=True, timeout=120,
+                )
+                if result.returncode == 0:
+                    if "already satisfied" not in result.stdout.lower():
+                        logger.info("pip upgrade --user succeeded")
+                        _check_user_bin_in_path()
+                        return True
+                logger.warning("pip upgrade --user also failed: %s", result.stderr[:300])
             return False
-        logger.warning("pip upgrade failed: %s", result.stderr[:300])
-        if not in_venv:
-            pip_user = [_sys.executable, "-m", "pip", "install", "--upgrade",
-                        "--user", PACKAGE_NAME, "--break-system-packages"]
-            result = subprocess.run(
-                pip_user, capture_output=True, text=True, timeout=120,
-            )
-            if result.returncode == 0:
-                new_ver = _get_installed_version()
-                if new_ver and new_ver != old_ver:
-                    logger.info("pip upgrade --user succeeded: %s → %s", old_ver, new_ver)
-                    _check_user_bin_in_path()
-                    return True
-                return False
-                return True
-            logger.warning("pip upgrade --user also failed: %s", result.stderr[:300])
-        return False
+        # 检查是否真的升级了（排除 "already satisfied"）
+        if "already satisfied" in result.stdout.lower():
+            logger.debug("pip: already satisfied, no real upgrade")
+            return False
+        logger.info("pip upgrade succeeded")
+        return True
     except Exception as e:
         logger.error("pip upgrade error: %s", e)
         return False
