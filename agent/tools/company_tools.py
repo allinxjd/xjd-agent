@@ -191,4 +191,5 @@ def register_company_tools(registry: Any) -> None:
         },
         handler=company_run,
         category="company",
+        timeout=600.0,
     )
