@@ -74,6 +74,7 @@ class FeishuAdapter(BasePlatformAdapter):
         self._ws_task = None  # 长连接任务
         self._ws_watchdog_task = None  # 长连接 watchdog
         self._last_sdk_activity: float = 0  # SDK 最后活动时间
+        self._accept_group_no_mention: bool = config.get("accept_group_no_mention", False)
         # 事件去重缓存: event_id → timestamp
         self._processed_events: dict[str, float] = {}
         self._dedup_ttl: float = 300.0  # 5 分钟
@@ -713,8 +714,8 @@ class FeishuAdapter(BasePlatformAdapter):
             except Exception as e:
                 logger.error("飞书语音下载失败: %s", e)
 
-        # 群聊中需要 @机器人
-        if chat_type == ChatType.GROUP:
+        # 群聊中需要 @机器人 (accept_group_no_mention 模式下跳过此检查)
+        if chat_type == ChatType.GROUP and not self._accept_group_no_mention:
             if self._bot_user and self._bot_user.user_id not in mentions:
                 return
 

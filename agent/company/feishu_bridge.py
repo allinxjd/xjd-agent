@@ -42,6 +42,7 @@ class FeishuBridge:
         self._adapters: dict[str, Any] = {}
         self._bot_configs = {c.role_name: c for c in bot_configs}
         self._started = False
+        self._seen_msg_ids: dict[str, bool] = {}
 
     def set_environment(self, env: CompanyEnvironment) -> None:
         self._environment = env
@@ -57,6 +58,7 @@ class FeishuBridge:
                 "verification_token": cfg.verification_token,
                 "encrypt_key": cfg.encrypt_key,
                 "mode": "long_poll",
+                "accept_group_no_mention": True,
             })
             try:
                 await adapter.start()
@@ -117,28 +119,52 @@ class FeishuBridge:
             logger.warning("飞书发送失败 [%s]: %s", role_name, e)
 
     async def _on_feishu_message(self, platform_msg: Any) -> None:
-        """飞书群消息 → CompanyMessage → publish 到 environment."""
+        """飞书群消息 → CompanyMessage → publish 到 environment.
+
+        所有 adapter 都会收到群消息，用 message_id 去重，只处理一次。
+        """
         if not self._environment:
             return
+
+        msg_id = getattr(platform_msg, "message_id", "")
+        if not msg_id:
+            return
+
+        if msg_id in self._seen_msg_ids:
+            return
+        self._seen_msg_ids[msg_id] = True
+        if len(self._seen_msg_ids) > 200:
+            keys = list(self._seen_msg_ids.keys())
+            for k in keys[:100]:
+                del self._seen_msg_ids[k]
 
         from agent.company.message import CompanyMessage
 
         content = getattr(platform_msg, "content", "")
         sender = getattr(platform_msg, "sender", None)
-        username = getattr(sender, "username", "Human") if sender else "Human"
+        display = getattr(sender, "display_name", "") if sender else ""
+        username = display or getattr(sender, "username", "Human") if sender else "Human"
+
+        sender_id = getattr(sender, "user_id", "") if sender else ""
+        for adapter in self._adapters.values():
+            bot = getattr(adapter, "_bot_user", None)
+            if bot and getattr(bot, "user_id", "") == sender_id:
+                return
 
         msg = CompanyMessage(
             content=content,
             cause_by="HumanDirective",
-            sent_from=username,
+            sent_from=username or "Human",
         )
 
-        mentions = getattr(platform_msg, "mentions", [])
-        if mentions:
-            for mention in mentions:
-                mention_name = getattr(mention, "name", "")
-                if mention_name in self._adapters:
-                    msg.send_to = mention_name
+        mention_ids = getattr(platform_msg, "mentions", [])
+        if mention_ids:
+            for role_name, adapter in self._adapters.items():
+                bot = getattr(adapter, "_bot_user", None)
+                if bot and getattr(bot, "user_id", "") in mention_ids:
+                    msg.send_to = role_name
                     break
 
+        logger.info("飞书→Company: [%s] %s (send_to=%s)",
+                     msg.sent_from, content[:50], msg.send_to or "*")
         await self._environment.publish(msg)
