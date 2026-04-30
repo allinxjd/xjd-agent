@@ -507,11 +507,20 @@ class SkillManager:
                         logger.warning("Failed to copy builtin skill %s to %s: %s",
                                        skill_src.name, dest, e)
                         continue
+                else:
+                    existing = self._skills.get(skill.skill_id)
+                    if existing and existing.source == "builtin" and existing.version != skill.version:
+                        try:
+                            (dest / "SKILL.md").write_text(text, encoding="utf-8")
+                            logger.info("Updated builtin skill %s: %s -> %s",
+                                        skill.skill_id, existing.version, skill.version)
+                        except OSError:
+                            pass
+                    if existing and skill.secrets:
+                        existing.secrets = skill.secrets
                 if skill.skill_id not in self._skills:
                     self._skills[skill.skill_id] = skill
                     builtin_count += 1
-                elif skill.secrets and not self._skills[skill.skill_id].secrets:
-                    self._skills[skill.skill_id].secrets = skill.secrets
             if builtin_count:
                 logger.info("Loaded %d builtin skills from %s", builtin_count, builtin_dir)
                 count += builtin_count

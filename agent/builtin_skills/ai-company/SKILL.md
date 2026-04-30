@@ -1,7 +1,7 @@
 ---
 name: AI Company
 description: 启动一人公司模式 — 5个AI角色（PM、Developer、Reviewer、QA、DevOps）协作完成开发任务
-version: 1.0.0
+version: 1.1.0
 category: automation
 tags: [pipeline, multi-agent, company, team, collaboration]
 trigger: 一人公司 AI公司 团队协作 多角色 启动公司 company run 用团队 团队帮我 启动团队
