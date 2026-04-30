@@ -106,7 +106,7 @@ class FeishuBridge:
         text = f"{header}{content}"
 
         try:
-            from gateway.message import OutgoingMessage
+            from gateway.platforms.base import OutgoingMessage
             out = OutgoingMessage(
                 chat_id=self._group_chat_id,
                 content=text,

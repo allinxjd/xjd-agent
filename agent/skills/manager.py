@@ -509,7 +509,7 @@ class SkillManager:
                         continue
                 else:
                     existing = self._skills.get(skill.skill_id)
-                    if existing and existing.source == "builtin" and existing.version != skill.version:
+                    if existing and existing.version != skill.version:
                         try:
                             (dest / "SKILL.md").write_text(text, encoding="utf-8")
                             logger.info("Updated builtin skill %s: %s -> %s",
