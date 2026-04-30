@@ -582,7 +582,7 @@ class WebServer:
         from aiohttp import web
         index_path = self._static_dir / "index.html"
         if index_path.exists():
-            return web.FileResponse(index_path)
+            return web.FileResponse(index_path, headers={"Cache-Control": "no-cache"})
         return web.Response(text="<h1>index.html not found</h1>", content_type="text/html", status=404)
 
     async def _health(self, request):
