@@ -220,11 +220,11 @@ class Company:
         await self.start_feishu()
 
         checkin_lines = {
-            "PM": "老板好，PM 诸葛到岗了。有什么需求随时说，我来安排。",
-            "Developer": "老板，码农就位，随时开搞。",
-            "Reviewer": "老板好，审查员在线，代码质量我盯着。",
-            "QA": "老板～测试就绪，准备找茬！",
-            "DevOps": "老板，运维到位，部署环境一切正常。",
+            "PM": "老板好 🫡 PM 诸葛到岗了，有什么需求随时说，我来安排～",
+            "Developer": "老板，码农就位 💪 随时开搞",
+            "Reviewer": "老板好，审查员在线 👀 代码质量我盯着",
+            "QA": "老板～测试就绪，准备找茬 🔍",
+            "DevOps": "老板，运维到位 ✅ 部署环境一切正常",
         }
 
         for role in self._env.roles.values():
