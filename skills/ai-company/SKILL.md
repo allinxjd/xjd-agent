@@ -1,11 +1,11 @@
 ---
 name: AI Company
 description: 启动一人公司模式 — 5个AI角色（PM、Developer、Reviewer、QA、DevOps）协作完成开发任务
-version: 1.2.0
+version: 1.3.0
 category: automation
 tags: [pipeline, multi-agent, company, team, collaboration]
-trigger: 一人公司 AI公司 团队协作 多角色 启动公司 company run 用团队 团队帮我 启动团队 待命模式 待命 standby
-tools: [company_run, company_standby]
+trigger: 一人公司 AI公司 团队协作 多角色 启动公司 company run 用团队 团队帮我 启动团队 待命模式 待命 standby 停止待命 团队下线 stop
+tools: [company_run, company_standby, company_stop_standby]
 examples:
   - 启动一人公司模式，帮我写一个 Python 计算器
   - 用团队帮我实现用户登录功能
@@ -80,6 +80,7 @@ author: xjd-agent
 ## 使用规则
 
 - 用户要求"待命"、"上线"、"准备就绪" → 用 `company_standby`
+- 用户要求"停止待命"、"团队下线"、"stop" → 用 `company_stop_standby`
 - 用户给出具体开发任务 → 用 `company_run`
 - 如果用户要求同步到飞书，设置 `feishu: true`
 - 需求描述要具体明确，避免模糊表述

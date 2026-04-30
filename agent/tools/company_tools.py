@@ -161,6 +161,9 @@ async def company_run(
     return result
 
 
+_standby_company: Any = None
+
+
 async def company_standby() -> str:
     """启动 AI Company 待命模式.
 
@@ -168,10 +171,16 @@ async def company_standby() -> str:
     不 @人时 PM 回复，@某角色时该角色回复。
     用户下达开发任务时自动启动流水线。
     """
+    import asyncio
     from agent.tools.registry import ToolRegistry
     from agent.tools.builtin import register_builtin_tools
     from agent.company import Company
     from agent.company.roles import create_default_team
+
+    global _standby_company
+
+    if _standby_company is not None:
+        return "AI Company 待命模式已在运行中 🫡"
 
     router, config = _build_router()
     if not router:
@@ -193,7 +202,42 @@ async def company_standby() -> str:
     team = create_default_team()
     company.hire_team(team)
 
-    return await company.run_standby()
+    _standby_company = company
+
+    async def _run_standby():
+        global _standby_company
+        try:
+            await company.run_standby()
+        except Exception as e:
+            logger.error("待命模式异常退出: %s", e)
+        finally:
+            _standby_company = None
+
+    asyncio.create_task(_run_standby())
+
+    await asyncio.sleep(3)
+
+    bot_count = 0
+    if company._feishu_bridge:
+        bot_count = len(company._feishu_bridge._adapters)
+
+    return (
+        f"AI Company 待命模式已启动 🫡\n\n"
+        f"飞书 Bot 已连接: {bot_count} 个\n"
+        f"各角色已在飞书群报到，等待老板指令。\n\n"
+        f"不 @人时 PM 回复，@某角色时该角色回复。\n"
+        f"下达开发任务时自动启动流水线。"
+    )
+
+
+async def company_stop_standby() -> str:
+    """停止 AI Company 待命模式."""
+    global _standby_company
+    if _standby_company is None:
+        return "当前没有运行中的待命模式"
+    _standby_company.stop_standby()
+    _standby_company = None
+    return "AI Company 待命模式已停止 👋"
 
 
 def register_company_tools(registry: Any) -> None:
@@ -242,5 +286,18 @@ def register_company_tools(registry: Any) -> None:
         },
         handler=company_standby,
         category="company",
-        timeout=3600.0,
+        timeout=30.0,
+    )
+
+    registry.register(
+        name="company_stop_standby",
+        description="停止 AI Company 待命模式，所有角色下线。",
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+        handler=company_stop_standby,
+        category="company",
+        timeout=10.0,
     )
