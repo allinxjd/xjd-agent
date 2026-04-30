@@ -41,7 +41,7 @@ class SkillCommunity:
         ]
 
         if skill.tags:
-            lines.append(f"**Tags:** {', '.join(skill.tags)}")
+            lines.append(f"**Tags:** {', '.join(str(t) for t in skill.tags)}")
             lines.append("")
 
         # Trigger

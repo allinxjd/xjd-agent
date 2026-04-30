@@ -237,7 +237,7 @@ class Skill:
             body=body,
             tools=tools if isinstance(tools, list) else [],
             secrets=secrets,
-            tags=fm.get("tags", []),
+            tags=[str(t) for t in fm.get("tags", [])],
             examples=fm.get("examples", []),
             prerequisites=fm.get("prerequisites", {}),
             metadata=meta,
