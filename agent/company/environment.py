@@ -56,7 +56,6 @@ class CompanyEnvironment:
                 except Exception as e:
                     logger.warning("飞书镜像失败: %s", e)
             return
-        logger.info("消息: %s", msg.summary())
 
         delivered = False
         for role in self._roles.values():

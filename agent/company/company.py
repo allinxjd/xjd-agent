@@ -135,6 +135,8 @@ class Company:
         self._store.save_run(run_id, requirement, task.task_id)
 
         round_num = 0
+        rework_count = 0
+        max_rework = 3
         for round_num in range(1, max_rounds + 1):
             if self._pipeline_user_msgs:
                 supplement = "\n".join(m.content for m in self._pipeline_user_msgs)
@@ -167,8 +169,31 @@ class Company:
                 if result_msg:
                     result_msg.task_id = task.task_id
                     task.result = result_msg.content
-                    await self._env.publish(result_msg)
                     self._store.save_message(result_msg)
+
+                    rework_target = self._check_rework(role.name, result_msg.content)
+                    if rework_target and rework_count < max_rework:
+                        rework_count += 1
+                        logger.info("返工 #%d: %s 要求 %s 修改", rework_count, role.name, rework_target)
+                        self._clear_downstream_inboxes(role.name)
+                        rework_msg = CompanyMessage(
+                            content=f"## {role.name} 反馈（请修改后重新提交）\n{result_msg.content}",
+                            cause_by=result_msg.cause_by,
+                            sent_from=role.name,
+                            send_to=rework_target,
+                            task_id=task.task_id,
+                        )
+                        await self._env.publish(rework_msg)
+                        self._store.save_message(rework_msg)
+                        rework_status = CompanyMessage(
+                            content=f"{role.name} 打回了代码，{rework_target} 正在修改（第 {rework_count} 次返工）",
+                            cause_by="StatusUpdate",
+                            sent_from=role.name,
+                            task_id=task.task_id,
+                        )
+                        await self._env.publish(rework_status)
+                    else:
+                        await self._env.publish(result_msg)
         else:
             logger.warning("达到最大轮次 %d，强制结束", max_rounds)
 
@@ -301,6 +326,41 @@ class Company:
         """检测用户消息是否包含开发任务意图."""
         return any(kw in text for kw in self._TASK_TRIGGER_KEYWORDS)
 
+    _ROLE_NICK_MAP: dict[str, list[str]] = {
+        "PM": ["诸葛", "小诸葛", "PM", "pm", "产品", "产品经理"],
+        "Developer": ["小码", "码农", "开发", "程序员", "developer"],
+        "Reviewer": ["小审", "审查", "审查员", "reviewer"],
+        "QA": ["小茬", "测试", "QA", "qa"],
+        "DevOps": ["小布", "运维", "部署", "devops"],
+    }
+
+    _ROLE_TOPIC_KEYWORDS: dict[str, list[str]] = {
+        "Developer": ["代码", "写代码", "编码", "bug", "报错", "接口", "函数", "变量", "编译"],
+        "Reviewer": ["审查", "review", "代码质量", "代码规范"],
+        "QA": ["测试", "用例", "测试结果", "通过率", "覆盖率"],
+        "DevOps": ["部署", "上线", "服务器", "运维", "环境", "发布"],
+    }
+
+    def _route_message_to_role(self, msg: CompanyMessage) -> Optional[str]:
+        """根据消息内容智能路由到对应角色。返回角色名或 None（默认 PM）."""
+        if msg.send_to and msg.send_to in self._env.roles:
+            return msg.send_to
+
+        text = msg.content
+        for role_name, nicks in self._ROLE_NICK_MAP.items():
+            if role_name == "PM":
+                continue
+            for nick in nicks:
+                if nick in text:
+                    return role_name
+
+        for role_name, keywords in self._ROLE_TOPIC_KEYWORDS.items():
+            for kw in keywords:
+                if kw in text:
+                    return role_name
+
+        return None
+
     async def _process_standby_messages(self) -> None:
         """处理待命模式下的消息：关键词检测触发流水线，否则聊天回复."""
         from datetime import datetime
@@ -311,116 +371,188 @@ class Company:
             if queue:
                 collected = list(queue)
                 queue.clear()
-                self._pipeline_user_msgs.extend(collected)
                 for m in collected:
                     self._standby_history.append((m.sent_from, m.content))
                     self._store.save_message(m)
-                summary = "、".join(m.content[:20] for m in collected)
-                ack = CompanyMessage(
-                    content=f"收到老板 🫡 已记录 {len(collected)} 条补充（{summary}），会纳入当前开发",
-                    cause_by="ChatReply",
-                    sent_from="PM",
-                )
-                await self._env.publish(ack)
+
+                req_msgs = [m for m in collected if self._detect_task_intent(m.content)]
+                chat_msgs = [m for m in collected if m not in req_msgs]
+
+                if req_msgs:
+                    self._pipeline_user_msgs.extend(req_msgs)
+                    summary = "、".join(m.content[:20] for m in req_msgs)
+                    ack = CompanyMessage(
+                        content=f"收到老板 🫡 已记录补充需求（{summary}），会纳入当前开发",
+                        cause_by="ChatReply",
+                        sent_from="PM",
+                    )
+                    await self._env.publish(ack)
+
+                if chat_msgs:
+                    for cm in chat_msgs:
+                        target = self._route_message_to_role(cm)
+                        responder = self._env.roles.get(target) if target else self._env.roles.get("PM")
+                        if not responder:
+                            responder = self._env.roles.get("PM")
+                        if responder:
+                            history_lines = [f"[{s}]: {c}" for s, c in self._standby_history[-10:]]
+                            chat_context = (
+                                "当前团队正在开发中（pipeline 运行中）。\n\n"
+                                f"## 对话记录\n" + "\n".join(history_lines)
+                            )
+                            reply_msg = await responder._act(CHAT_REPLY, chat_context)
+                            self._standby_history.append((responder.name, reply_msg.content))
+                            self._store.save_message(reply_msg)
+                            await self._env.publish(reply_msg)
             return
 
-        for role in self._env.roles.values():
-            if not role.has_pending:
+        pm_role = self._env.roles.get("PM")
+        if not pm_role or not pm_role.has_pending:
+            return
+        messages = await pm_role._observe()
+        if not messages:
+            return
+
+        directed_msgs: dict[str, list[CompanyMessage]] = {}
+        pm_msgs: list[CompanyMessage] = []
+        for m in messages:
+            self._standby_history.append((m.sent_from, m.content))
+            self._store.save_message(m)
+            target = self._route_message_to_role(m)
+            if target and target != "PM" and target in self._env.roles:
+                directed_msgs.setdefault(target, []).append(m)
+            else:
+                pm_msgs.append(m)
+
+        for target_name, msgs in directed_msgs.items():
+            target_role = self._env.roles.get(target_name)
+            if not target_role:
                 continue
-            messages = await role._observe()
-            if not messages:
-                continue
+            now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
+            history_lines = [f"[{s}]: {c}" for s, c in self._standby_history[-10:]]
+            chat_context = f"当前时间: {now}\n\n## 对话记录\n" + "\n".join(history_lines)
+            reply_msg = await target_role._act(CHAT_REPLY, chat_context)
+            self._standby_history.append((target_role.name, reply_msg.content))
+            self._store.save_message(reply_msg)
+            await self._env.publish(reply_msg)
 
-            for m in messages:
-                self._standby_history.append((m.sent_from, m.content))
-                self._store.save_message(m)
+        if not pm_msgs:
+            return
+        messages = pm_msgs
 
-            if len(self._standby_history) > 40:
-                self._standby_history = self._standby_history[-30:]
+        if len(self._standby_history) > 40:
+            self._standby_history = self._standby_history[-30:]
 
-            user_messages = [m for m in messages if m.sent_from not in self._env.roles]
-            has_task_intent = any(self._detect_task_intent(m.content) for m in user_messages)
+        user_messages = [m for m in messages if m.sent_from not in self._env.roles]
+        has_task_intent = any(self._detect_task_intent(m.content) for m in user_messages)
 
-            if has_task_intent:
-                task_context = "\n\n".join(m.content for m in user_messages)
-                history_context = "\n".join(
-                    f"[{s}]: {c}" for s, c in self._standby_history[-10:]
-                )
-                full_context = f"## 对话上下文\n{history_context}\n\n## 用户最新需求\n{task_context}"
+        if has_task_intent:
+            task_context = "\n\n".join(m.content for m in user_messages)
+            history_context = "\n".join(
+                f"[{s}]: {c}" for s, c in self._standby_history[-10:]
+            )
+            full_context = f"## 对话上下文\n{history_context}\n\n## 用户最新需求\n{task_context}"
 
-                pm_role = self._env.roles.get("PM") or role
-                eval_result = await pm_role._act(EVALUATE_REQUIREMENT, full_context)
-                eval_text = eval_result.content if hasattr(eval_result, "content") else str(eval_result)
-                first_line = eval_text.strip().split("\n")[0].strip()
+            eval_result = await pm_role._act(EVALUATE_REQUIREMENT, full_context)
+            eval_text = eval_result.content if hasattr(eval_result, "content") else str(eval_result)
+            first_line = eval_text.strip().split("\n")[0].strip()
 
-                if first_line.startswith("NEED_CLARIFY"):
-                    clarify_text = eval_text.strip().split("\n", 1)[1].strip() if "\n" in eval_text.strip() else "老板，需求不太明确，能再说具体点吗？"
-                    clarify_msg = CompanyMessage(
-                        content=clarify_text,
-                        cause_by="ChatReply",
-                        sent_from=pm_role.name,
-                    )
-                    await self._env.publish(clarify_msg)
-                    self._standby_history.append((pm_role.name, clarify_msg.content))
-                    self._store.save_message(clarify_msg)
-                    continue
-
-                confirm_msg = CompanyMessage(
-                    content=f"收到老板 👌 需求已确认，我这就安排团队开干！",
+            if first_line.startswith("NEED_CLARIFY"):
+                clarify_text = eval_text.strip().split("\n", 1)[1].strip() if "\n" in eval_text.strip() else "老板，需求不太明确，能再说具体点吗？"
+                clarify_msg = CompanyMessage(
+                    content=clarify_text,
                     cause_by="ChatReply",
                     sent_from=pm_role.name,
                 )
-                await self._env.publish(confirm_msg)
-                self._standby_history.append((pm_role.name, confirm_msg.content))
+                await self._env.publish(clarify_msg)
+                self._standby_history.append((pm_role.name, clarify_msg.content))
+                self._store.save_message(clarify_msg)
+                return
 
-                req_summary = eval_text.strip().split("\n", 1)[1].strip() if "\n" in eval_text.strip() else task_context
-                project_dir = self._create_project_workspace(req_summary)
-                enriched = (
-                    f"## 项目工作目录\n{project_dir}\n"
-                    f"所有文件必须创建在此目录下。PRD 写入 docs/prd.md，设计写入 docs/design.md，"
-                    f"代码写入 src/，测试写入 tests/。\n\n{full_context}"
-                )
+            confirm_msg = CompanyMessage(
+                content="收到老板 👌 需求已确认，我这就安排团队开干！",
+                cause_by="ChatReply",
+                sent_from=pm_role.name,
+            )
+            await self._env.publish(confirm_msg)
+            self._standby_history.append((pm_role.name, confirm_msg.content))
 
-                async def _run_pipeline(req: str, pdir: Path) -> None:
-                    try:
-                        result = await self.run(req, max_rounds=20)
-                        status = "done" if result else "failed"
-                    except Exception as e:
-                        logger.error("Pipeline 执行异常: %s", e)
-                        status = "failed"
-                    finally:
-                        self._pipeline_running = False
-                        self._env._pipeline_user_queue = None
-                        self._update_project_status(pdir, status)
-                        done_msg = CompanyMessage(
-                            content=f"老板，任务{'完成' if status == 'done' else '执行出错了'}！项目目录: {pdir}",
-                            cause_by="StatusUpdate",
-                            sent_from="PM",
-                        )
-                        await self._env.publish(done_msg)
+            req_summary = eval_text.strip().split("\n", 1)[1].strip() if "\n" in eval_text.strip() else task_context
+            project_dir = self._create_project_workspace(req_summary)
+            enriched = (
+                f"## 项目工作目录\n{project_dir}\n"
+                f"所有文件必须创建在此目录下。PRD 写入 docs/prd.md，设计写入 docs/design.md，"
+                f"代码写入 src/，测试写入 tests/。\n\n{full_context}"
+            )
 
-                import asyncio
-                self._pipeline_running = True
-                self._env._pipeline_user_queue = []
-                asyncio.create_task(_run_pipeline(enriched, project_dir))
-                continue
+            async def _run_pipeline(req: str, pdir: Path) -> None:
+                try:
+                    result = await self.run(req, max_rounds=20)
+                    status = "done" if result else "failed"
+                except Exception as e:
+                    logger.error("Pipeline 执行异常: %s", e)
+                    status = "failed"
+                finally:
+                    self._pipeline_running = False
+                    self._env._pipeline_user_queue = None
+                    self._update_project_status(pdir, status)
+                    done_msg = CompanyMessage(
+                        content=f"老板，任务{'完成' if status == 'done' else '执行出错了'}！项目目录: {pdir}",
+                        cause_by="StatusUpdate",
+                        sent_from="PM",
+                    )
+                    await self._env.publish(done_msg)
 
-            now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
-            history_lines = [f"[{s}]: {c}" for s, c in self._standby_history]
-            history_text = "\n".join(history_lines)
-            project_status = self._build_project_status()
+            import asyncio
+            self._pipeline_running = True
+            self._env._pipeline_user_queue = []
+            asyncio.create_task(_run_pipeline(enriched, project_dir))
+            return
 
-            context = f"当前时间: {now}\n\n{project_status}## 对话记录\n{history_text}"
-            reply_msg = await role._act(CHAT_REPLY, context)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
+        history_lines = [f"[{s}]: {c}" for s, c in self._standby_history]
+        history_text = "\n".join(history_lines)
+        project_status = self._build_project_status()
 
-            self._standby_history.append((role.name, reply_msg.content))
-            self._store.save_message(reply_msg)
-            await self._env.publish(reply_msg)
+        context = f"当前时间: {now}\n\n{project_status}## 对话记录\n{history_text}"
+        reply_msg = await pm_role._act(CHAT_REPLY, context)
+
+        self._standby_history.append((pm_role.name, reply_msg.content))
+        self._store.save_message(reply_msg)
+        await self._env.publish(reply_msg)
 
     def stop_standby(self) -> None:
         """外部调用停止待命模式."""
         if hasattr(self, "_standby_stop"):
             self._standby_stop.set()
+
+    _PIPELINE_ORDER = ["PM", "Developer", "Reviewer", "QA", "DevOps"]
+
+    def _check_rework(self, role_name: str, content: str) -> Optional[str]:
+        """检查角色输出是否需要返工。返回需要返工的目标角色名，或 None."""
+        if role_name == "Reviewer":
+            upper = content.upper()
+            if "REJECTED" in upper or "拒收" in content or "打回" in content:
+                return "Developer"
+        if role_name == "QA":
+            indicators = ["失败", "FAIL", "fail", "不通过", "未通过", "error", "Error"]
+            if any(ind in content for ind in indicators):
+                return "Developer"
+        return None
+
+    def _clear_downstream_inboxes(self, role_name: str) -> None:
+        """清空当前角色下游所有角色的 inbox，防止基于被拒代码继续工作."""
+        try:
+            idx = self._PIPELINE_ORDER.index(role_name)
+        except ValueError:
+            return
+        for downstream in self._PIPELINE_ORDER[idx + 1:]:
+            role = self._env.roles.get(downstream)
+            if role:
+                cleared = len(role._inbox)
+                role._inbox.clear()
+                if cleared:
+                    logger.info("清空 %s 的 inbox（%d 条），等待返工完成", downstream, cleared)
 
     def _restore_standby_history(self) -> list[tuple[str, str]]:
         """从 CompanyStore 恢复最近的对话历史."""
@@ -476,6 +608,24 @@ class Company:
             return "\n\n".join(parts) + "\n\n"
         return "## 任务状态\n当前没有任何已执行的任务记录。\n\n"
 
+    @staticmethod
+    def _extract_project_name(text: str) -> str:
+        """从 PM 评估文本中提取简短项目名（去掉寒暄/口语前缀）."""
+        import re
+        clean = text.strip()
+        clean = re.sub(
+            r'^(老板[，,]?\s*|核心需求[是：:]*\s*|我(们)?理解[的是：:]*\s*|'
+            r'需求(是|已|很)[^，,。\n]*[，,。]\s*|'
+            r'[^，,。\n]*已经对齐了[，,]\s*)',
+            '', clean,
+        )
+        clean = re.sub(r'^[，,：:。\s]+', '', clean)
+        for prefix in ("做一个", "开发一个", "写一个", "搞一个", "实现一个", "创建一个", "建一个"):
+            if clean.startswith(prefix):
+                clean = clean[len(prefix):]
+                break
+        return clean.strip() or text.strip()
+
     def _create_project_workspace(self, requirement: str) -> Path:
         """根据需求创建项目工作目录，返回项目路径."""
         import json
@@ -483,7 +633,8 @@ class Company:
         from datetime import datetime
 
         date_str = datetime.now().strftime("%Y%m%d")
-        slug = requirement[:30].strip()
+        short_name = self._extract_project_name(requirement)
+        slug = short_name[:20].strip()
         slug = re.sub(r'[^\w\u4e00-\u9fff-]', '_', slug)
         slug = re.sub(r'_+', '_', slug).strip('_') or "project"
         project_name = f"{date_str}-{slug}"
