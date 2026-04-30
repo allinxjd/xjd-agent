@@ -272,8 +272,21 @@ class Company:
             await self.stop_feishu()
         return "AI Company 待命模式已结束"
 
+    _TASK_TRIGGER_KEYWORDS = [
+        "开发一个", "写一个", "做一个", "帮我开发", "帮我写", "帮我做",
+        "开始开发", "开始写", "开干", "启动流水线", "开始干活",
+        "写个", "做个", "搞一个", "搞个", "实现一个",
+        "写PRD", "写 PRD", "出PRD", "出 PRD",
+        "马上开发", "立刻开发", "赶紧开发", "直接开发",
+        "创建一个", "建一个", "生成一个",
+    ]
+
+    def _detect_task_intent(self, text: str) -> bool:
+        """检测用户消息是否包含开发任务意图."""
+        return any(kw in text for kw in self._TASK_TRIGGER_KEYWORDS)
+
     async def _process_standby_messages(self) -> None:
-        """处理待命模式下的消息：带上下文回复，检测 [TASK_START] 触发流水线."""
+        """处理待命模式下的消息：关键词检测触发流水线，否则聊天回复."""
         from datetime import datetime
         from agent.company.action import CHAT_REPLY
 
@@ -284,7 +297,6 @@ class Company:
             if not messages:
                 continue
 
-            # pipeline 运行中，自动回复
             if self._pipeline_running:
                 auto_reply = CompanyMessage(
                     content="团队正在开发中，请稍候... 完成后会通知老板 🫡",
@@ -300,26 +312,30 @@ class Company:
             if len(self._standby_history) > 40:
                 self._standby_history = self._standby_history[-30:]
 
-            now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
-            history_lines = []
-            for sender, content in self._standby_history:
-                history_lines.append(f"[{sender}]: {content}")
-            history_text = "\n".join(history_lines)
+            user_messages = [m for m in messages if m.sent_from not in self._env.roles]
+            has_task_intent = any(self._detect_task_intent(m.content) for m in user_messages)
 
-            context = f"当前时间: {now}\n\n## 对话记录\n{history_text}"
-            reply_msg = await role._act(CHAT_REPLY, context)
+            if has_task_intent:
+                task_context = "\n\n".join(m.content for m in user_messages)
+                history_context = "\n".join(
+                    f"[{s}]: {c}" for s, c in self._standby_history[-10:]
+                )
+                full_context = f"## 对话上下文\n{history_context}\n\n## 用户最新需求\n{task_context}"
 
-            self._standby_history.append((role.name, reply_msg.content))
+                pm_role = self._env.roles.get("PM") or role
+                confirm_msg = CompanyMessage(
+                    content=f"收到老板 👌 需求已确认，我这就安排团队开干！",
+                    cause_by="ChatReply",
+                    sent_from=pm_role.name,
+                )
+                await self._env.publish(confirm_msg)
+                self._standby_history.append((pm_role.name, confirm_msg.content))
 
-            if "[TASK_START]" in reply_msg.content:
-                reply_msg.content = reply_msg.content.replace("[TASK_START]", "").strip()
-                await self._env.publish(reply_msg)
-                task_context = "\n\n".join(m.content for m in messages)
                 project_dir = self._create_project_workspace(task_context)
                 enriched = (
                     f"## 项目工作目录\n{project_dir}\n"
                     f"所有文件必须创建在此目录下。PRD 写入 docs/prd.md，设计写入 docs/design.md，"
-                    f"代码写入 src/，测试写入 tests/。\n\n{task_context}"
+                    f"代码写入 src/，测试写入 tests/。\n\n{full_context}"
                 )
 
                 async def _run_pipeline(req: str, pdir: Path) -> None:
@@ -342,8 +358,21 @@ class Company:
 
                 import asyncio
                 asyncio.create_task(_run_pipeline(enriched, project_dir))
-            else:
-                await self._env.publish(reply_msg)
+                continue
+
+            now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
+            history_lines = [f"[{s}]: {c}" for s, c in self._standby_history]
+            history_text = "\n".join(history_lines)
+
+            context = f"当前时间: {now}\n\n## 对话记录\n{history_text}"
+            reply_msg = await role._act(CHAT_REPLY, context)
+
+            self._standby_history.append((role.name, reply_msg.content))
+
+            if "[TASK_START]" in reply_msg.content:
+                reply_msg.content = reply_msg.content.replace("[TASK_START]", "").strip()
+
+            await self._env.publish(reply_msg)
 
     def stop_standby(self) -> None:
         """外部调用停止待命模式."""

@@ -158,12 +158,35 @@ class FeishuBridge:
         )
 
         mention_ids = getattr(platform_msg, "mentions", [])
+        mention_ids = [mid for mid in mention_ids if mid]
         if mention_ids:
             for role_name, adapter in self._adapters.items():
                 bot = getattr(adapter, "_bot_user", None)
-                if bot and getattr(bot, "user_id", "") in mention_ids:
+                if not bot:
+                    continue
+                bot_open_id = getattr(bot, "user_id", "")
+                if bot_open_id and bot_open_id in mention_ids:
                     msg.send_to = role_name
+                    logger.info("飞书@匹配: open_id=%s → %s", bot_open_id, role_name)
                     break
+
+        if not msg.send_to and "@" in content:
+            role_nick_map = {
+                "PM": ["诸葛", "小诸葛", "pm", "PM", "产品"],
+                "Developer": ["小码", "码农", "开发", "developer"],
+                "Reviewer": ["审查", "reviewer", "审查员"],
+                "QA": ["测试", "qa", "QA", "找茬"],
+                "DevOps": ["运维", "devops", "DevOps", "部署"],
+            }
+            for role_name, nicks in role_nick_map.items():
+                if role_name in self._adapters:
+                    for nick in nicks:
+                        if f"@{nick}" in content or nick in content:
+                            msg.send_to = role_name
+                            logger.info("飞书@昵称匹配: %s → %s", nick, role_name)
+                            break
+                    if msg.send_to:
+                        break
 
         logger.info("飞书→Company: [%s] %s (send_to=%s)",
                      msg.sent_from, content[:50], msg.send_to or "*")
