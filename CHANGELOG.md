@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-04-30
+
+### Added
+- **AI Company 多 Agent 协作系统**: 5 个角色 (PM, Developer, Reviewer, QA, DevOps) 通过消息总线协作
+- CompanyMessage 结构化消息 + cause_by 路由机制
+- 9 个内置 Action: UserRequirement, WritePRD, WriteDesign, WriteCode, CodeReview, WriteTest, RunTest, DeployPlan, ExecuteDeploy
+- CompanyRole 继承 AgentRole，增加 MetaGPT 生命周期 (observe → think → act) + CrewAI 角色三元组
+- CompanyEnvironment 消息总线，支持定向投递和广播
+- CompanyTask 带 LLM 验证循环和重试机制
+- SQLite 持久化 (tasks, messages, runs)，支持断点续跑
+- Karpathy 四原则 SKILL.md: Think Before Coding, Simplicity First, Surgical Changes, Goal-Driven Execution
+- 飞书多 Bot 桥接: 每个角色绑定独立飞书自建应用，群内协作
+- YAML 自定义角色和工作流 (`~/.xjd-agent/roles/*.yaml`)
+- CompanyMemory 共享记忆 (基于 MemoryManager)
+- WebUI 仪表盘 (`/company` 路由)
+- CLI 命令: `company run`, `company interactive`, `company team`, `company status`, `company history`, `company init-role`, `company init-workflow`
+
+### Fixed
+- ModelRouter 初始化: CLI 中正确使用 credential_manager + provider 注册模式
+- Action tools_filter 三态语义: None=继承角色, []=纯文本无工具, [list]=指定工具
+- 消息去重: _processed_msg_ids 防止角色重复处理已执行消息
+- _continue_run 参数顺序修复
+
 ## [0.3.0] - 2026-04-20
 
 ### Added
