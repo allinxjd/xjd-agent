@@ -291,14 +291,6 @@ class Company:
         from agent.company.action import CHAT_REPLY
 
         if self._pipeline_running:
-            has_user_msg = any(r.has_pending for r in self._env.roles.values())
-            if has_user_msg:
-                auto_reply = CompanyMessage(
-                    content="团队正在开发中，请稍候... 完成后会通知老板 🫡",
-                    cause_by="StatusUpdate",
-                    sent_from="PM",
-                )
-                await self._env.publish(auto_reply)
             return
 
         for role in self._env.roles.values():
@@ -341,7 +333,6 @@ class Company:
                 )
 
                 async def _run_pipeline(req: str, pdir: Path) -> None:
-                    self._pipeline_running = True
                     try:
                         result = await self.run(req, max_rounds=20)
                         status = "done" if result else "failed"
@@ -359,6 +350,7 @@ class Company:
                         await self._env.publish(done_msg)
 
                 import asyncio
+                self._pipeline_running = True
                 asyncio.create_task(_run_pipeline(enriched, project_dir))
                 continue
 
