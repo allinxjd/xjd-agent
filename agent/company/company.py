@@ -308,19 +308,13 @@ class Company:
 
         if self._pipeline_running:
             collected = []
-            for role in self._env.roles.values():
-                if not role.has_pending:
-                    continue
-                messages = await role._observe()
-                if not messages:
-                    continue
-                user_msgs = [
-                    m for m in messages
-                    if m.cause_by == "HumanDirective" and m.sent_from not in self._env.roles
-                ]
-                for m in user_msgs:
-                    if m.content not in [c.content for c in collected]:
-                        collected.append(m)
+            pm_role = self._env.roles.get("PM")
+            if pm_role and pm_role.has_pending:
+                messages = await pm_role._observe()
+                for m in (messages or []):
+                    if m.cause_by == "HumanDirective" and m.sent_from not in self._env.roles:
+                        if m.content not in [c.content for c in collected]:
+                            collected.append(m)
             if collected:
                 self._pipeline_user_msgs.extend(collected)
                 for m in collected:
@@ -384,7 +378,8 @@ class Company:
                 await self._env.publish(confirm_msg)
                 self._standby_history.append((pm_role.name, confirm_msg.content))
 
-                project_dir = self._create_project_workspace(task_context)
+                req_summary = eval_text.strip().split("\n", 1)[1].strip() if "\n" in eval_text.strip() else task_context
+                project_dir = self._create_project_workspace(req_summary)
                 enriched = (
                     f"## 项目工作目录\n{project_dir}\n"
                     f"所有文件必须创建在此目录下。PRD 写入 docs/prd.md，设计写入 docs/design.md，"
