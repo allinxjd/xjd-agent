@@ -341,7 +341,7 @@ class FeishuAdapter(BasePlatformAdapter):
         """官方 SDK 长连接收到消息的回调 (同步, 在 SDK 线程中执行)."""
         import time as _time
         self._last_sdk_activity = _time.time()
-        logger.debug("飞书 SDK 回调触发: %s", type(data).__name__)
+        logger.info("飞书 SDK 回调触发: %s", type(data).__name__)
         try:
             event = data.event
             if not event or not event.message:
