@@ -41,8 +41,8 @@ def _break_system_args() -> list[str]:
     return []
 
 
-def _run(args: list[str], cwd: str) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, timeout=180, cwd=cwd)
+def _run(args: list[str], cwd: str, timeout: int = 300) -> subprocess.CompletedProcess:
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, cwd=cwd)
 
 
 def _check_user_bin_in_path() -> None:
@@ -63,20 +63,21 @@ def _check_user_bin_in_path() -> None:
 def install(cwd: str) -> bool:
     """Try pip install with escalating fallbacks. Returns True on success."""
 
-    # Strategy 1: force-reinstall (ensures package-data like builtin_skills is refreshed)
-    args = [*_pip_base_args(), "install", "--force-reinstall",
-            ".", *_mirror_args(), *_break_system_args()]
-    print(f"[self_install] Strategy 1: force-reinstall")
-    r = _run(args, cwd)
+    # Strategy 1: normal install (fast — only installs xjd-agent, reuses cached deps)
+    args = [*_pip_base_args(), "install", ".", *_mirror_args(), *_break_system_args()]
+    print("[self_install] Strategy 1: normal install")
+    r = _run(args, cwd, timeout=120)
     if r.returncode == 0:
         print("[self_install] OK")
         return True
     print(f"[self_install] Failed: {r.stderr[:200]}")
 
-    # Strategy 2: normal install (no --force-reinstall, less aggressive)
-    args = [*_pip_base_args(), "install", ".", *_mirror_args(), *_break_system_args()]
-    print(f"[self_install] Strategy 2: normal install")
-    r = _run(args, cwd)
+    # Strategy 2: force-reinstall (slower — re-downloads all deps, but ensures
+    # package-data like builtin_skills is refreshed)
+    args = [*_pip_base_args(), "install", "--force-reinstall",
+            ".", *_mirror_args(), *_break_system_args()]
+    print("[self_install] Strategy 2: force-reinstall")
+    r = _run(args, cwd, timeout=300)
     if r.returncode == 0:
         print("[self_install] OK")
         return True
@@ -84,21 +85,20 @@ def install(cwd: str) -> bool:
 
     # Strategy 3: --user install (when system site-packages is read-only)
     if not _in_venv():
-        args = [*_pip_base_args(), "install", "--force-reinstall", "--user",
+        args = [*_pip_base_args(), "install", "--user",
                 ".", *_mirror_args(), "--break-system-packages"]
-        print(f"[self_install] Strategy 3: --user install")
-        r = _run(args, cwd)
+        print("[self_install] Strategy 3: --user install")
+        r = _run(args, cwd, timeout=120)
         if r.returncode == 0:
             _check_user_bin_in_path()
             print("[self_install] OK (--user)")
             return True
         print(f"[self_install] Failed: {r.stderr[:200]}")
 
-    # Strategy 4: pip install without mirror (mirror might be blocked)
-    args = [*_pip_base_args(), "install", "--force-reinstall",
-            ".", *_break_system_args()]
-    print(f"[self_install] Strategy 4: no mirror")
-    r = _run(args, cwd)
+    # Strategy 4: no mirror (mirror might be blocked or slow)
+    args = [*_pip_base_args(), "install", ".", *_break_system_args()]
+    print("[self_install] Strategy 4: no mirror")
+    r = _run(args, cwd, timeout=120)
     if r.returncode == 0:
         print("[self_install] OK")
         return True

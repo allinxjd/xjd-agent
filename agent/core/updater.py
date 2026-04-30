@@ -383,7 +383,7 @@ def _delegate_install(source_dir: "Path") -> bool:
         try:
             r = subprocess.run(
                 [_sys.executable, str(installer), "--cwd", str(source_dir)],
-                capture_output=True, text=True, timeout=180,
+                capture_output=True, text=True, timeout=600,
             )
             if r.returncode == 0:
                 logger.info("self_install.py succeeded")
@@ -406,7 +406,7 @@ def _run_pip_install(cwd: str) -> bool:
     import sys as _sys
 
     in_venv = _sys.prefix != _sys.base_prefix
-    pip_base = [_sys.executable, "-m", "pip", "install", "--force-reinstall",
+    pip_base = [_sys.executable, "-m", "pip", "install",
                 ".",
                 "-i", "https://mirrors.aliyun.com/pypi/simple/",
                 "--trusted-host", "mirrors.aliyun.com"]
@@ -415,7 +415,7 @@ def _run_pip_install(cwd: str) -> bool:
         pip_base.append("--break-system-packages")
 
     result = subprocess.run(
-        pip_base, capture_output=True, text=True, timeout=120, cwd=cwd,
+        pip_base, capture_output=True, text=True, timeout=300, cwd=cwd,
     )
     if result.returncode == 0:
         return True
@@ -423,13 +423,13 @@ def _run_pip_install(cwd: str) -> bool:
     logger.warning("pip install failed: %s", result.stderr[:300])
 
     if not in_venv:
-        pip_user = [_sys.executable, "-m", "pip", "install", "--force-reinstall",
+        pip_user = [_sys.executable, "-m", "pip", "install",
                     "--user", ".",
                     "-i", "https://mirrors.aliyun.com/pypi/simple/",
                     "--trusted-host", "mirrors.aliyun.com",
                     "--break-system-packages"]
         result = subprocess.run(
-            pip_user, capture_output=True, text=True, timeout=120, cwd=cwd,
+            pip_user, capture_output=True, text=True, timeout=300, cwd=cwd,
         )
         if result.returncode == 0:
             _check_user_bin_in_path()
