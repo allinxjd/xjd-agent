@@ -273,7 +273,7 @@ class Company:
                 await self._env.publish(checkin)
 
         self._standby_stop = asyncio.Event()
-        self._standby_history: list[tuple[str, str]] = []
+        self._standby_history: list[tuple[str, str]] = self._restore_standby_history()
         try:
             while not self._standby_stop.is_set():
                 await self._process_standby_messages()
@@ -318,6 +318,7 @@ class Company:
                     self._pipeline_user_msgs.extend(user_msgs)
                     for m in user_msgs:
                         self._standby_history.append((m.sent_from, m.content))
+                        self._store.save_message(m)
                     ack = CompanyMessage(
                         content="收到老板，已记录你的补充，会纳入当前开发中 🫡",
                         cause_by="ChatReply",
@@ -335,6 +336,7 @@ class Company:
 
             for m in messages:
                 self._standby_history.append((m.sent_from, m.content))
+                self._store.save_message(m)
 
             if len(self._standby_history) > 40:
                 self._standby_history = self._standby_history[-30:]
@@ -390,17 +392,73 @@ class Company:
             now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
             history_lines = [f"[{s}]: {c}" for s, c in self._standby_history]
             history_text = "\n".join(history_lines)
+            project_status = self._build_project_status()
 
-            context = f"当前时间: {now}\n\n## 对话记录\n{history_text}"
+            context = f"当前时间: {now}\n\n{project_status}## 对话记录\n{history_text}"
             reply_msg = await role._act(CHAT_REPLY, context)
 
             self._standby_history.append((role.name, reply_msg.content))
+            self._store.save_message(reply_msg)
             await self._env.publish(reply_msg)
 
     def stop_standby(self) -> None:
         """外部调用停止待命模式."""
         if hasattr(self, "_standby_stop"):
             self._standby_stop.set()
+
+    def _restore_standby_history(self) -> list[tuple[str, str]]:
+        """从 CompanyStore 恢复最近的对话历史."""
+        try:
+            messages = self._store.list_messages(limit=30)
+            messages.reverse()
+            history = []
+            for m in messages:
+                if m.cause_by in ("RoleCheckin", "StatusUpdate"):
+                    continue
+                history.append((m.sent_from, m.content[:200]))
+            return history[-20:]
+        except Exception as e:
+            logger.warning("恢复对话历史失败: %s", e)
+            return []
+
+    def _build_project_status(self) -> str:
+        """构建最近项目/任务状态摘要，注入到 ChatReply 上下文."""
+        import json
+
+        parts = []
+        try:
+            runs = self._store.list_runs(limit=5)
+            if runs:
+                lines = []
+                for r in runs:
+                    req = r.get("requirement", "")[:80]
+                    status = r.get("status", "unknown")
+                    summary = r.get("result_summary", "")[:100]
+                    lines.append(f"- [{status}] {req}" + (f" → {summary}" if summary else ""))
+                parts.append("## 最近任务记录（来自数据库，真实数据）\n" + "\n".join(lines))
+        except Exception as e:
+            logger.debug("读取任务记录失败: %s", e)
+
+        try:
+            projects_dir = get_projects_dir()
+            if projects_dir.exists():
+                project_dirs = sorted(projects_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)[:3]
+                proj_lines = []
+                for pd in project_dirs:
+                    meta_file = pd / ".project.json"
+                    if meta_file.exists():
+                        meta = json.loads(meta_file.read_text())
+                        status = meta.get("status", "unknown")
+                        req = meta.get("requirement", "")[:80]
+                        proj_lines.append(f"- [{status}] {pd.name}: {req}")
+                if proj_lines:
+                    parts.append("## 最近项目目录\n" + "\n".join(proj_lines))
+        except Exception as e:
+            logger.debug("读取项目目录失败: %s", e)
+
+        if parts:
+            return "\n\n".join(parts) + "\n\n"
+        return "## 任务状态\n当前没有任何已执行的任务记录。\n\n"
 
     def _create_project_workspace(self, requirement: str) -> Path:
         """根据需求创建项目工作目录，返回项目路径."""
