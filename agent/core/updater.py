@@ -364,21 +364,37 @@ def _update_git() -> bool:
     if not pulled:
         return False
 
-    # git pull 后强制重装，确保新增的 package data（如 builtin_skills）被复制
-    # 注意：不能依赖已加载的 _run_pip_install，因为它可能是旧版本
+    # Delegate pip install to the NEW code's self_install.py (bootstrap pattern).
+    # This ensures future install-logic fixes are always picked up, breaking
+    # the chicken-and-egg cycle where old updater can't benefit from new fixes.
+    return _delegate_install(repo_dir)
+
+
+def _delegate_install(source_dir: "Path") -> bool:
+    """Run the NEW code's self_install.py, falling back to inline pip install.
+
+    This is the key to breaking the chicken-and-egg problem: after fetching
+    new source code, we run the NEW installer script instead of the old one.
+    Any future improvements to install logic are automatically picked up.
+    """
     import sys as _sys
-    _force_args = [_sys.executable, "-m", "pip", "install", "--force-reinstall",
-                   ".",
-                   "-i", "https://mirrors.aliyun.com/pypi/simple/",
-                   "--trusted-host", "mirrors.aliyun.com"]
-    in_venv = _sys.prefix != _sys.base_prefix
-    if not in_venv:
-        _force_args.append("--break-system-packages")
-    _fr = subprocess.run(_force_args, capture_output=True, text=True, timeout=120, cwd=repo)
-    if _fr.returncode != 0:
-        logger.warning("force-reinstall failed, falling back: %s", _fr.stderr[:200])
-        _run_pip_install(repo)
-    return True
+    installer = source_dir / "scripts" / "self_install.py"
+    if installer.exists():
+        try:
+            r = subprocess.run(
+                [_sys.executable, str(installer), "--cwd", str(source_dir)],
+                capture_output=True, text=True, timeout=180,
+            )
+            if r.returncode == 0:
+                logger.info("self_install.py succeeded")
+                return True
+            logger.warning("self_install.py failed (rc=%d): %s",
+                           r.returncode, r.stdout[-300:] + r.stderr[-300:])
+        except Exception as e:
+            logger.warning("self_install.py error: %s", e)
+    else:
+        logger.debug("self_install.py not found, using inline install")
+    return _run_pip_install(str(source_dir))
 
 
 def _run_pip_install(cwd: str) -> bool:
@@ -548,7 +564,7 @@ def _update_tarball_standalone() -> bool:
     if not src:
         return False
     try:
-        ok = _run_pip_install(str(src))
+        ok = _delegate_install(src)
         if ok:
             logger.info("Tarball standalone update succeeded")
         return ok
