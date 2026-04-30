@@ -50,9 +50,42 @@ def _build_router():
 
 
 def _load_feishu_config(config):
-    """从 config 加载飞书 Company bot 配置."""
+    """从 skill secrets 或 config.yaml 加载飞书 Company bot 配置.
+
+    优先读 skill secrets（WebUI 配置），fallback 到 config.yaml。
+    """
     from agent.company.feishu_bridge import FeishuBotConfig
 
+    # 优先从 skill secrets 读取
+    try:
+        from agent.core.secrets import get_secrets_store
+        store = get_secrets_store()
+        secrets = store.get_all("ai-company")
+        if secrets.get("FEISHU_GROUP_CHAT_ID"):
+            chat_id = secrets["FEISHU_GROUP_CHAT_ID"]
+            role_keys = [
+                ("PM", "FEISHU_PM_APP_ID", "FEISHU_PM_APP_SECRET"),
+                ("Developer", "FEISHU_DEVELOPER_APP_ID", "FEISHU_DEVELOPER_APP_SECRET"),
+                ("Reviewer", "FEISHU_REVIEWER_APP_ID", "FEISHU_REVIEWER_APP_SECRET"),
+                ("QA", "FEISHU_QA_APP_ID", "FEISHU_QA_APP_SECRET"),
+                ("DevOps", "FEISHU_DEVOPS_APP_ID", "FEISHU_DEVOPS_APP_SECRET"),
+            ]
+            bots = []
+            for role_name, id_key, secret_key in role_keys:
+                app_id = secrets.get(id_key, "")
+                app_secret = secrets.get(secret_key, "")
+                if app_id and app_secret:
+                    bots.append(FeishuBotConfig(
+                        app_id=app_id,
+                        app_secret=app_secret,
+                        role_name=role_name,
+                    ))
+            if bots:
+                return chat_id, bots
+    except Exception as e:
+        logger.debug("Skill secrets load failed: %s", e)
+
+    # Fallback: config.yaml
     company_cfg = getattr(config, "company", None) or {}
     feishu_cfg = company_cfg.get("feishu", {}) if isinstance(company_cfg, dict) else {}
     chat_id = feishu_cfg.get("group_chat_id", "")
