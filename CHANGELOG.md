@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] - 2026-04-30
+
+### Fixed
+- 内置技能 (AI Company 等) 随包分发: `pip install` 后自动复制到用户目录
+- 更新器 `--force-reinstall --no-deps` 确保新增文件被正确安装
+- YAML tags 类型强制转换为字符串，修复技能导出 TypeError
+
 ## [0.4.0] - 2026-04-30
 
 ### Added

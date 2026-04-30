@@ -336,7 +336,20 @@ def _update_git() -> bool:
     if not pulled:
         return False
 
-    _run_pip_install(repo)
+    # git pull 后强制重装，确保新增的 package data（如 builtin_skills）被复制
+    # 注意：不能依赖已加载的 _run_pip_install，因为它可能是旧版本
+    import sys as _sys
+    _force_args = [_sys.executable, "-m", "pip", "install", "--force-reinstall",
+                   "--no-deps", ".",
+                   "-i", "https://mirrors.aliyun.com/pypi/simple/",
+                   "--trusted-host", "mirrors.aliyun.com"]
+    in_venv = _sys.prefix != _sys.base_prefix
+    if not in_venv:
+        _force_args.append("--break-system-packages")
+    _fr = subprocess.run(_force_args, capture_output=True, text=True, timeout=120, cwd=repo)
+    if _fr.returncode != 0:
+        logger.warning("force-reinstall failed, falling back: %s", _fr.stderr[:200])
+        _run_pip_install(repo)
     return True
 
 
@@ -349,7 +362,8 @@ def _run_pip_install(cwd: str) -> bool:
     import sys as _sys
 
     in_venv = _sys.prefix != _sys.base_prefix
-    pip_base = [_sys.executable, "-m", "pip", "install", ".",
+    pip_base = [_sys.executable, "-m", "pip", "install", "--force-reinstall",
+                "--no-deps", ".",
                 "-i", "https://mirrors.aliyun.com/pypi/simple/",
                 "--trusted-host", "mirrors.aliyun.com"]
 
@@ -365,7 +379,8 @@ def _run_pip_install(cwd: str) -> bool:
     logger.warning("pip install failed: %s", result.stderr[:300])
 
     if not in_venv:
-        pip_user = [_sys.executable, "-m", "pip", "install", "--user", ".",
+        pip_user = [_sys.executable, "-m", "pip", "install", "--force-reinstall",
+                    "--no-deps", "--user", ".",
                     "-i", "https://mirrors.aliyun.com/pypi/simple/",
                     "--trusted-host", "mirrors.aliyun.com",
                     "--break-system-packages"]
