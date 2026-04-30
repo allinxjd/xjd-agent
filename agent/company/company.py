@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from agent.company.action import USER_REQUIREMENT
+from agent.company.action import USER_REQUIREMENT, EVALUATE_REQUIREMENT
 from agent.company.environment import CompanyEnvironment
 from agent.company.feishu_bridge import FeishuBotConfig, FeishuBridge
 from agent.company.memory import CompanyMemory
@@ -360,6 +360,22 @@ class Company:
                 full_context = f"## 对话上下文\n{history_context}\n\n## 用户最新需求\n{task_context}"
 
                 pm_role = self._env.roles.get("PM") or role
+                eval_result = await pm_role._act(EVALUATE_REQUIREMENT, full_context)
+                eval_text = eval_result.content if hasattr(eval_result, "content") else str(eval_result)
+                first_line = eval_text.strip().split("\n")[0].strip()
+
+                if first_line.startswith("NEED_CLARIFY"):
+                    clarify_text = eval_text.strip().split("\n", 1)[1].strip() if "\n" in eval_text.strip() else "老板，需求不太明确，能再说具体点吗？"
+                    clarify_msg = CompanyMessage(
+                        content=clarify_text,
+                        cause_by="ChatReply",
+                        sent_from=pm_role.name,
+                    )
+                    await self._env.publish(clarify_msg)
+                    self._standby_history.append((pm_role.name, clarify_msg.content))
+                    self._store.save_message(clarify_msg)
+                    continue
+
                 confirm_msg = CompanyMessage(
                     content=f"收到老板 👌 需求已确认，我这就安排团队开干！",
                     cause_by="ChatReply",

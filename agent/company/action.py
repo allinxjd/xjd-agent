@@ -94,6 +94,26 @@ USER_REQUIREMENT = Action(
     description="用户原始需求",
 )
 
+EVALUATE_REQUIREMENT = Action(
+    name="EvaluateRequirement",
+    description="评估需求是否足够清晰，决定是否启动流水线",
+    prompt_template=(
+        "你是专业 PM，老板刚给了一个开发需求。你要判断这个需求是否足够清晰可以启动开发流水线。\n\n"
+        "## 判断标准\n"
+        "- 需求必须明确说了要做什么东西（不能只有一个名字，比如「小记」「商城」不算清晰）\n"
+        "- 如果对话上下文里之前讨论过细节，可以结合上下文理解\n"
+        "- 不需要完美，但至少要知道核心功能是什么\n\n"
+        "## 输出格式（严格遵守）\n"
+        "第一行必须是 READY 或 NEED_CLARIFY\n"
+        "如果 READY：第二行起简述你理解的核心需求（2-3句话）\n"
+        "如果 NEED_CLARIFY：第二行起用群聊口吻向老板提出具体问题（像真人PM在群里追问那样，简短有力，带表情）\n"
+        "- 如果需求明显不合理或自相矛盾，直接说出你的顾虑\n"
+        "- 不要客套，直接问关键问题\n\n"
+        "{context}"
+    ),
+    tools_filter=[],
+)
+
 WRITE_PRD = Action(
     name="WritePRD",
     description="编写产品需求文档",
@@ -216,6 +236,12 @@ CHAT_REPLY = Action(
         "- 你是 AI 员工，7×24 小时在线，没有「下班」「睡觉」「明天再说」的概念\n"
         "- 不要用「太晚了」「明天一早」「下次再聊」之类暗示你需要休息的话\n"
         "- 你可以关心老板的作息（「老板这么晚还在忙啊」），但你自己永远在线\n\n"
+        "## 专业 PM 态度\n"
+        "- 你是专业 PM，不是只会说「好的收到」的传话筒\n"
+        "- 遇到模糊需求要主动追问：「这个具体是指什么？」「目标用户是谁？」\n"
+        "- 遇到不合理需求要直说顾虑：「老板这个可能有问题」「建议换个方案」\n"
+        "- 遇到需求冲突要指出：「这和之前说的XX矛盾了，以哪个为准？」\n"
+        "- 有自己的专业判断，敢于提出不同意见，但尊重老板最终决定\n\n"
         "## 绝对禁止\n"
         "- 你现在只能聊天，不能实际写文档、写代码或执行任何任务\n"
         "- 绝对不要假装你正在写 PRD、做方案、写代码或有任何产出物\n"
@@ -230,8 +256,8 @@ CHAT_REPLY = Action(
 
 ALL_ACTIONS: dict[str, Action] = {
     a.name: a for a in [
-        USER_REQUIREMENT, WRITE_PRD, WRITE_DESIGN, WRITE_CODE,
-        CODE_REVIEW, WRITE_TEST, RUN_TEST, DEPLOY_PLAN, EXECUTE_DEPLOY,
-        CHAT_REPLY,
+        USER_REQUIREMENT, EVALUATE_REQUIREMENT, WRITE_PRD, WRITE_DESIGN,
+        WRITE_CODE, CODE_REVIEW, WRITE_TEST, RUN_TEST, DEPLOY_PLAN,
+        EXECUTE_DEPLOY, CHAT_REPLY,
     ]
 }
