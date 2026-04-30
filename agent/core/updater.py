@@ -53,6 +53,11 @@ def _git_proxy_args() -> list[str]:
 
 def get_current_version() -> str:
     """获取当前安装版本."""
+    return _get_installed_version() or "0.0.0"
+
+
+def _get_installed_version() -> str:
+    """从 pip metadata 获取已安装版本."""
     try:
         from importlib.metadata import version
         return version(PACKAGE_NAME)
@@ -69,7 +74,7 @@ def get_current_version() -> str:
                 return m.group(1)
     except Exception:
         logger.debug("pyproject.toml version lookup failed")
-    return "0.0.0"
+    return ""
 
 def compare_versions(current: str, latest: str) -> bool:
     """比较版本号，返回 True 表示有更新.
@@ -277,6 +282,7 @@ def _update_pip() -> bool:
     """通过 pip 更新（PyPI 用户）."""
     import sys as _sys
     in_venv = _sys.prefix != _sys.base_prefix
+    old_ver = get_current_version()
     try:
         pip_args = [_sys.executable, "-m", "pip", "install", "--upgrade", PACKAGE_NAME]
         if not in_venv:
@@ -285,8 +291,13 @@ def _update_pip() -> bool:
             pip_args, capture_output=True, text=True, timeout=120,
         )
         if result.returncode == 0:
-            logger.info("pip upgrade succeeded")
-            return True
+            # 验证版本确实变了，防止 "already satisfied" 误判
+            new_ver = _get_installed_version()
+            if new_ver and new_ver != old_ver:
+                logger.info("pip upgrade succeeded: %s → %s", old_ver, new_ver)
+                return True
+            logger.debug("pip returned 0 but version unchanged (%s), not a real upgrade", old_ver)
+            return False
         logger.warning("pip upgrade failed: %s", result.stderr[:300])
         if not in_venv:
             pip_user = [_sys.executable, "-m", "pip", "install", "--upgrade",
@@ -295,8 +306,12 @@ def _update_pip() -> bool:
                 pip_user, capture_output=True, text=True, timeout=120,
             )
             if result.returncode == 0:
-                logger.info("pip upgrade --user succeeded")
-                _check_user_bin_in_path()
+                new_ver = _get_installed_version()
+                if new_ver and new_ver != old_ver:
+                    logger.info("pip upgrade --user succeeded: %s → %s", old_ver, new_ver)
+                    _check_user_bin_in_path()
+                    return True
+                return False
                 return True
             logger.warning("pip upgrade --user also failed: %s", result.stderr[:300])
         return False

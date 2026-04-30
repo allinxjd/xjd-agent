@@ -385,7 +385,8 @@ def check_update(auto: bool = False):
                 console.print("  [dim]正在更新...[/dim]")
                 ok = asyncio.run(auto_update())
                 if ok:
-                    console.print("  [green]更新成功![/green]")
+                    from agent.core.updater import get_current_version as _gcv
+                    console.print(f"  [green]更新成功! 当前版本: {_gcv()}[/green]")
                     from cli.commands.service import is_service_installed, restart_service
                     if is_service_installed():
                         if restart_service():
