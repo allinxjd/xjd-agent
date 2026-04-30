@@ -1,0 +1,20 @@
+skill_id: team-standup
+name: 站会总结
+description: 收集团队成员进展识别阻塞项并生成站会报告
+trigger: 站会总结, standup, 每日站会, daily standup, 进展汇报
+category: productivity
+steps:
+  - description: 收集各成员昨日完成事项和今日计划
+  - description: 识别阻塞项和需要协调的事项
+  - description: 生成站会报告
+    tool: write_file
+    args_template: {path: "${REPORT_PATH}", content: "${STANDUP_REPORT}"}
+  - description: 标注风险项和需要跟进的 Action Items
+  - description: 输出格式化的站会纪要 (完成项 + 计划项 + 阻塞项 + Action Items)
+tags: [standup, meeting, team, progress, agile]
+examples:
+  - 帮我整理今天的站会内容
+  - generate a standup summary from these updates
+version: 1
+use_count: 0
+success_rate: 1.0

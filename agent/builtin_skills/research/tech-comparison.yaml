@@ -1,0 +1,22 @@
+skill_id: tech-comparison
+name: 技术选型对比
+description: 对比多个技术方案的优劣势并给出推荐
+trigger: 技术选型、对比、comparison、哪个好、选择
+category: web
+steps:
+  - description: 搜索各方案的最新信息
+    tool: web_search
+    args_template: {query: "{option_a} vs {option_b}"}
+  - description: 抓取官方文档和评测
+    tool: web_fetch
+    args_template: {url: "{doc_url}"}
+  - description: 从性能、生态、学习曲线、社区活跃度等维度对比
+  - description: 输出对比表格和推荐结论
+tags: [comparison, tech, selection, evaluation]
+examples:
+  - React 和 Vue 哪个好
+  - 对比 PostgreSQL 和 MySQL
+  - compare FastAPI vs Django
+version: 1
+use_count: 0
+success_rate: 1.0

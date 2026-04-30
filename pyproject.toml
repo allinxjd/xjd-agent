@@ -140,6 +140,7 @@ include = ["agent*", "gateway*", "cli*", "sdk*", "web*"]
 
 [tool.setuptools.package-data]
 web = ["static/*.html", "static/*.css", "static/*.js"]
+agent = ["builtin_skills/**/SKILL.md", "builtin_skills/**/*.md", "builtin_skills/**/*.yaml"]
 
 [tool.ruff]
 target-version = "py311"

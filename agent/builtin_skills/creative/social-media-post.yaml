@@ -1,0 +1,24 @@
+skill_id: social-media-post
+name: 社交媒体文案
+description: 根据主题和平台特点生成社交媒体文案
+trigger: 社交媒体文案, 写文案, 发帖, social media post, copywriting
+category: creative
+steps:
+  - description: 搜索目标平台的热门话题和文案风格
+    tool: web_search
+    args_template:
+      query: "{{ platform }} {{ topic }} 热门文案 风格"
+  - description: 根据平台特点确定文案风格（小红书种草、微博话题、抖音文案等）
+  - description: 撰写文案，包含标题、正文、标签和互动引导
+  - description: 优化文案的关键词和发布时间建议
+tags:
+  - creative
+  - social-media
+  - copywriting
+  - marketing
+examples:
+  - 帮我写一条小红书种草文案
+  - 生成一条产品发布的微博文案
+version: 1
+use_count: 0
+success_rate: 1.0

@@ -1,0 +1,33 @@
+skill_id: model-training
+name: 模型训练
+description: 完成数据预处理、模型训练和效果评估的全流程
+trigger: 模型训练, 训练模型, 机器学习, model training, train model, ML
+category: data-science
+steps:
+  - description: 数据预处理（缺失值处理、编码、标准化）
+    tool: execute_code
+    args_template:
+      language: python
+      code: "{{ preprocessing_code }}"
+  - description: 划分训练集和测试集，选择合适的模型
+  - description: 训练模型并调参
+    tool: execute_code
+    args_template:
+      language: python
+      code: "{{ training_code }}"
+  - description: 评估模型效果（准确率、F1、AUC 等指标）
+    tool: execute_code
+    args_template:
+      language: python
+      code: "{{ evaluation_code }}"
+tags:
+  - data-science
+  - machine-learning
+  - sklearn
+  - model
+examples:
+  - 帮我训练一个分类模型
+  - 用随机森林预测销售额
+version: 1
+use_count: 0
+success_rate: 1.0

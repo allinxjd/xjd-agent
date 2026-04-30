@@ -1,0 +1,26 @@
+skill_id: database-optimization
+name: 数据库优化
+description: 分析慢查询并给出索引优化和查询改写建议
+trigger: 数据库优化, 慢查询分析, database optimization, slow query, 索引优化
+category: devops
+steps:
+  - description: 查看慢查询日志或当前运行中的查询
+    tool: database_query
+    args_template: {query: "SHOW FULL PROCESSLIST"}
+  - description: 分析目标表的索引和表结构
+    tool: database_query
+    args_template: {query: "SHOW INDEX FROM ${TABLE_NAME}; SHOW CREATE TABLE ${TABLE_NAME}"}
+  - description: 对慢查询执行 EXPLAIN 分析执行计划
+    tool: database_query
+    args_template: {query: "EXPLAIN ${SLOW_QUERY}"}
+  - description: 根据执行计划给出索引建议和查询改写方案
+  - description: 执行优化操作 (添加索引/改写查询)
+    tool: run_terminal
+    args_template: {command: "${OPTIMIZATION_COMMAND}"}
+tags: [database, optimization, slow-query, index, mysql, mariadb]
+examples:
+  - 帮我分析慢查询并优化
+  - optimize database queries for the users table
+version: 1
+use_count: 0
+success_rate: 1.0

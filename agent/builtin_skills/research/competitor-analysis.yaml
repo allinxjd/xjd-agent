@@ -1,0 +1,27 @@
+skill_id: competitor-analysis
+name: 竞品分析
+description: 搜索并分析竞争对手的产品、定价和市场策略
+trigger: 竞品分析, 竞争对手, competitor analysis, competitive research
+category: research
+steps:
+  - description: 搜索目标行业的主要竞争对手信息
+    tool: web_search
+    args_template:
+      query: "{{ industry }} 竞品分析 主要玩家"
+  - description: 抓取竞品官网和产品页面的详细信息
+    tool: web_fetch
+    args_template:
+      url: "{{ competitor_url }}"
+  - description: 对比分析产品功能、定价策略和市场定位
+  - description: 总结竞争格局，输出 SWOT 分析和差异化建议
+tags:
+  - research
+  - competitor
+  - market
+  - strategy
+examples:
+  - 帮我分析 AI 绘图赛道的主要竞品
+  - 调研一下同类 SaaS 产品的定价策略
+version: 1
+use_count: 0
+success_rate: 1.0

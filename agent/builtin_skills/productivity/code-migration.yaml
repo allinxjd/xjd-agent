@@ -1,0 +1,22 @@
+skill_id: code-migration
+name: 代码迁移指南
+description: 分析框架或语言版本差异制定迁移计划并逐步执行
+trigger: 代码迁移, 框架升级, code migration, 版本升级, upgrade guide
+category: productivity
+steps:
+  - description: 分析当前代码库的框架版本和依赖
+    tool: read_file
+    args_template: {path: "${PROJECT_ROOT}/package.json"}
+  - description: 搜索需要迁移的 API 和废弃用法
+    tool: grep_search
+    args_template: {pattern: "${DEPRECATED_PATTERN}", path: "${PROJECT_ROOT}"}
+  - description: 对比新旧版本的 Breaking Changes
+  - description: 制定分步迁移计划 (按模块/按优先级)
+  - description: 输出迁移清单 (变更项 + 影响范围 + 迁移步骤 + 回滚方案)
+tags: [migration, upgrade, framework, version, refactoring]
+examples:
+  - 帮我制定 Next.js 升级迁移计划
+  - guide me through migrating from v14 to v15
+version: 1
+use_count: 0
+success_rate: 1.0

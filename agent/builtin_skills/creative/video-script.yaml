@@ -1,0 +1,25 @@
+skill_id: video-script
+name: 视频脚本
+description: 编写结构完整的视频拍摄脚本
+trigger: 视频脚本, 拍摄脚本, 短视频, video script, storyboard
+category: creative
+steps:
+  - description: 确定视频类型、时长和目标受众
+  - description: 设计视频结构（开头hook、主体内容、结尾CTA）
+  - description: 编写分镜脚本，包含画面描述、台词和时间标注
+  - description: 输出完整脚本文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ script_content }}"
+tags:
+  - creative
+  - video
+  - script
+  - storyboard
+examples:
+  - 帮我写一个产品介绍的短视频脚本
+  - 生成一个3分钟的教程视频分镜
+version: 1
+use_count: 0
+success_rate: 1.0

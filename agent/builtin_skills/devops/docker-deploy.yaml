@@ -1,0 +1,29 @@
+skill_id: docker-deploy
+name: Docker 部署
+description: 构建 Docker 镜像并部署到服务器
+trigger: docker 部署、容器化、build image、docker compose
+category: deploy
+steps:
+  - description: 检查项目是否有 Dockerfile
+    tool: list_directory
+    args_template: {path: "."}
+  - description: 读取 Dockerfile 和 docker-compose.yml
+    tool: read_file
+    args_template: {path: "Dockerfile"}
+  - description: 构建 Docker 镜像
+    tool: run_terminal
+    args_template: {command: "docker build -t {image_name} ."}
+  - description: 启动容器
+    tool: run_terminal
+    args_template: {command: "docker compose up -d"}
+  - description: 检查容器运行状态
+    tool: run_terminal
+    args_template: {command: "docker ps"}
+tags: [docker, deploy, container, compose]
+examples:
+  - 帮我 docker 部署
+  - 构建 Docker 镜像
+  - deploy with docker compose
+version: 1
+use_count: 0
+success_rate: 1.0

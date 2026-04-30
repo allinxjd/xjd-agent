@@ -1,0 +1,24 @@
+skill_id: code-review-pr
+name: PR 代码审查
+description: 对 Pull Request 进行逐文件代码审查并给出改进建议
+trigger: PR审查, 代码审查, review PR, code review PR, 审查合并请求
+category: software-development
+steps:
+  - description: 获取 PR 的 diff 变更列表
+    tool: git_command
+    args_template: {command: "git diff ${BASE_BRANCH}...${HEAD_BRANCH} --stat"}
+  - description: 逐文件查看变更详情
+    tool: git_command
+    args_template: {command: "git diff ${BASE_BRANCH}...${HEAD_BRANCH} -- ${FILE_PATH}"}
+  - description: 阅读关键变更文件的完整上下文
+    tool: read_file
+    args_template: {path: "${FILE_PATH}"}
+  - description: 检查代码风格、逻辑错误、安全隐患和性能问题
+  - description: 输出审查报告 (每个文件的问题列表 + 严重程度 + 修改建议)
+tags: [code-review, pull-request, git, quality]
+examples:
+  - 帮我审查这个 PR
+  - review the PR changes against main
+version: 1
+use_count: 0
+success_rate: 1.0

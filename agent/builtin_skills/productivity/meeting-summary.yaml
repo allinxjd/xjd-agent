@@ -1,0 +1,23 @@
+skill_id: meeting-summary
+name: 会议纪要
+description: 从会议记录中提取要点、决策和待办事项
+trigger: 会议纪要、meeting summary、会议记录、总结会议
+category: general
+steps:
+  - description: 读取会议记录或转录文本
+    tool: read_file
+    args_template: {path: "{meeting_file}"}
+  - description: 提取关键讨论点
+  - description: 整理决策事项和负责人
+  - description: 列出待办事项 (who + what + when)
+  - description: 输出结构化会议纪要
+    tool: write_file
+    args_template: {path: "{output_file}", content: "{summary}"}
+tags: [meeting, summary, notes, action-items]
+examples:
+  - 帮我整理会议纪要
+  - summarize this meeting
+  - 从这段记录中提取待办事项
+version: 1
+use_count: 0
+success_rate: 1.0

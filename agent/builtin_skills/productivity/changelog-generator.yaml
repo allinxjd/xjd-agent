@@ -1,0 +1,28 @@
+skill_id: changelog-generator
+name: 变更日志生成
+description: 从 Git 提交历史自动生成结构化变更日志
+trigger: 变更日志, changelog, 更新日志, release log, git log
+category: productivity
+steps:
+  - description: 获取指定范围的 Git 提交记录
+    tool: git_command
+    args_template:
+      command: "log --oneline --since='{{ since_date }}'"
+  - description: 按类型分类提交（feat、fix、refactor、docs等）
+  - description: 生成结构化的变更日志
+  - description: 输出变更日志文件
+    tool: write_file
+    args_template:
+      file_path: "{{ output_path }}"
+      content: "{{ changelog_content }}"
+tags:
+  - productivity
+  - changelog
+  - git
+  - release
+examples:
+  - 帮我生成这个月的变更日志
+  - 从 Git 记录生成 CHANGELOG
+version: 1
+use_count: 0
+success_rate: 1.0

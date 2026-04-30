@@ -1,0 +1,25 @@
+skill_id: refactor-code
+name: 代码重构
+description: 重构代码以提升可读性、可维护性和性能
+trigger: 重构、refactor、优化代码结构、clean up
+category: code
+steps:
+  - description: 读取目标代码
+    tool: read_file
+    args_template: {path: "{file_path}"}
+  - description: 识别代码坏味道 (重复代码、过长函数、过深嵌套等)
+  - description: 制定重构方案
+  - description: 逐步重构并保持功能不变
+    tool: edit_file
+    args_template: {path: "{file_path}", content: "{refactored}"}
+  - description: 运行测试确认无回归
+    tool: run_terminal
+    args_template: {command: "{test_command}"}
+tags: [refactor, clean, optimize, maintainability]
+examples:
+  - 帮我重构这个函数
+  - 这段代码太乱了，整理一下
+  - refactor this module
+version: 1
+use_count: 0
+success_rate: 1.0

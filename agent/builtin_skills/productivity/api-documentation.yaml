@@ -1,0 +1,24 @@
+skill_id: api-documentation
+name: API 文档生成
+description: 扫描 API 端点自动生成 OpenAPI 规范文档
+trigger: API文档, 接口文档, api documentation, 生成API文档, openapi
+category: productivity
+steps:
+  - description: 扫描项目中的 API 路由定义
+    tool: grep_search
+    args_template: {pattern: "(GET|POST|PUT|DELETE|PATCH)", path: "${API_DIR}"}
+  - description: 读取每个端点的请求参数和响应结构
+    tool: grep_search
+    args_template: {pattern: "(req\\.body|req\\.query|req\\.params|NextRequest)", path: "${API_DIR}"}
+  - description: 生成 OpenAPI/Swagger 规范文档
+    tool: write_file
+    args_template: {path: "${OUTPUT_PATH}", content: "${OPENAPI_SPEC}"}
+  - description: 补充接口说明、示例请求和错误码
+  - description: 输出完整 API 文档
+tags: [api, documentation, openapi, swagger, rest]
+examples:
+  - 帮我生成项目的 API 文档
+  - generate OpenAPI docs for all endpoints
+version: 1
+use_count: 0
+success_rate: 1.0

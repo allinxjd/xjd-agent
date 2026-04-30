@@ -478,8 +478,11 @@ class SkillManager:
         self._loaded = True
         logger.info("Loaded %d skills from %s", count, self._skills_dir)
 
-        # 3. 加载项目内置技能: <project>/skills/*/SKILL.md (不覆盖用户同名技能)
-        builtin_dir = Path(__file__).resolve().parent.parent.parent / "skills"
+        # 3. 加载包内内置技能: agent/builtin_skills/*/SKILL.md (不覆盖用户同名技能)
+        #    同时复制到用户目录，确保 WebUI 和 secrets 能正常工作
+        builtin_dir = Path(__file__).resolve().parent.parent / "builtin_skills"
+        if not builtin_dir.is_dir():
+            builtin_dir = Path(__file__).resolve().parent.parent.parent / "skills"
         if builtin_dir.is_dir():
             builtin_count = 0
             for skill_dir in builtin_dir.iterdir():
@@ -494,6 +497,10 @@ class SkillManager:
                     if skill.skill_id not in self._skills:
                         self._skills[skill.skill_id] = skill
                         builtin_count += 1
+                        dest = self._skills_dir / skill_dir.name
+                        if not dest.exists():
+                            import shutil
+                            shutil.copytree(skill_dir, dest)
                     elif skill.secrets and not self._skills[skill.skill_id].secrets:
                         self._skills[skill.skill_id].secrets = skill.secrets
                 except (OSError, yaml.YAMLError, ValueError) as e:
