@@ -313,7 +313,10 @@ class Company:
                 messages = await role._observe()
                 if not messages:
                     continue
-                user_msgs = [m for m in messages if m.sent_from not in self._env.roles]
+                user_msgs = [
+                    m for m in messages
+                    if m.cause_by == "HumanDirective" and m.sent_from not in self._env.roles
+                ]
                 if user_msgs:
                     self._pipeline_user_msgs.extend(user_msgs)
                     for m in user_msgs:
