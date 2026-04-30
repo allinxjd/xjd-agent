@@ -18,6 +18,7 @@ class CompanyEnvironment:
         self._roles: dict[str, CompanyRole] = {}
         self._message_log: list[CompanyMessage] = []
         self._feishu_bridge: Any = None
+        self._pipeline_user_queue: Optional[list[CompanyMessage]] = None
 
     def add_role(self, role: CompanyRole) -> None:
         self._roles[role.name] = role
@@ -38,10 +39,23 @@ class CompanyEnvironment:
         """发布消息到环境.
 
         路由规则：
-        1. send_to 非空 → 定向投递
-        2. send_to 空 → 广播到所有 watch_actions 匹配的角色
+        1. pipeline 运行中，HumanDirective 消息分流到 _pipeline_user_queue
+        2. send_to 非空 → 定向投递
+        3. send_to 空 → 广播到所有 watch_actions 匹配的角色
         """
         self._message_log.append(msg)
+        logger.info("消息: %s", msg.summary())
+
+        if (self._pipeline_user_queue is not None
+                and msg.cause_by == "HumanDirective"
+                and msg.sent_from not in self._roles):
+            self._pipeline_user_queue.append(msg)
+            if self._feishu_bridge:
+                try:
+                    await self._feishu_bridge.mirror_to_feishu(msg)
+                except Exception as e:
+                    logger.warning("飞书镜像失败: %s", e)
+            return
         logger.info("消息: %s", msg.summary())
 
         delivered = False

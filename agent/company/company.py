@@ -307,15 +307,10 @@ class Company:
         from agent.company.action import CHAT_REPLY
 
         if self._pipeline_running:
-            collected = []
-            pm_role = self._env.roles.get("PM")
-            if pm_role and pm_role.has_pending:
-                messages = await pm_role._observe()
-                for m in (messages or []):
-                    if m.cause_by == "HumanDirective" and m.sent_from not in self._env.roles:
-                        if m.content not in [c.content for c in collected]:
-                            collected.append(m)
-            if collected:
+            queue = self._env._pipeline_user_queue or []
+            if queue:
+                collected = list(queue)
+                queue.clear()
                 self._pipeline_user_msgs.extend(collected)
                 for m in collected:
                     self._standby_history.append((m.sent_from, m.content))
@@ -395,6 +390,7 @@ class Company:
                         status = "failed"
                     finally:
                         self._pipeline_running = False
+                        self._env._pipeline_user_queue = None
                         self._update_project_status(pdir, status)
                         done_msg = CompanyMessage(
                             content=f"老板，任务{'完成' if status == 'done' else '执行出错了'}！项目目录: {pdir}",
@@ -405,6 +401,7 @@ class Company:
 
                 import asyncio
                 self._pipeline_running = True
+                self._env._pipeline_user_queue = []
                 asyncio.create_task(_run_pipeline(enriched, project_dir))
                 continue
 
