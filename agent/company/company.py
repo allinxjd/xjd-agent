@@ -68,6 +68,7 @@ class Company:
         self._store.open()
         self._shared_memory = CompanyMemory(memory_manager)
         self._pipeline_running = False
+        self._pipeline_user_msgs: list[CompanyMessage] = []
 
         if feishu_chat_id and feishu_bots:
             self._feishu_bridge = FeishuBridge(
@@ -135,6 +136,18 @@ class Company:
 
         round_num = 0
         for round_num in range(1, max_rounds + 1):
+            if self._pipeline_user_msgs:
+                supplement = "\n".join(m.content for m in self._pipeline_user_msgs)
+                inject_msg = CompanyMessage(
+                    content=f"## 老板补充需求\n{supplement}",
+                    cause_by="HumanDirective",
+                    sent_from="Human",
+                    task_id=task.task_id,
+                )
+                await self._env.publish(inject_msg)
+                self._pipeline_user_msgs.clear()
+                logger.info("已注入用户补充需求到 pipeline")
+
             if self._env.is_idle():
                 logger.info("所有角色空闲，结束 (round %d)", round_num)
                 break
@@ -294,6 +307,23 @@ class Company:
         from agent.company.action import CHAT_REPLY
 
         if self._pipeline_running:
+            for role in self._env.roles.values():
+                if not role.has_pending:
+                    continue
+                messages = await role._observe()
+                if not messages:
+                    continue
+                user_msgs = [m for m in messages if m.sent_from not in self._env.roles]
+                if user_msgs:
+                    self._pipeline_user_msgs.extend(user_msgs)
+                    for m in user_msgs:
+                        self._standby_history.append((m.sent_from, m.content))
+                    ack = CompanyMessage(
+                        content="收到老板，已记录你的补充，会纳入当前开发中 🫡",
+                        cause_by="ChatReply",
+                        sent_from="PM",
+                    )
+                    await self._env.publish(ack)
             return
 
         for role in self._env.roles.values():

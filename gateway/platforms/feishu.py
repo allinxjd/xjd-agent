@@ -459,6 +459,15 @@ class FeishuAdapter(BasePlatformAdapter):
                     "content": [[{"tag": "text", "text": message.content}]],
                 }
             }, ensure_ascii=False)
+        elif message.message_type == MessageType.FILE:
+            file_data = message.media_data
+            filename = message.metadata.get("filename", "file")
+            if not file_data and message.media_url:
+                from pathlib import Path as _P
+                file_data = _P(message.media_url).read_bytes()
+            file_key = await self._upload_file(file_data, filename)
+            msg_type = "file"
+            content = json.dumps({"file_key": file_key})
         else:
             # 纯文本
             msg_type = "text"
@@ -533,6 +542,23 @@ class FeishuAdapter(BasePlatformAdapter):
         result = resp.json()
         if result.get("code") != 0:
             raise RuntimeError(f"飞书音频上传失败: {result.get('msg', '')}")
+        return result["data"]["file_key"]
+
+    async def _upload_file(self, file_data: bytes, filename: str, file_type: str = "stream") -> str:
+        """上传通用文件到飞书, 返回 file_key."""
+        client = await self._ensure_http_client()
+        token = await self._get_tenant_token()
+
+        import io
+        resp = await client.post(
+            "https://open.feishu.cn/open-apis/im/v1/files",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"file_type": file_type, "file_name": filename},
+            files={"file": (filename, io.BytesIO(file_data), "application/octet-stream")},
+        )
+        result = resp.json()
+        if result.get("code") != 0:
+            raise RuntimeError(f"飞书文件上传失败: {result.get('msg', '')}")
         return result["data"]["file_key"]
 
     # ── 安全: 签名验证 + 加密解密 + 事件去重 ──────────────

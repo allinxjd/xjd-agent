@@ -98,6 +98,19 @@ class FeishuBridge:
         self._adapters.clear()
         self._started = False
 
+    _DOC_ACTIONS = {"WritePRD", "WriteDesign", "CodeReview", "WriteTest", "DeployPlan"}
+
+    @staticmethod
+    def _action_to_filename(action_name: str) -> str:
+        mapping = {
+            "WritePRD": "PRD-需求文档.md",
+            "WriteDesign": "技术设计方案.md",
+            "CodeReview": "代码审查报告.md",
+            "WriteTest": "测试报告.md",
+            "DeployPlan": "部署方案.md",
+        }
+        return mapping.get(action_name, f"{action_name}.md")
+
     async def mirror_to_feishu(self, msg: CompanyMessage) -> None:
         """将 CompanyMessage 通过对应角色的 Bot 发送到飞书群."""
         if not self._started:
@@ -115,6 +128,31 @@ class FeishuBridge:
                 return
 
         content = msg.content
+
+        if msg.cause_by in self._DOC_ACTIONS and len(content) > 500:
+            filename = self._action_to_filename(msg.cause_by)
+            file_data = content.encode("utf-8")
+            try:
+                from gateway.platforms.base import OutgoingMessage, MessageType
+                out = OutgoingMessage(
+                    chat_id=self._group_chat_id,
+                    message_type=MessageType.FILE,
+                    media_data=file_data,
+                    metadata={"filename": filename},
+                )
+                await adapter.send_message(out)
+                summary = content[:200].replace("\n", " ").strip() + "..."
+                summary = self._strip_markdown(summary)
+                text_out = OutgoingMessage(
+                    chat_id=self._group_chat_id,
+                    content=f"{filename} 已发送，摘要：{summary}",
+                    message_type="text",
+                )
+                await adapter.send_message(text_out)
+                return
+            except Exception as e:
+                logger.warning("飞书文件发送失败 [%s]，降级为文本: %r", role_name, e)
+
         if len(content) > 3000:
             content = content[:3000] + "\n\n... (内容过长已截断)"
 
