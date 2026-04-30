@@ -383,7 +383,11 @@ def check_update(auto: bool = False):
         if has_update:
             if auto:
                 console.print("  [dim]正在更新...[/dim]")
-                ok = asyncio.run(auto_update())
+                ok = False
+                try:
+                    ok = asyncio.run(auto_update())
+                except Exception as e:
+                    console.print(f"  [yellow]auto_update 异常: {e}[/yellow]")
                 if ok:
                     from agent.core.updater import get_current_version as _gcv
                     console.print(f"  [green]更新成功! 当前版本: {_gcv()}[/green]")
@@ -396,13 +400,44 @@ def check_update(auto: bool = False):
                     else:
                         console.print("  [yellow]如果 gateway 正在运行，请手动重启: Ctrl+C 后重新运行 xjd-agent gateway[/yellow]")
                 else:
-                    console.print("  [red]自动更新失败[/red]")
-                    console.print("  [dim]手动更新: pip install --upgrade xjd-agent[/dim]")
+                    ok = _try_self_install_fallback()
+                    if ok:
+                        from agent.core.updater import get_current_version as _gcv
+                        console.print(f"  [green]更新成功! 当前版本: {_gcv()}[/green]")
+                    else:
+                        console.print("  [red]自动更新失败[/red]")
+                        console.print("  [dim]手动更新: cd <repo> && pip install . --break-system-packages[/dim]")
             else:
                 console.print("  运行 [bold]xjd-agent update --auto[/bold] 自动更新")
 
     except Exception as e:
         console.print(f"  [red]检查失败: {e}[/red]")
+        if auto:
+            _try_self_install_fallback()
+
+
+def _try_self_install_fallback() -> bool:
+    """Last resort: run self_install.py from the repo if it exists."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    try:
+        from agent.core.updater import _git_repo_dir
+        repo_dir = _git_repo_dir()
+        if not repo_dir:
+            return False
+        installer = Path(repo_dir) / "scripts" / "self_install.py"
+        if not installer.exists():
+            return False
+        console.print("  [dim]尝试 self_install.py 兜底...[/dim]")
+        r = subprocess.run(
+            [sys.executable, str(installer), "--cwd", str(repo_dir)],
+            timeout=600,
+        )
+        return r.returncode == 0
+    except Exception as e:
+        console.print(f"  [yellow]self_install 兜底也失败: {e}[/yellow]")
+        return False
 
 # ═══════════════════════════════════════════════════════════════════
 #  plugin 子命令
