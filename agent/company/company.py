@@ -290,20 +290,22 @@ class Company:
         from datetime import datetime
         from agent.company.action import CHAT_REPLY
 
-        for role in self._env.roles.values():
-            if not role.has_pending:
-                continue
-            messages = await role._observe()
-            if not messages:
-                continue
-
-            if self._pipeline_running:
+        if self._pipeline_running:
+            has_user_msg = any(r.has_pending for r in self._env.roles.values())
+            if has_user_msg:
                 auto_reply = CompanyMessage(
                     content="团队正在开发中，请稍候... 完成后会通知老板 🫡",
                     cause_by="StatusUpdate",
                     sent_from="PM",
                 )
                 await self._env.publish(auto_reply)
+            return
+
+        for role in self._env.roles.values():
+            if not role.has_pending:
+                continue
+            messages = await role._observe()
+            if not messages:
                 continue
 
             for m in messages:

@@ -215,7 +215,10 @@ async def company_standby(is_recovery: bool = False) -> str:
 
     asyncio.create_task(_run_standby())
 
-    await asyncio.sleep(3)
+    for _ in range(30):
+        await asyncio.sleep(1)
+        if company._feishu_bridge and company._feishu_bridge._started:
+            break
 
     # 持久化标志，gateway 重启后自动恢复
     try:

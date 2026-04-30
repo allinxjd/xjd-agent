@@ -47,6 +47,16 @@ class FeishuBridge:
     def set_environment(self, env: CompanyEnvironment) -> None:
         self._environment = env
 
+    @staticmethod
+    def _strip_markdown(text: str) -> str:
+        """Remove markdown formatting that Feishu text API doesn't support."""
+        import re
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        text = re.sub(r'\*(.+?)\*', r'\1', text)
+        text = re.sub(r'`(.+?)`', r'\1', text)
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+        return text
+
     async def start(self) -> None:
         """为每个角色创建 FeishuAdapter 实例."""
         from gateway.platforms.feishu import FeishuAdapter
@@ -108,6 +118,8 @@ class FeishuBridge:
         if len(content) > 3000:
             content = content[:3000] + "\n\n... (内容过长已截断)"
 
+        content = self._strip_markdown(content)
+
         try:
             from gateway.platforms.base import OutgoingMessage
             out = OutgoingMessage(
@@ -117,7 +129,7 @@ class FeishuBridge:
             )
             await adapter.send_message(out)
         except Exception as e:
-            logger.warning("飞书发送失败 [%s]: %s", role_name, e)
+            logger.warning("飞书发送失败 [%s]: %r", role_name, e)
 
     async def _on_feishu_message(self, platform_msg: Any) -> None:
         """飞书群消息 → CompanyMessage → publish 到 environment.
