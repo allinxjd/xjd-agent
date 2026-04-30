@@ -63,9 +63,11 @@ def _check_user_bin_in_path() -> None:
 def install(cwd: str) -> bool:
     """Try pip install with escalating fallbacks. Returns True on success."""
 
-    # Strategy 1: normal install (fast — only installs xjd-agent, reuses cached deps)
-    args = [*_pip_base_args(), "install", ".", *_mirror_args(), *_break_system_args()]
-    print("[self_install] Strategy 1: normal install")
+    # Strategy 1: force-reinstall without deps (fast ~3s — only reinstalls xjd-agent,
+    # deps already present from previous install)
+    args = [*_pip_base_args(), "install", "--force-reinstall", "--no-deps",
+            ".", *_mirror_args(), *_break_system_args()]
+    print("[self_install] Strategy 1: force-reinstall --no-deps")
     r = _run(args, cwd, timeout=120)
     if r.returncode == 0:
         print("[self_install] OK")
