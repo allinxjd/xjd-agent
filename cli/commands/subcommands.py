@@ -846,6 +846,44 @@ def company():
     pass
 
 
+def _build_company_router(config):
+    """构建 ModelRouter，复用 chat 命令的初始化逻辑."""
+    from agent.core.model_router import ModelRouter, build_credential_manager_from_config
+    from agent.providers.openai_provider import OpenAIProvider
+    from agent.providers.base import ProviderType
+
+    cred_mgr = build_credential_manager_from_config(config)
+    router = ModelRouter(credential_manager=cred_mgr)
+
+    primary = config.model.primary
+    if not primary.provider or not primary.api_key:
+        console.print("[red]未配置模型，请先运行 xjd-agent setup[/red]")
+        return None
+
+    provider = OpenAIProvider(
+        provider_type=ProviderType(primary.provider),
+        api_key=primary.api_key,
+        base_url=primary.base_url or None,
+    )
+    router.register_provider(provider)
+    router.set_primary(primary.provider, primary.model)
+
+    if config.model.cheap:
+        cheap = config.model.cheap
+        if cheap.provider == primary.provider:
+            router.set_cheap(cheap.provider, cheap.model)
+        elif cheap.api_key:
+            cheap_prov = OpenAIProvider(
+                provider_type=ProviderType(cheap.provider),
+                api_key=cheap.api_key,
+                base_url=cheap.base_url or None,
+            )
+            router.register_provider(cheap_prov)
+            router.set_cheap(cheap.provider, cheap.model)
+
+    return router
+
+
 def _load_feishu_config(config):
     """从 config.yaml 加载飞书配置."""
     from agent.company.feishu_bridge import FeishuBotConfig
@@ -878,14 +916,17 @@ def _load_feishu_config(config):
 def company_run(requirement: str, max_rounds: int, feishu: bool):
     """执行任务（自动编排）."""
     from agent.core.config import Config
-    from agent.providers.model_router import ModelRouter
     from agent.tools.registry import ToolRegistry
     from agent.tools.builtin import register_builtin_tools
     from agent.company import Company
     from agent.company.roles import create_default_team
 
     config = Config.load()
-    router = ModelRouter(config)
+    config.apply_env_overrides()
+    router = _build_company_router(config)
+    if not router:
+        return
+
     registry = ToolRegistry()
     register_builtin_tools(registry)
 
@@ -924,14 +965,17 @@ def company_run(requirement: str, max_rounds: int, feishu: bool):
 def company_interactive(requirement: str, feishu: bool):
     """交互模式（可随时干预）."""
     from agent.core.config import Config
-    from agent.providers.model_router import ModelRouter
     from agent.tools.registry import ToolRegistry
     from agent.tools.builtin import register_builtin_tools
     from agent.company import Company
     from agent.company.roles import create_default_team
 
     config = Config.load()
-    router = ModelRouter(config)
+    config.apply_env_overrides()
+    router = _build_company_router(config)
+    if not router:
+        return
+
     registry = ToolRegistry()
     register_builtin_tools(registry)
 

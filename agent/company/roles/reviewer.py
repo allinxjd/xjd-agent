@@ -13,7 +13,7 @@ def create_reviewer() -> CompanyRole:
         backstory="安全背景的高级工程师，审查过上千个 PR，对注入和逻辑漏洞零容忍。",
         watch_actions=["WriteCode"],
         actions=[CODE_REVIEW],
-        tools_filter=["code", "file"],
+        tools_filter=[],
         karpathy_constraints=[
             "Surgical Changes: 检查 diff 每行是否追溯到需求，拒绝无关改动",
             "Goal-Driven: 明确 APPROVED 或 REJECTED，给出具体修改意见",

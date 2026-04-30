@@ -13,7 +13,7 @@ def create_pm() -> CompanyRole:
         backstory="10年产品经验，熟悉敏捷开发流程，善于平衡用户需求和技术可行性。",
         watch_actions=["UserRequirement", "HumanDirective"],
         actions=[WRITE_PRD, WRITE_DESIGN],
-        tools_filter=["web", "file"],
+        tools_filter=[],
         karpathy_constraints=[
             "Think Before Coding: 动手前先列出所有假设和疑问",
             "Goal-Driven: PRD 必须包含可验证的验收标准",

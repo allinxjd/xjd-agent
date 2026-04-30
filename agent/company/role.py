@@ -35,6 +35,7 @@ class CompanyRole(AgentRole):
     _state: int = field(default=-1, repr=False)
     _runtime_router: Any = field(default=None, repr=False)
     _runtime_registry: Any = field(default=None, repr=False)
+    _processed_msg_ids: set = field(default_factory=set, repr=False)
 
     def put_message(self, msg: CompanyMessage) -> None:
         self._inbox.append(msg)
@@ -44,12 +45,15 @@ class CompanyRole(AgentRole):
         return len(self._inbox) > 0
 
     async def _observe(self) -> list[CompanyMessage]:
-        """从 inbox 读取消息，按 watch_actions 过滤."""
+        """从 inbox 读取消息，按 watch_actions 过滤，跳过已处理的."""
         matched = []
         remaining = []
         for msg in self._inbox:
+            if msg.msg_id in self._processed_msg_ids:
+                continue
             if msg.send_to == self.name or msg.cause_by in self.watch_actions:
                 matched.append(msg)
+                self._processed_msg_ids.add(msg.msg_id)
             else:
                 remaining.append(msg)
         self._inbox = remaining

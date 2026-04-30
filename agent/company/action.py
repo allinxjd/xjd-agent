@@ -22,7 +22,7 @@ class Action:
     name: str
     description: str = ""
     prompt_template: str = ""
-    tools_filter: list[str] = field(default_factory=list)
+    tools_filter: Optional[list[str]] = None
 
     async def run(self, context: str, role: CompanyRole) -> str:
         from agent.core.engine import AgentEngine
@@ -33,21 +33,22 @@ class Action:
         engine = AgentEngine(
             router=role._runtime_router,
             system_prompt=system_prompt,
-            max_tool_rounds=role.max_tool_rounds,
+            max_tool_rounds=1 if self.tools_filter is not None and not self.tools_filter else role.max_tool_rounds,
         )
 
         registry = role._runtime_registry
         if registry:
-            filters = self.tools_filter or role.tools_filter
-            for tool in registry.list_tools():
-                if not filters or tool.category in filters:
-                    engine.register_tool(
-                        name=tool.name,
-                        description=tool.description,
-                        parameters=tool.parameters,
-                        handler=tool.handler,
-                        requires_approval=tool.requires_approval,
-                    )
+            filters = self.tools_filter if self.tools_filter is not None else role.tools_filter
+            if filters:
+                for tool in registry.list_tools():
+                    if tool.category in filters:
+                        engine.register_tool(
+                            name=tool.name,
+                            description=tool.description,
+                            parameters=tool.parameters,
+                            handler=tool.handler,
+                            requires_approval=tool.requires_approval,
+                        )
 
         result = await engine.run_turn(prompt)
         return result.content if hasattr(result, "content") else str(result)
@@ -64,24 +65,26 @@ WRITE_PRD = Action(
     name="WritePRD",
     description="编写产品需求文档",
     prompt_template=(
-        "根据以下需求，编写一份简洁的产品需求文档 (PRD)。\n"
+        "你的任务：根据需求编写一份简洁的 PRD（产品需求文档）。\n"
+        "直接输出 PRD 文本，不要使用任何工具，不要读取文件。\n"
         "必须包含：功能描述、用户故事、验收标准（可测试的条件列表）。\n"
         "不要过度设计，只覆盖需求本身。\n\n"
         "## 需求\n{context}"
     ),
-    tools_filter=["web", "file"],
+    tools_filter=[],
 )
 
 WRITE_DESIGN = Action(
     name="WriteDesign",
     description="编写技术设计方案",
     prompt_template=(
-        "根据以下 PRD，编写技术设计方案。\n"
+        "你的任务：根据 PRD 编写技术设计方案。\n"
+        "直接输出设计文本，不要使用任何工具，不要读取文件。\n"
         "包含：技术选型、文件结构、核心接口、数据流。\n"
         "保持简洁，不要过度抽象。\n\n"
         "## PRD\n{context}"
     ),
-    tools_filter=["web", "file"],
+    tools_filter=[],
 )
 
 WRITE_CODE = Action(
@@ -100,15 +103,17 @@ CODE_REVIEW = Action(
     name="CodeReview",
     description="代码审查",
     prompt_template=(
-        "审查以下代码变更。检查：\n"
-        "1. 每行改动是否都能追溯到需求（不允许顺手改无关代码）\n"
+        "你的任务：审查以下代码变更。\n"
+        "直接输出审查意见，不要使用任何工具。\n"
+        "检查：\n"
+        "1. 每行改动是否都能追溯到需求\n"
         "2. 安全漏洞（注入、XSS、硬编码密钥等）\n"
         "3. 逻辑正确性\n"
         "4. 是否过度工程\n\n"
-        "输出格式：APPROVED 或 REJECTED + 具体修改意见。\n\n"
+        "最后一行必须是：APPROVED 或 REJECTED + 原因。\n\n"
         "## 代码变更\n{context}"
     ),
-    tools_filter=["code", "file"],
+    tools_filter=[],
 )
 
 WRITE_TEST = Action(
@@ -138,11 +143,13 @@ DEPLOY_PLAN = Action(
     name="DeployPlan",
     description="制定部署方案",
     prompt_template=(
-        "根据以下测试通过的代码，制定部署方案。\n"
-        "必须包含：部署步骤、回滚方案、健康检查命令。\n\n"
+        "你的任务：根据测试结果，制定部署方案。\n"
+        "直接输出部署方案文本，不要执行任何命令。\n"
+        "如果这是一个简单的本地脚本（不需要部署到服务器），直接回复：无需部署。\n"
+        "否则包含：部署步骤、回滚方案、健康检查命令。\n\n"
         "## 部署信息\n{context}"
     ),
-    tools_filter=["system", "terminal"],
+    tools_filter=[],
 )
 
 EXECUTE_DEPLOY = Action(
@@ -150,7 +157,8 @@ EXECUTE_DEPLOY = Action(
     description="执行部署",
     prompt_template=(
         "按照以下部署方案执行部署。\n"
-        "每一步执行后验证，失败则回滚。\n\n"
+        "如果方案说「无需部署」，直接回复：部署完成（无需操作）。\n"
+        "否则每一步执行后验证，失败则回滚。\n\n"
         "## 部署方案\n{context}"
     ),
     tools_filter=["system", "terminal", "network"],

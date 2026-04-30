@@ -179,7 +179,7 @@ class Company:
         self._store.finish_run(run_id, task.status, round_num, task.result[:500] if task.result else "")
         return task.result
 
-    async def _continue_run(self, task: CompanyTask, remaining_rounds: int, requirement: str = "") -> str:
+    async def _continue_run(self, task: CompanyTask, requirement: str, remaining_rounds: int) -> str:
         """验证失败后继续执行剩余轮次."""
         for round_num in range(1, remaining_rounds + 1):
             if self._env.is_idle():
