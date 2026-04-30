@@ -146,6 +146,7 @@ class AgentEngine:
         registry: Optional[Any] = None,
         pin_manager: Optional[Any] = None,
         grounding_tracker: Optional[Any] = None,
+        skip_grounding: bool = False,
     ) -> None:
         self._router = router
         self._system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
@@ -153,6 +154,7 @@ class AgentEngine:
         self._max_context_tokens = max_context_tokens
         self._pin_manager = pin_manager
         self._grounding_tracker = grounding_tracker
+        self._skip_grounding = skip_grounding
 
         # 外部工具注册表 (ToolRegistry)
         self._registry = registry
@@ -550,7 +552,7 @@ class AgentEngine:
                 _grounded = None
                 _grounding_score = -1.0
                 _hard_blocked = False
-                if total_tool_calls > 0:
+                if total_tool_calls > 0 and not self._skip_grounding:
                     from agent.tools.tool_selector import is_factual_query as _is_fq
                     from agent.tools.tool_selector import is_factual_by_tools
 

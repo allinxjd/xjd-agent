@@ -64,6 +64,7 @@ class Action:
             router=role._runtime_router,
             system_prompt=system_prompt,
             max_tool_rounds=1 if self.tools_filter is not None and not self.tools_filter else role.max_tool_rounds,
+            skip_grounding=True,
         )
 
         registry = role._runtime_registry
