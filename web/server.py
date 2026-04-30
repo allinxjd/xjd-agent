@@ -240,6 +240,11 @@ class WebServer:
         app.router.add_get("/api/admin/skill-secrets/{skill_id}", self._skill_secrets_get)
         app.router.add_post("/api/admin/skill-secrets/{skill_id}", self._skill_secrets_save)
 
+        # AI Company API
+        app.router.add_post("/api/company/standby", self._company_standby)
+        app.router.add_post("/api/company/stop", self._company_stop)
+        app.router.add_get("/api/company/status", self._company_status)
+
         # Skill Admin API
         app.router.add_get("/api/admin/skills", self._skill_list)
         app.router.add_post("/api/admin/skills", self._skill_create)
@@ -2429,6 +2434,46 @@ class WebServer:
         if ok:
             return web.json_response({"status": "triggered", "task_id": task_id})
         return web.json_response({"error": "task not found or already running"}, status=404)
+
+    # ── AI Company API ──────────────────────────────────────────
+
+    async def _company_standby(self, request):
+        """POST /api/company/standby — start AI Company standby mode."""
+        from aiohttp import web
+        try:
+            from agent.tools.company_tools import company_standby
+            result = await company_standby()
+            is_error = result.startswith("Error")
+            return web.json_response({
+                "ok": not is_error,
+                "message": result,
+            }, status=400 if is_error else 200)
+        except Exception as e:
+            logger.error("company_standby failed: %s", e, exc_info=True)
+            return web.json_response({"ok": False, "message": str(e)}, status=500)
+
+    async def _company_stop(self, request):
+        """POST /api/company/stop — stop AI Company standby mode."""
+        from aiohttp import web
+        try:
+            from agent.tools.company_tools import company_stop_standby
+            result = await company_stop_standby()
+            return web.json_response({"ok": True, "message": result})
+        except Exception as e:
+            return web.json_response({"ok": False, "message": str(e)}, status=500)
+
+    async def _company_status(self, request):
+        """GET /api/company/status — check AI Company standby status."""
+        from aiohttp import web
+        from agent.tools.company_tools import _standby_company
+        running = _standby_company is not None
+        bot_count = 0
+        if running and _standby_company._feishu_bridge:
+            bot_count = len(_standby_company._feishu_bridge._adapters)
+        return web.json_response({
+            "running": running,
+            "bot_count": bot_count,
+        })
 
     async def _skill_secrets_list(self, request):
         """GET /api/admin/skill-secrets — 列出所有有 secrets 声明的技能."""
