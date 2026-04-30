@@ -857,6 +857,20 @@ class SkillManager:
         # ── L1: Learn Cache — 精确 prompt 命中 (跨 session 持久化) ──
         cached_id = self._learn_cache.get(norm)
         if cached_id and cached_id in active_skills:
+            # L1→L2 校验: 如果用户消息包含另一个技能的全名，优先用 L2
+            l2_override = None
+            for s in active_skills.values():
+                if s.name and s.name in user_message and s.skill_id != cached_id:
+                    l2_override = s
+                    break
+            if l2_override:
+                logger.info("L1 cache hit %s overridden by L2 exact_name: %s",
+                            active_skills[cached_id].name, l2_override.name)
+                del self._learn_cache[norm]
+                self._save_learn_cache()
+                self._last_matched_skill = l2_override.skill_id
+                self._last_match_time = time.time()
+                return l2_override
             skill = active_skills[cached_id]
             logger.info("L1 learn_cache hit: %s", skill.name)
             self._last_matched_skill = cached_id

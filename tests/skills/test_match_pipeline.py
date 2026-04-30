@@ -161,6 +161,22 @@ async def test_l1_learn_cache_persistence(tmp_skills_dir):
     assert m2._learn_cache.get("test prompt") == "skill-x"
 
 
+@pytest.mark.asyncio
+async def test_l1_overridden_by_l2_exact_name(manager):
+    """L1 缓存命中但用户消息包含另一个技能全名时，L2 应优先."""
+    news = _make_skill("daily-news", "每日AI资讯推送", "AI资讯 AI新闻")
+    company = _make_skill("ai-company", "AI Company", "AI公司 待命")
+    manager._skills = {"daily-news": news, "ai-company": company}
+    manager._loaded = True
+
+    manager.record_match("启动 AI Company 待命模式", "daily-news")
+
+    result = await manager.match_skill("启动 AI Company 待命模式")
+    assert result is not None
+    assert result.skill_id == "ai-company"
+    assert manager._learn_cache.get("启动 ai company 待命模式") is None
+
+
 # ── L5: Prior-Intent Inheritance ──
 
 @pytest.mark.asyncio
