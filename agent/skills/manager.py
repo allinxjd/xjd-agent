@@ -479,31 +479,35 @@ class SkillManager:
         logger.info("Loaded %d skills from %s", count, self._skills_dir)
 
         # 3. 加载内置技能 (不覆盖用户同名技能)
-        #    查找顺序: 包内 builtin_skills → git 仓库 skills/ → 常见安装路径
-        #    找到后自动复制到用户目录，确保 WebUI 和 secrets 正常工作
+        #    找到后复制到用户目录，确保 WebUI 和 secrets 正常工作
         builtin_dir = self._find_builtin_skills_dir()
-        if builtin_dir.is_dir():
+        if builtin_dir and builtin_dir.is_dir():
             builtin_count = 0
-            for skill_dir in builtin_dir.iterdir():
-                if not skill_dir.is_dir():
+            for skill_src in builtin_dir.iterdir():
+                if not skill_src.is_dir():
                     continue
-                skill_md = skill_dir / "SKILL.md"
+                skill_md = skill_src / "SKILL.md"
                 if not skill_md.exists():
                     continue
                 try:
                     text = skill_md.read_text(encoding="utf-8")
-                    skill = Skill.from_skill_md(text, skill_id=skill_dir.name)
-                    if skill.skill_id not in self._skills:
-                        self._skills[skill.skill_id] = skill
-                        builtin_count += 1
-                        dest = self._skills_dir / skill_dir.name
-                        if not dest.exists():
-                            import shutil
-                            shutil.copytree(skill_dir, dest)
-                    elif skill.secrets and not self._skills[skill.skill_id].secrets:
-                        self._skills[skill.skill_id].secrets = skill.secrets
+                    skill = Skill.from_skill_md(text, skill_id=skill_src.name)
                 except (OSError, yaml.YAMLError, ValueError) as e:
-                    logger.warning("Failed to load builtin skill %s: %s", skill_dir.name, e)
+                    logger.warning("Failed to parse builtin skill %s: %s", skill_src.name, e)
+                    continue
+                dest = self._skills_dir / skill_src.name
+                if not dest.exists():
+                    try:
+                        shutil.copytree(skill_src, dest)
+                    except OSError as e:
+                        logger.warning("Failed to copy builtin skill %s to %s: %s",
+                                       skill_src.name, dest, e)
+                        continue
+                if skill.skill_id not in self._skills:
+                    self._skills[skill.skill_id] = skill
+                    builtin_count += 1
+                elif skill.secrets and not self._skills[skill.skill_id].secrets:
+                    self._skills[skill.skill_id].secrets = skill.secrets
             if builtin_count:
                 logger.info("Loaded %d builtin skills from %s", builtin_count, builtin_dir)
                 count += builtin_count
