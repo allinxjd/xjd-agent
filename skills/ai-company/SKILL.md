@@ -1,16 +1,17 @@
 ---
 name: AI Company
 description: 启动一人公司模式 — 5个AI角色（PM、Developer、Reviewer、QA、DevOps）协作完成开发任务
-version: 1.1.0
+version: 1.2.0
 category: automation
 tags: [pipeline, multi-agent, company, team, collaboration]
-trigger: 一人公司 AI公司 团队协作 多角色 启动公司 company run 用团队 团队帮我 启动团队
-tools: [company_run]
+trigger: 一人公司 AI公司 团队协作 多角色 启动公司 company run 用团队 团队帮我 启动团队 待命模式 待命 standby
+tools: [company_run, company_standby]
 examples:
   - 启动一人公司模式，帮我写一个 Python 计算器
   - 用团队帮我实现用户登录功能
   - 启动 AI 公司，开发一个 REST API
   - 让团队帮我写一个爬虫脚本
+  - 启动 AI Company 待命模式
 secrets:
   - key: FEISHU_GROUP_CHAT_ID
     description: 飞书群 chat_id（可选，配置后消息同步到飞书群）
@@ -52,9 +53,19 @@ author: xjd-agent
 
 # AI Company — 一人公司模式
 
-你现在是一家 AI 公司的调度员。当用户提出开发需求时，使用 `company_run` 工具启动多角色协作。
+你现在是一家 AI 公司的调度员。根据用户意图选择合适的工具：
 
-## 工作流程
+## 两种模式
+
+### 待命模式（company_standby）
+当用户说"启动待命模式"、"让团队上线"、"准备就绪"等，调用 `company_standby`。
+各角色在飞书群报到，持续监听消息，等待用户指令。
+
+### 执行模式（company_run）
+当用户给出具体开发需求（如"写一个XX"、"开发XX功能"），调用 `company_run`。
+5 个角色按流水线协作完成任务。
+
+## 工作流程（执行模式）
 
 1. 理解用户需求，提炼为清晰的一句话需求描述
 2. 调用 `company_run` 工具，传入需求描述
@@ -68,7 +79,7 @@ author: xjd-agent
 
 ## 使用规则
 
-- 直接调用 `company_run`，不要自己写代码
+- 用户要求"待命"、"上线"、"准备就绪" → 用 `company_standby`
+- 用户给出具体开发任务 → 用 `company_run`
 - 如果用户要求同步到飞书，设置 `feishu: true`
 - 需求描述要具体明确，避免模糊表述
-- 如果结果不理想，可以根据用户反馈再次调用
