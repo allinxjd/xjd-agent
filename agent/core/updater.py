@@ -334,7 +334,24 @@ def _update_git() -> bool:
         if result.returncode == 0:
             pulled = True
         else:
-            logger.warning("git pull failed: %s", result.stderr)
+            logger.warning("git pull --ff-only failed: %s", result.stderr.strip())
+            logger.info("Trying git fetch + reset to handle force-push...")
+            fetch = subprocess.run(
+                ["git", "-c", "http.version=HTTP/1.1", *proxy_args, "fetch", "origin", "main"],
+                capture_output=True, text=True, timeout=60, cwd=repo,
+            )
+            if fetch.returncode == 0:
+                reset = subprocess.run(
+                    ["git", "reset", "--hard", "origin/main"],
+                    capture_output=True, text=True, timeout=30, cwd=repo,
+                )
+                if reset.returncode == 0:
+                    pulled = True
+                    logger.info("git fetch + reset succeeded")
+                else:
+                    logger.warning("git reset failed: %s", reset.stderr.strip())
+            else:
+                logger.warning("git fetch failed: %s", fetch.stderr.strip())
     except subprocess.TimeoutExpired:
         logger.warning("git pull timed out")
     except Exception as e:

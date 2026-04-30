@@ -139,7 +139,7 @@ xjdagent = "cli.main:main"
 include = ["agent*", "gateway*", "cli*", "sdk*", "web*"]
 
 [tool.setuptools.package-data]
-web = ["static/*.html", "static/*.css", "static/*.js"]
+web = ["static/*.html", "static/*.css", "static/*.js", "static/*.png"]
 agent = ["builtin_skills/**/SKILL.md", "builtin_skills/**/*.md", "builtin_skills/**/*.yaml"]
 
 [tool.ruff]
