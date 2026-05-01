@@ -766,7 +766,11 @@ class Company:
                     status = r.get("status", "unknown")
                     summary = r.get("result_summary", "")[:100]
                     lines.append(f"- [{status}] {req}" + (f" → {summary}" if summary else ""))
-                parts.append("## 最近任务记录（来自数据库，真实数据）\n" + "\n".join(lines))
+                parts.append(
+                    "## 最近任务记录（流水线执行历史）\n"
+                    "注意：done 表示流水线跑完，不代表服务正在运行。你无法确认服务是否在线。\n"
+                    + "\n".join(lines)
+                )
         except Exception as e:
             logger.debug("读取任务记录失败: %s", e)
 
@@ -783,7 +787,7 @@ class Company:
                         req = meta.get("requirement", "")[:80]
                         proj_lines.append(f"- [{status}] {pd.name}: {req}")
                 if proj_lines:
-                    parts.append("## 最近项目目录\n" + "\n".join(proj_lines))
+                    parts.append("## 最近项目目录（代码产出，不代表服务在运行）\n" + "\n".join(proj_lines))
         except Exception as e:
             logger.debug("读取项目目录失败: %s", e)
 
