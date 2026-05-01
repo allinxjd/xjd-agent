@@ -265,6 +265,10 @@ QUICK_TASK = Action(
         "使用工具完成任务，执行完如实汇报结果。\n"
         "如果执行失败，如实说明原因，不要编造成功。\n"
         "如果任务超出你的能力范围（比如没有服务器权限），诚实说明。\n\n"
+        "## 效率要求\n"
+        "- 你只有 12 轮工具调用机会，必须高效利用\n"
+        "- 优先行动，少读文件。找到入口文件就直接启动，不要逐个读源码\n"
+        "- 多个独立操作可以合并到一条命令（用 && 连接）\n\n"
         "## 启动服务的注意事项\n"
         "- 启动任何长期运行的服务必须用 nohup 或后台方式：`nohup python3 app.py > /tmp/app.log 2>&1 &`\n"
         "- 启动后必须等几秒（sleep 3），然后用 curl 验证服务确实在运行\n"
@@ -276,7 +280,7 @@ QUICK_TASK = Action(
         "{context}"
     ),
     tools_filter=["code", "file", "terminal", "system"],
-    max_tool_rounds=8,
+    max_tool_rounds=12,
 )
 
 ALL_ACTIONS: dict[str, Action] = {

@@ -796,6 +796,26 @@ class AgentEngine:
 
             round_idx += 1
 
+            if round_idx >= max_safety_rounds:
+                response = await self._router.complete_with_failover(
+                    messages=full_messages,
+                    user_message="",
+                    tools=None,
+                    temperature=temperature,
+                )
+                total_usage.prompt_tokens += response.usage.prompt_tokens
+                total_usage.completion_tokens += response.usage.completion_tokens
+                total_usage.total_tokens += response.usage.total_tokens
+                final_content = response.content or "已达到安全轮次上限，当前进度已保存。如需继续，请再次发送指令。"
+                messages.append(Message(role="assistant", content=final_content))
+                self._active_skill = None
+                return TurnResult(
+                    content=final_content,
+                    tool_calls_made=total_tool_calls,
+                    total_usage=total_usage,
+                    duration_ms=(time.time() - start_time) * 1000,
+                )
+
         # 安全上限 (正常不应到达 — 模型会在任务完成时停止调用工具)
         final_content = "已达到安全轮次上限，当前进度已保存。如需继续，请再次发送指令。"
         messages.append(Message(role="assistant", content=final_content))
