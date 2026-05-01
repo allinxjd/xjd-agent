@@ -183,8 +183,10 @@ class Company:
     def _collect_project_files(project_dir: Path, max_chars: int = 30000) -> str:
         """收集项目 src/ 目录下的所有代码文件内容，用于 Reviewer 审查."""
         src_dir = project_dir / "src"
-        if not src_dir.exists():
+        has_src_files = src_dir.exists() and any(f.is_file() for f in src_dir.rglob("*"))
+        if not has_src_files:
             src_dir = project_dir
+        logger.debug("_collect_project_files scanning: %s", src_dir)
         files_content = []
         total = 0
         for f in sorted(src_dir.rglob("*")):
@@ -210,6 +212,7 @@ class Company:
                 break
             files_content.append(entry)
             total += len(entry)
+        logger.debug("_collect_project_files found %d file entries", len(files_content))
         return "".join(files_content) if files_content else ""
 
     async def run(self, requirement: str, max_rounds: int = 20) -> str:
@@ -560,6 +563,7 @@ class Company:
         "加入", "加个", "加一个", "增加", "添加", "新增",
         "改一下", "改个", "修改", "优化一下", "优化个",
         "支持一下", "支持个", "接入",
+        "开发", "开发个",
     ]
 
     def _detect_task_intent(self, text: str) -> bool:
