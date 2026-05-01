@@ -53,6 +53,7 @@ class Action:
     description: str = ""
     prompt_template: str = ""
     tools_filter: Optional[list[str]] = None
+    max_tool_rounds: Optional[int] = None
 
     async def run(self, context: str, role: CompanyRole) -> str:
         from agent.core.engine import AgentEngine
@@ -63,7 +64,7 @@ class Action:
         engine = AgentEngine(
             router=role._runtime_router,
             system_prompt=system_prompt,
-            max_tool_rounds=1 if self.tools_filter is not None and not self.tools_filter else role.max_tool_rounds,
+            max_tool_rounds=self.max_tool_rounds or (1 if self.tools_filter is not None and not self.tools_filter else role.max_tool_rounds),
             skip_grounding=True,
         )
 
@@ -263,11 +264,17 @@ QUICK_TASK = Action(
         "老板给了一个操作指令，你需要直接执行（不是写新功能，不需要走开发流程）。\n"
         "使用工具完成任务，执行完如实汇报结果。\n"
         "如果执行失败，如实说明原因，不要编造成功。\n"
-        "如果任务超出你的能力范围（比如没有服务器权限），诚实说明。\n"
+        "如果任务超出你的能力范围（比如没有服务器权限），诚实说明。\n\n"
+        "## 启动服务的注意事项\n"
+        "- 启动任何长期运行的服务必须用 nohup 或后台方式：`nohup python app.py > /tmp/app.log 2>&1 &`\n"
+        "- 启动后必须等几秒，然后用 curl 验证服务确实在运行\n"
+        "- 如果 curl 失败，查看日志找原因，不要谎报成功\n"
+        "- 汇报时给出实际的访问地址和验证结果\n\n"
         "回复简短，群聊风格，汇报关键结果即可。\n\n"
         "{context}"
     ),
     tools_filter=["code", "file", "terminal", "system"],
+    max_tool_rounds=8,
 )
 
 ALL_ACTIONS: dict[str, Action] = {
