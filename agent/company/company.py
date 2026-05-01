@@ -309,6 +309,26 @@ class Company:
                         if code_listing:
                             result_msg.content += f"\n\n## 代码文件内容\n{code_listing}"
                             logger.info("已附加项目代码文件到 WriteCode 输出 (%d 字符)", len(code_listing))
+                        else:
+                            role_rework = rework_counts.get("Developer_empty", 0)
+                            if role_rework < max_rework:
+                                rework_counts["Developer_empty"] = role_rework + 1
+                                logger.warning("WriteCode 完成但 src/ 为空，要求 Developer 重写 (第%d次)", role_rework + 1)
+                                stages_done["Code"] = False
+                                rework_msg = CompanyMessage(
+                                    content=(
+                                        "你的代码没有写入文件系统！src/ 目录是空的。\n"
+                                        "你必须使用 write_file 工具将每个文件写入磁盘。\n"
+                                        "不要只在回复文本中输出代码，那样文件不会被创建。\n"
+                                        "请重新执行，确保每个文件都通过 write_file 写入。"
+                                    ),
+                                    cause_by="WriteDesign",
+                                    sent_from="Reviewer",
+                                    send_to="Developer",
+                                    task_id=task.task_id,
+                                )
+                                await self._env.publish(rework_msg)
+                                continue
                 elif result_msg.cause_by == "CodeReview":
                     if self._has_requirement_issue(result_msg.content):
                         logger.warning("[Reviewer] 输出表示输入有问题，回退给 PM")
