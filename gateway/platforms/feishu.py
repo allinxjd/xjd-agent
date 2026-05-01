@@ -145,25 +145,41 @@ class FeishuAdapter(BasePlatformAdapter):
         json_data: Optional[dict] = None,
         raw_response: bool = False,
     ) -> Any:
-        """发送飞书 API 请求 (使用共享 HTTP 客户端)."""
-        client = await self._ensure_http_client()
-        token = await self._get_tenant_token()
+        """发送飞书 API 请求 (使用共享 HTTP 客户端, ConnectError 自动重建连接池)."""
+        import httpx as _httpx
+
         url = f"https://open.feishu.cn/open-apis{path}"
+        last_error = None
 
-        resp = await client.request(
-            method,
-            url,
-            json=json_data,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json; charset=utf-8",
-            },
-        )
+        for attempt in range(2):
+            client = await self._ensure_http_client()
+            token = await self._get_tenant_token()
+            try:
+                resp = await client.request(
+                    method,
+                    url,
+                    json=json_data,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json; charset=utf-8",
+                    },
+                )
+                if raw_response:
+                    return resp
+                return resp.json()
+            except _httpx.ConnectError as e:
+                last_error = e
+                logger.warning("飞书 API 连接失败 (attempt %d/2), 重建连接池: %s", attempt + 1, e)
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
+                self._http_client = None
+                if attempt < 1:
+                    import asyncio
+                    await asyncio.sleep(1.0)
 
-        if raw_response:
-            return resp
-
-        return resp.json()
+        raise last_error  # type: ignore
 
     async def _download_resource(
         self, message_id: str, file_key: str, resource_type: str = "file",
