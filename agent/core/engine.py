@@ -26,6 +26,17 @@ from agent.providers.base import (
 
 logger = logging.getLogger(__name__)
 
+
+def _clean_model_artifacts(text: str) -> str:
+    """Strip LLM-specific markup (DeepSeek DSML, tool call tags) from model output."""
+    import re
+    text = re.sub(r'<\uff5c\uff5cDSML\uff5c\uff5c[^>]*>.*?(?:</\uff5c\uff5cDSML\uff5c\uff5c[^>]*>|$)', '', text, flags=re.DOTALL)
+    text = re.sub(r'<\uff5c\uff5c[^>]*>', '', text)
+    text = re.sub(r'</?antml:[a-z_]+[^>]*>', '', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 # 默认 system prompt
 DEFAULT_SYSTEM_PROMPT = """你是小巨蛋智能体 (XJD Agent)，一个强大的个人 AI 助手。
 
@@ -807,6 +818,7 @@ class AgentEngine:
                 total_usage.completion_tokens += response.usage.completion_tokens
                 total_usage.total_tokens += response.usage.total_tokens
                 final_content = response.content or "已达到安全轮次上限，当前进度已保存。如需继续，请再次发送指令。"
+                final_content = _clean_model_artifacts(final_content)
                 messages.append(Message(role="assistant", content=final_content))
                 self._active_skill = None
                 return TurnResult(
