@@ -466,7 +466,7 @@ class AgentEngine:
 
         # Agentic loop — 无硬性轮次上限，跑到模型返回最终回复为止
         # 安全兜底: deadline (外层 timeout) + token 上限 + 绝对轮次上限
-        max_safety_rounds = 50
+        max_safety_rounds = min(effective_max_rounds, 50)
         round_idx = 0
         _grounding_retried = False
         while round_idx < max_safety_rounds:
