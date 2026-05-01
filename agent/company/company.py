@@ -203,12 +203,20 @@ class Company:
         import uuid
         run_id = uuid.uuid4().hex[:8]
 
+        req_for_display = requirement
+        if "## 用户最新需求\n" in requirement:
+            req_for_display = requirement.split("## 用户最新需求\n", 1)[1].split("\n\n")[0].strip()
+        elif "## 项目工作目录\n" in requirement:
+            parts = requirement.split("\n\n", 2)
+            req_for_display = parts[-1][:200] if len(parts) > 2 else requirement[:200]
+        req_for_display = req_for_display[:200]
+
         task = CompanyTask(
-            title=requirement[:60],
+            title=req_for_display[:60],
             description=requirement,
         )
         await self.assign(task)
-        self._store.save_run(run_id, requirement, task.task_id)
+        self._store.save_run(run_id, req_for_display, task.task_id)
 
         round_num = 0
         rework_count = 0
@@ -877,7 +885,7 @@ class Company:
                 break
         first_line = clean.split('\n')[0].strip()
         first_sentence = re.split(r'[。！？\n，,的]', first_line)[0].strip()
-        return first_sentence[:20] if first_sentence else text.strip()[:20]
+        return first_sentence[:10] if first_sentence else text.strip()[:10]
 
     def _create_project_workspace(self, requirement: str) -> Path:
         """根据需求创建项目工作目录，返回项目路径."""
@@ -887,7 +895,7 @@ class Company:
 
         date_str = datetime.now().strftime("%Y%m%d")
         short_name = self._extract_project_name(requirement)
-        slug = short_name[:15].strip()
+        slug = short_name[:10].strip()
         slug = re.sub(r'[^\w\u4e00-\u9fff-]', '_', slug)
         slug = re.sub(r'_+', '_', slug).strip('_') or "project"
         project_name = f"{date_str}-{slug}"
