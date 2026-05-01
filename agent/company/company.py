@@ -363,10 +363,16 @@ class Company:
                         task_id=task.task_id,
                     )
                     await self._env.publish(escalate)
+                    try:
+                        idx = self._PIPELINE_ORDER.index(role.name)
+                        next_role = self._PIPELINE_ORDER[idx + 1] if idx + 1 < len(self._PIPELINE_ORDER) else None
+                    except ValueError:
+                        next_role = None
                     forced_approve = CompanyMessage(
                         content=f"APPROVED（已达最大返工次数，强制通过）\n\n原始审查意见：{result_msg.content[:500]}",
                         cause_by=result_msg.cause_by,
                         sent_from=role.name,
+                        send_to=next_role or "",
                         task_id=task.task_id,
                     )
                     await self._env.publish(forced_approve)
