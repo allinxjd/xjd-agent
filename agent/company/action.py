@@ -256,10 +256,24 @@ CHAT_REPLY = Action(
     tools_filter=[],
 )
 
+QUICK_TASK = Action(
+    name="QuickTask",
+    description="快速执行用户指定的操作任务（不走完整流水线）",
+    prompt_template=(
+        "老板给了一个操作指令，你需要直接执行（不是写新功能，不需要走开发流程）。\n"
+        "使用工具完成任务，执行完如实汇报结果。\n"
+        "如果执行失败，如实说明原因，不要编造成功。\n"
+        "如果任务超出你的能力范围（比如没有服务器权限），诚实说明。\n"
+        "回复简短，群聊风格，汇报关键结果即可。\n\n"
+        "{context}"
+    ),
+    tools_filter=["code", "file", "terminal", "system"],
+)
+
 ALL_ACTIONS: dict[str, Action] = {
     a.name: a for a in [
         USER_REQUIREMENT, EVALUATE_REQUIREMENT, WRITE_PRD, WRITE_DESIGN,
         WRITE_CODE, CODE_REVIEW, WRITE_TEST, RUN_TEST, DEPLOY_PLAN,
-        EXECUTE_DEPLOY, CHAT_REPLY,
+        EXECUTE_DEPLOY, CHAT_REPLY, QUICK_TASK,
     ]
 }

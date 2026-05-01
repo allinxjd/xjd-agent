@@ -522,6 +522,61 @@ class Company:
         """检测用户消息是否包含开发任务意图."""
         return any(kw in text for kw in self._TASK_TRIGGER_KEYWORDS)
 
+    _QUICK_TASK_KEYWORDS: dict[str, list[str]] = {
+        "Developer": [
+            "跑起来", "启动项目", "启动服务", "运行项目", "运行服务",
+            "执行一下", "调试", "查日志", "看日志", "查看日志",
+            "修个bug", "修一下bug", "改个bug", "热修复",
+        ],
+        "DevOps": [
+            "部署一下", "上线", "发布一下", "重启服务", "重启一下",
+            "回滚", "检查服务", "健康检查", "看看服务",
+        ],
+        "QA": [
+            "跑测试", "跑一下测试", "测试一下", "回归测试", "运行测试",
+        ],
+    }
+
+    def _detect_quick_task(self, messages: list[CompanyMessage]) -> Optional[str]:
+        """检测操作类意图，返回目标角色名或 None."""
+        text = " ".join(m.content for m in messages)
+        for role_name, keywords in self._QUICK_TASK_KEYWORDS.items():
+            if any(kw in text for kw in keywords):
+                return role_name
+        return None
+
+    async def _handle_quick_task(self, role_name: str, messages: list[CompanyMessage]) -> None:
+        """快速任务：直接派给角色带工具执行，不走完整 pipeline."""
+        from agent.company.action import QUICK_TASK
+
+        role = self._env.roles.get(role_name)
+        if not role:
+            role = self._env.roles.get("Developer")
+        if not role:
+            return
+
+        task_text = "\n".join(m.content for m in messages)
+        history_lines = [f"[{s}]: {c}" for s, c in self._standby_history[-10:]]
+        project_status = self._build_project_status()
+        context = (
+            f"{project_status}"
+            f"## 对话上下文\n" + "\n".join(history_lines) +
+            f"\n\n## 用户指令\n{task_text}"
+        )
+
+        ack = CompanyMessage(
+            content=f"收到老板，让{role.name}马上处理 🫡",
+            cause_by="ChatReply",
+            sent_from="PM",
+        )
+        await self._env.publish(ack)
+        self._standby_history.append(("PM", ack.content))
+
+        result_msg = await role._act(QUICK_TASK, context)
+        self._standby_history.append((role.name, result_msg.content))
+        self._store.save_message(result_msg)
+        await self._env.publish(result_msg)
+
     _ROLE_NICK_MAP: dict[str, list[str]] = {
         "PM": ["诸葛", "小诸葛", "PM", "pm", "产品", "产品经理"],
         "Developer": ["小码", "码农", "开发", "程序员", "developer"],
@@ -680,6 +735,11 @@ class Company:
             self._pipeline_running = True
             self._env._pipeline_user_queue = []
             asyncio.create_task(_run_pipeline(enriched, project_dir))
+            return
+
+        quick_target = self._detect_quick_task(user_messages)
+        if quick_target:
+            await self._handle_quick_task(quick_target, user_messages)
             return
 
         if len(self._standby_history) > 40:
