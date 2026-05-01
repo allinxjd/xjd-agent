@@ -325,7 +325,7 @@ def register_builtin_tools(registry: "ToolRegistry") -> None:
             },
         },
         handler=list_directory,
-        category="file",
+        category="explore",
     )
 
     from agent.tools.company_tools import register_company_tools
