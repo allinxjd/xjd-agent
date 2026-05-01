@@ -533,12 +533,12 @@ class Company:
 
     _QUICK_TASK_KEYWORDS: dict[str, list[str]] = {
         "Developer": [
-            "跑起来", "启动项目", "启动服务", "运行项目", "运行服务",
+            "跑起来", "启动项目", "启动服务", "运行项目", "运行服务", "启动",
             "执行一下", "调试", "查日志", "看日志", "查看日志",
             "修个bug", "修一下bug", "改个bug", "热修复",
         ],
         "DevOps": [
-            "部署一下", "上线", "发布一下", "重启服务", "重启一下",
+            "部署", "上线", "发布", "重启服务", "重启一下",
             "回滚", "检查服务", "健康检查", "看看服务",
         ],
         "QA": [
@@ -546,12 +546,28 @@ class Company:
         ],
     }
 
+    _QUICK_TASK_CONTEXT_KEYWORDS: list[str] = [
+        "直接处理", "直接搞", "马上处理", "马上搞", "去处理", "去搞",
+        "你来处理", "你处理", "你搞", "你去",
+    ]
+
     def _detect_quick_task(self, messages: list[CompanyMessage]) -> Optional[str]:
         """检测操作类意图，返回目标角色名或 None."""
         text = " ".join(m.content for m in messages)
         for role_name, keywords in self._QUICK_TASK_KEYWORDS.items():
             if any(kw in text for kw in keywords):
                 return role_name
+
+        for m in messages:
+            if m.send_to and m.send_to in self._env.roles:
+                if any(kw in m.content for kw in self._QUICK_TASK_CONTEXT_KEYWORDS):
+                    return m.send_to
+                recent = [c for _, c in self._standby_history[-5:]]
+                recent_text = " ".join(recent)
+                for keywords in self._QUICK_TASK_KEYWORDS.values():
+                    if any(kw in recent_text for kw in keywords):
+                        return m.send_to
+
         return None
 
     async def _handle_quick_task(self, role_name: str, messages: list[CompanyMessage]) -> None:
