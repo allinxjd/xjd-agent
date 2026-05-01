@@ -122,6 +122,18 @@ class Company:
         await self._env.publish(msg)
         self._store.save_message(msg)
 
+    _REQUIREMENT_ISSUE_INDICATORS = [
+        "需求不清", "需求缺失", "需求为空", "没有需求", "需求有问题",
+        "设计与需求下面是空", "没提供需求", "没有 diff", "没有可审查",
+        "交白卷", "无从审起", "没有变更集",
+        "安全轮次上限", "如需继续",
+    ]
+
+    def _has_requirement_issue(self, content: str) -> bool:
+        """检测角色输出是否表示需求/输入有问题."""
+        short = content[:500]
+        return any(ind in short for ind in self._REQUIREMENT_ISSUE_INDICATORS)
+
     _NO_WORK_INDICATORS = [
         "没有需求", "没有任务", "没需求", "没任务", "nothing to do",
         "没有新的", "没有待处理", "无需操作", "无需部署",
@@ -266,6 +278,22 @@ class Company:
                     stages_done["PRD"] = True
                     stages_done["Design"] = True
                 elif result_msg.cause_by == "WriteCode":
+                    if self._has_requirement_issue(result_msg.content):
+                        logger.warning("[Developer] 输出有需求问题，回退给 PM 核实")
+                        self._clear_downstream_inboxes(role.name)
+                        escalate = CompanyMessage(
+                            content=(
+                                f"## Developer 反馈需求问题\n{result_msg.content[:1000]}\n\n"
+                                "请检查对话记录，确认需求是否清晰。如果需求没有跟老板确认过，"
+                                "请在群里向老板核实后，重新整理需求和设计方案给 Developer。"
+                            ),
+                            cause_by="WriteCode",
+                            sent_from="Developer",
+                            send_to="PM",
+                            task_id=task.task_id,
+                        )
+                        await self._env.publish(escalate)
+                        continue
                     stages_done["Code"] = True
                     workspace = self._extract_workspace_from_requirement(requirement)
                     if workspace:
@@ -274,6 +302,23 @@ class Company:
                             result_msg.content += f"\n\n## 代码文件内容\n{code_listing}"
                             logger.info("已附加项目代码文件到 WriteCode 输出 (%d 字符)", len(code_listing))
                 elif result_msg.cause_by == "CodeReview":
+                    if self._has_requirement_issue(result_msg.content):
+                        logger.warning("[Reviewer] 输出表示输入有问题，回退给 PM")
+                        self._clear_downstream_inboxes(role.name)
+                        escalate = CompanyMessage(
+                            content=(
+                                f"## Reviewer 反馈输入问题\n{result_msg.content[:1000]}\n\n"
+                                "Reviewer 无法审查，因为收到的代码变更内容不完整。"
+                                "请检查 Developer 的产出是否正常，必要时重新安排开发。"
+                            ),
+                            cause_by="CodeReview",
+                            sent_from="Reviewer",
+                            send_to="PM",
+                            task_id=task.task_id,
+                        )
+                        await self._env.publish(escalate)
+                        stages_done["Code"] = False
+                        continue
                     if self._is_review_approved(result_msg.content):
                         stages_done["Review"] = True
                 elif result_msg.cause_by in ("WriteTest", "RunTest"):
