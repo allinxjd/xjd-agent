@@ -147,6 +147,45 @@ class Company:
         has_fail = any(ind in content for ind in fail_indicators)
         return has_pass and not has_fail
 
+    @staticmethod
+    def _extract_workspace_from_requirement(requirement: str) -> Optional[Path]:
+        """从需求文本中提取项目工作目录路径."""
+        import re
+        match = re.search(r"## 项目工作目录\n(.+)\n", requirement)
+        if match:
+            p = Path(match.group(1).strip())
+            if p.exists():
+                return p
+        return None
+
+    @staticmethod
+    def _collect_project_files(project_dir: Path, max_chars: int = 8000) -> str:
+        """收集项目 src/ 目录下的所有代码文件内容，用于 Reviewer 审查."""
+        src_dir = project_dir / "src"
+        if not src_dir.exists():
+            src_dir = project_dir
+        files_content = []
+        total = 0
+        for f in sorted(src_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            if f.suffix in (".pyc", ".class", ".o", ".so", ".db", ".sqlite"):
+                continue
+            if f.name.startswith("."):
+                continue
+            try:
+                text = f.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+            rel = f.relative_to(project_dir)
+            entry = f"\n### {rel}\n```\n{text}\n```\n"
+            if total + len(entry) > max_chars:
+                files_content.append(f"\n... (更多文件省略，共 {total} 字符)")
+                break
+            files_content.append(entry)
+            total += len(entry)
+        return "".join(files_content) if files_content else ""
+
     async def run(self, requirement: str, max_rounds: int = 20) -> str:
         """主循环：发布需求 → 角色轮转 → 直到空闲或达到上限."""
         import uuid
@@ -224,9 +263,16 @@ class Company:
                 if result_msg.cause_by == "WritePRD":
                     stages_done["PRD"] = True
                 elif result_msg.cause_by == "WriteDesign":
+                    stages_done["PRD"] = True
                     stages_done["Design"] = True
                 elif result_msg.cause_by == "WriteCode":
                     stages_done["Code"] = True
+                    workspace = self._extract_workspace_from_requirement(requirement)
+                    if workspace:
+                        code_listing = self._collect_project_files(workspace)
+                        if code_listing:
+                            result_msg.content += f"\n\n## 代码文件内容\n{code_listing}"
+                            logger.info("已附加项目代码文件到 WriteCode 输出 (%d 字符)", len(code_listing))
                 elif result_msg.cause_by == "CodeReview":
                     if self._is_review_approved(result_msg.content):
                         stages_done["Review"] = True
@@ -711,8 +757,8 @@ class Company:
                 clean = clean[len(prefix):]
                 break
         first_line = clean.split('\n')[0].strip()
-        first_sentence = re.split(r'[。！？\n]', first_line)[0].strip()
-        return first_sentence[:30] if first_sentence else text.strip()[:30]
+        first_sentence = re.split(r'[。！？\n，,的]', first_line)[0].strip()
+        return first_sentence[:20] if first_sentence else text.strip()[:20]
 
     def _create_project_workspace(self, requirement: str) -> Path:
         """根据需求创建项目工作目录，返回项目路径."""
@@ -722,7 +768,7 @@ class Company:
 
         date_str = datetime.now().strftime("%Y%m%d")
         short_name = self._extract_project_name(requirement)
-        slug = short_name[:20].strip()
+        slug = short_name[:15].strip()
         slug = re.sub(r'[^\w\u4e00-\u9fff-]', '_', slug)
         slug = re.sub(r'_+', '_', slug).strip('_') or "project"
         project_name = f"{date_str}-{slug}"
