@@ -123,14 +123,17 @@ class Company:
         self._store.save_message(msg)
 
     _NO_WORK_INDICATORS = [
-        "没有需求", "没有任务", "没需求", "没任务", "无需", "nothing to do",
-        "没有新的", "没有待处理", "已经完成", "无需操作", "无需部署",
+        "没有需求", "没有任务", "没需求", "没任务", "nothing to do",
+        "没有新的", "没有待处理", "无需操作", "无需部署",
         "没有代码变更", "没有变更", "没有改动",
+        "部署完成（无需操作）",
     ]
 
     def _is_no_work(self, content: str) -> bool:
-        """检测角色输出是否表示无实际工作可做."""
-        short = content[:200].lower()
+        """检测角色输出是否表示无实际工作可做。长内容不可能是空转。"""
+        if len(content) > 300:
+            return False
+        short = content[:200]
         return any(ind in short for ind in self._NO_WORK_INDICATORS)
 
     def _is_review_approved(self, content: str) -> bool:
@@ -506,40 +509,16 @@ class Company:
         if not messages:
             return
 
-        directed_msgs: dict[str, list[CompanyMessage]] = {}
-        pm_msgs: list[CompanyMessage] = []
         for m in messages:
             self._standby_history.append((m.sent_from, m.content))
             self._store.save_message(m)
-            target = self._route_message_to_role(m)
-            if target and target != "PM" and target in self._env.roles:
-                directed_msgs.setdefault(target, []).append(m)
-            else:
-                pm_msgs.append(m)
-
-        for target_name, msgs in directed_msgs.items():
-            target_role = self._env.roles.get(target_name)
-            if not target_role:
-                continue
-            now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
-            history_lines = [f"[{s}]: {c}" for s, c in self._standby_history[-10:]]
-            chat_context = f"当前时间: {now}\n\n## 对话记录\n" + "\n".join(history_lines)
-            reply_msg = await target_role._act(CHAT_REPLY, chat_context)
-            self._standby_history.append((target_role.name, reply_msg.content))
-            self._store.save_message(reply_msg)
-            await self._env.publish(reply_msg)
-
-        if not pm_msgs:
-            return
-        messages = pm_msgs
-
-        if len(self._standby_history) > 40:
-            self._standby_history = self._standby_history[-30:]
 
         user_messages = [m for m in messages if m.sent_from not in self._env.roles]
         has_task_intent = any(self._detect_task_intent(m.content) for m in user_messages)
 
         if has_task_intent:
+            if len(self._standby_history) > 40:
+                self._standby_history = self._standby_history[-30:]
             task_context = "\n\n".join(m.content for m in user_messages)
             history_context = "\n".join(
                 f"[{s}]: {c}" for s, c in self._standby_history[-10:]
@@ -602,17 +581,27 @@ class Company:
             asyncio.create_task(_run_pipeline(enriched, project_dir))
             return
 
+        if len(self._standby_history) > 40:
+            self._standby_history = self._standby_history[-30:]
+
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
-        history_lines = [f"[{s}]: {c}" for s, c in self._standby_history]
+        history_lines = [f"[{s}]: {c}" for s, c in self._standby_history[-10:]]
         history_text = "\n".join(history_lines)
         project_status = self._build_project_status()
 
-        context = f"当前时间: {now}\n\n{project_status}## 对话记录\n{history_text}"
-        reply_msg = await pm_role._act(CHAT_REPLY, context)
-
-        self._standby_history.append((pm_role.name, reply_msg.content))
-        self._store.save_message(reply_msg)
-        await self._env.publish(reply_msg)
+        responded_roles: set[str] = set()
+        for m in user_messages:
+            target = self._route_message_to_role(m)
+            role_name = target if target and target in self._env.roles else "PM"
+            if role_name in responded_roles:
+                continue
+            responded_roles.add(role_name)
+            responder = self._env.roles.get(role_name) or pm_role
+            chat_context = f"当前时间: {now}\n\n{project_status}## 对话记录\n{history_text}"
+            reply_msg = await responder._act(CHAT_REPLY, chat_context)
+            self._standby_history.append((responder.name, reply_msg.content))
+            self._store.save_message(reply_msg)
+            await self._env.publish(reply_msg)
 
     def stop_standby(self) -> None:
         """外部调用停止待命模式."""
@@ -708,10 +697,12 @@ class Company:
         clean = text.strip()
         clean = re.sub(
             r'^(老板[，,]?\s*|核心需求[是：:]*\s*|我(们)?理解[的是：:]*\s*|'
+            r'需求[我们]*[看理解说][^，,。\n]*[，,。：:]\s*|'
             r'需求(是|已|很)[^，,。\n]*[，,。]\s*|'
             r'[^，,。\n]*已经对齐了[，,]\s*|'
             r'基于[^，,。\n]*[，,]\s*|'
-            r'[^，,。\n]*核心需求是[，,：:]*\s*)',
+            r'[^，,。\n]*核心需求是[，,：:]*\s*|'
+            r'核心是[，,：:]*\s*)',
             '', clean,
         )
         clean = re.sub(r'^[，,：:。\s]+', '', clean)
