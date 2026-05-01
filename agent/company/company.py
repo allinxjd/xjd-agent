@@ -124,15 +124,24 @@ class Company:
 
     _REQUIREMENT_ISSUE_INDICATORS = [
         "需求不清", "需求缺失", "需求为空", "没有需求", "需求有问题",
-        "设计与需求下面是空", "没提供需求", "没有 diff", "没有可审查",
-        "交白卷", "无从审起", "没有变更集",
+        "设计与需求下面是空", "没提供需求",
         "安全轮次上限", "如需继续",
+    ]
+
+    _CODE_INCOMPLETE_INDICATORS = [
+        "没有 diff", "没有可审查", "交白卷", "无从审起", "没有变更集",
+        "没有代码", "看不到代码", "拿不到", "没有提供",
     ]
 
     def _has_requirement_issue(self, content: str) -> bool:
         """检测角色输出是否表示需求/输入有问题."""
         short = content[:500]
         return any(ind in short for ind in self._REQUIREMENT_ISSUE_INDICATORS)
+
+    def _has_code_incomplete(self, content: str) -> bool:
+        """检测 Reviewer 输出是否表示代码不完整."""
+        short = content[:500]
+        return any(ind in short for ind in self._CODE_INCOMPLETE_INDICATORS)
 
     _NO_WORK_INDICATORS = [
         "没有需求", "没有任务", "没需求", "没任务", "nothing to do",
@@ -171,7 +180,7 @@ class Company:
         return None
 
     @staticmethod
-    def _collect_project_files(project_dir: Path, max_chars: int = 8000) -> str:
+    def _collect_project_files(project_dir: Path, max_chars: int = 30000) -> str:
         """收集项目 src/ 目录下的所有代码文件内容，用于 Reviewer 审查."""
         src_dir = project_dir / "src"
         if not src_dir.exists():
@@ -192,7 +201,12 @@ class Company:
             rel = f.relative_to(project_dir)
             entry = f"\n### {rel}\n```\n{text}\n```\n"
             if total + len(entry) > max_chars:
-                files_content.append(f"\n... (更多文件省略，共 {total} 字符)")
+                remaining = max_chars - total
+                if remaining > 200:
+                    truncated = text[:remaining - 100]
+                    entry = f"\n### {rel}\n```\n{truncated}\n... (文件过长已截断)\n```\n"
+                    files_content.append(entry)
+                files_content.append(f"\n... (更多文件省略)")
                 break
             files_content.append(entry)
             total += len(entry)
@@ -330,22 +344,23 @@ class Company:
                                 await self._env.publish(rework_msg)
                                 continue
                 elif result_msg.cause_by == "CodeReview":
-                    if self._has_requirement_issue(result_msg.content):
-                        logger.warning("[Reviewer] 输出表示输入有问题，回退给 PM")
+                    if self._has_code_incomplete(result_msg.content) or self._has_requirement_issue(result_msg.content):
+                        logger.warning("[Reviewer] 输出表示代码不完整，回退给 Developer 重写")
                         self._clear_downstream_inboxes(role.name)
-                        escalate = CompanyMessage(
+                        stages_done["Code"] = False
+                        stages_done["Review"] = False
+                        rework_msg = CompanyMessage(
                             content=(
-                                f"## Reviewer 反馈输入问题\n{result_msg.content[:1000]}\n\n"
-                                "Reviewer 无法审查，因为收到的代码变更内容不完整。"
-                                "请检查 Developer 的产出是否正常，必要时重新安排开发。"
+                                "Reviewer 反馈：收到的代码不完整，无法审查。\n"
+                                "请确保所有代码文件都通过 write_file 写入了 src/ 目录。\n"
+                                "重新执行 WriteCode，确保每个文件都落盘。"
                             ),
-                            cause_by="CodeReview",
+                            cause_by="WriteDesign",
                             sent_from="Reviewer",
-                            send_to="PM",
+                            send_to="Developer",
                             task_id=task.task_id,
                         )
-                        await self._env.publish(escalate)
-                        stages_done["Code"] = False
+                        await self._env.publish(rework_msg)
                         continue
                     if self._is_review_approved(result_msg.content):
                         stages_done["Review"] = True
