@@ -808,6 +808,11 @@ class AgentEngine:
             round_idx += 1
 
             if round_idx >= max_safety_rounds:
+                summary_prompt = Message(
+                    role="user",
+                    content="工具调用轮次已用完。请用纯文本总结你刚才做了什么、当前状态、以及结果。不要调用任何工具。",
+                )
+                full_messages.append(summary_prompt)
                 response = await self._router.complete_with_failover(
                     messages=full_messages,
                     user_message="",
@@ -817,8 +822,10 @@ class AgentEngine:
                 total_usage.prompt_tokens += response.usage.prompt_tokens
                 total_usage.completion_tokens += response.usage.completion_tokens
                 total_usage.total_tokens += response.usage.total_tokens
-                final_content = response.content or "已达到安全轮次上限，当前进度已保存。如需继续，请再次发送指令。"
+                final_content = response.content or ""
                 final_content = _clean_model_artifacts(final_content)
+                if not final_content:
+                    final_content = "已达到工具轮次上限，当前进度已保存。如需继续，请再次发送指令。"
                 messages.append(Message(role="assistant", content=final_content))
                 self._active_skill = None
                 return TurnResult(

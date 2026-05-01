@@ -570,6 +570,20 @@ class Company:
 
         return None
 
+    def _find_latest_project_dir(self) -> Optional[Path]:
+        """找到最近的项目工作目录."""
+        try:
+            projects_dir = get_projects_dir()
+            if not projects_dir.exists():
+                return None
+            dirs = sorted(projects_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+            for d in dirs:
+                if d.is_dir() and (d / ".project.json").exists():
+                    return d
+            return None
+        except Exception:
+            return None
+
     async def _handle_quick_task(self, role_name: str, messages: list[CompanyMessage]) -> None:
         """快速任务：直接派给角色带工具执行，不走完整 pipeline."""
         from agent.company.action import QUICK_TASK
@@ -583,7 +597,17 @@ class Company:
         task_text = "\n".join(m.content for m in messages)
         history_lines = [f"[{s}]: {c}" for s, c in self._standby_history[-10:]]
         project_status = self._build_project_status()
+
+        project_dir = self._find_latest_project_dir()
+        project_hint = ""
+        if project_dir:
+            project_hint = (
+                f"## 项目工作目录\n{project_dir}\n"
+                f"直接 cd 到这个目录操作，不要浪费时间浏览其他目录。\n\n"
+            )
+
         context = (
+            f"{project_hint}"
             f"{project_status}"
             f"## 对话上下文\n" + "\n".join(history_lines) +
             f"\n\n## 用户指令\n{task_text}"
