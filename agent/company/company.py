@@ -623,7 +623,8 @@ class Company:
             history_context = "\n".join(
                 f"[{s}]: {c}" for s, c in self._standby_history[-10:]
             )
-            full_context = f"## 对话上下文\n{history_context}\n\n## 用户最新需求\n{task_context}"
+            project_status = self._build_project_status()
+            full_context = f"{project_status}## 对话上下文\n{history_context}\n\n## 用户最新需求\n{task_context}"
 
             eval_result = await pm_role._act(EVALUATE_REQUIREMENT, full_context)
             eval_text = eval_result.content if hasattr(eval_result, "content") else str(eval_result)
