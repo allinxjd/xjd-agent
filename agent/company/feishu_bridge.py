@@ -99,6 +99,7 @@ class FeishuBridge:
         self._started = False
 
     _DOC_ACTIONS = {"WritePRD", "WriteDesign", "CodeReview", "WriteTest", "DeployPlan"}
+    _FILE_THRESHOLD = 500
 
     @staticmethod
     def _action_to_filename(action_name: str) -> str:
@@ -108,8 +109,17 @@ class FeishuBridge:
             "CodeReview": "代码审查报告.md",
             "WriteTest": "测试报告.md",
             "DeployPlan": "部署方案.md",
+            "QuickTask": "执行报告.md",
         }
         return mapping.get(action_name, f"{action_name}.md")
+
+    @staticmethod
+    def _clean_llm_artifacts(text: str) -> str:
+        """Remove LLM-specific markup that leaks into output."""
+        import re
+        text = re.sub(r'<｜｜DSML｜｜[^>]*>.*?(?:</｜｜DSML｜｜[^>]*>|$)', '', text, flags=re.DOTALL)
+        text = re.sub(r'<｜｜DSML｜｜[^>]*>', '', text)
+        return text.strip()
 
     async def mirror_to_feishu(self, msg: CompanyMessage) -> None:
         """将 CompanyMessage 通过对应角色的 Bot 发送到飞书群."""
@@ -128,8 +138,9 @@ class FeishuBridge:
                 return
 
         content = msg.content
+        content = self._clean_llm_artifacts(content)
 
-        if msg.cause_by in self._DOC_ACTIONS and len(content) > 500:
+        if len(content) > self._FILE_THRESHOLD and msg.cause_by != "ChatReply" and msg.cause_by != "RoleCheckin":
             filename = self._action_to_filename(msg.cause_by)
             file_data = content.encode("utf-8")
             try:
