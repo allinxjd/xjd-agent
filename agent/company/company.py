@@ -122,6 +122,28 @@ class Company:
         await self._env.publish(msg)
         self._store.save_message(msg)
 
+    _NO_WORK_INDICATORS = [
+        "没有需求", "没有任务", "没需求", "没任务", "无需", "nothing to do",
+        "没有新的", "没有待处理", "已经完成", "无需操作", "无需部署",
+        "没有代码变更", "没有变更", "没有改动",
+    ]
+
+    def _is_no_work(self, content: str) -> bool:
+        """检测角色输出是否表示无实际工作可做."""
+        short = content[:200].lower()
+        return any(ind in short for ind in self._NO_WORK_INDICATORS)
+
+    def _is_review_approved(self, content: str) -> bool:
+        upper = content.upper()
+        return "APPROVED" in upper and "REJECTED" not in upper
+
+    def _is_test_passed(self, content: str) -> bool:
+        indicators = ["全部通过", "测试通过", "PASS", "pass", "通过率 100", "没毛病", "稳了"]
+        fail_indicators = ["失败", "FAIL", "fail", "不通过", "未通过", "error", "Error"]
+        has_pass = any(ind in content for ind in indicators)
+        has_fail = any(ind in content for ind in fail_indicators)
+        return has_pass and not has_fail
+
     async def run(self, requirement: str, max_rounds: int = 20) -> str:
         """主循环：发布需求 → 角色轮转 → 直到空闲或达到上限."""
         import uuid
@@ -137,24 +159,41 @@ class Company:
         round_num = 0
         rework_count = 0
         max_rework = 3
+        stages_done: dict[str, bool] = {
+            "PRD": False, "Design": False, "Code": False,
+            "Review": False, "Test": False, "Deploy": False,
+        }
+        idle_rounds = 0
+        supplement_injected: set[str] = set()
+
         for round_num in range(1, max_rounds + 1):
             if self._pipeline_user_msgs:
-                supplement = "\n".join(m.content for m in self._pipeline_user_msgs)
-                inject_msg = CompanyMessage(
-                    content=f"## 老板补充需求\n{supplement}",
-                    cause_by="HumanDirective",
-                    sent_from="Human",
-                    task_id=task.task_id,
-                )
-                await self._env.publish(inject_msg)
+                new_msgs = [m for m in self._pipeline_user_msgs
+                            if m.content not in supplement_injected]
+                if new_msgs:
+                    supplement = "\n".join(m.content for m in new_msgs)
+                    for m in new_msgs:
+                        supplement_injected.add(m.content)
+                    inject_msg = CompanyMessage(
+                        content=f"## 老板补充需求\n{supplement}",
+                        cause_by="HumanDirective",
+                        sent_from="Human",
+                        task_id=task.task_id,
+                    )
+                    await self._env.publish(inject_msg)
+                    logger.info("已注入用户补充需求到 pipeline")
                 self._pipeline_user_msgs.clear()
-                logger.info("已注入用户补充需求到 pipeline")
 
             if self._env.is_idle():
                 logger.info("所有角色空闲，结束 (round %d)", round_num)
                 break
 
-            logger.info("=== Round %d ===", round_num)
+            if all(stages_done.values()):
+                logger.info("所有阶段已完成，pipeline 结束 (round %d)", round_num)
+                break
+
+            logger.info("=== Round %d === stages=%s", round_num, stages_done)
+            round_had_work = False
             for role in self._env.roles.values():
                 if not role.has_pending:
                     continue
@@ -166,34 +205,88 @@ class Company:
                 )
                 await self._env.publish(status_msg)
                 result_msg = await role.run()
-                if result_msg:
-                    result_msg.task_id = task.task_id
-                    task.result = result_msg.content
-                    self._store.save_message(result_msg)
+                if not result_msg:
+                    continue
 
-                    rework_target = self._check_rework(role.name, result_msg.content)
-                    if rework_target and rework_count < max_rework:
-                        rework_count += 1
-                        logger.info("返工 #%d: %s 要求 %s 修改", rework_count, role.name, rework_target)
-                        self._clear_downstream_inboxes(role.name)
-                        rework_msg = CompanyMessage(
-                            content=f"## {role.name} 反馈（请修改后重新提交）\n{result_msg.content}",
-                            cause_by=result_msg.cause_by,
-                            sent_from=role.name,
-                            send_to=rework_target,
-                            task_id=task.task_id,
-                        )
-                        await self._env.publish(rework_msg)
-                        self._store.save_message(rework_msg)
-                        rework_status = CompanyMessage(
-                            content=f"{role.name} 打回了代码，{rework_target} 正在修改（第 {rework_count} 次返工）",
-                            cause_by="StatusUpdate",
-                            sent_from=role.name,
-                            task_id=task.task_id,
-                        )
-                        await self._env.publish(rework_status)
-                    else:
-                        await self._env.publish(result_msg)
+                result_msg.task_id = task.task_id
+                task.result = result_msg.content
+                self._store.save_message(result_msg)
+
+                if self._is_no_work(result_msg.content):
+                    logger.info("[%s] 无实际工作，跳过", role.name)
+                    continue
+
+                round_had_work = True
+
+                if result_msg.cause_by == "WritePRD":
+                    stages_done["PRD"] = True
+                elif result_msg.cause_by == "WriteDesign":
+                    stages_done["Design"] = True
+                elif result_msg.cause_by == "WriteCode":
+                    stages_done["Code"] = True
+                elif result_msg.cause_by == "CodeReview":
+                    if self._is_review_approved(result_msg.content):
+                        stages_done["Review"] = True
+                elif result_msg.cause_by in ("WriteTest", "RunTest"):
+                    if result_msg.cause_by == "RunTest" and self._is_test_passed(result_msg.content):
+                        stages_done["Test"] = True
+                elif result_msg.cause_by in ("DeployPlan", "ExecuteDeploy"):
+                    if result_msg.cause_by == "ExecuteDeploy":
+                        stages_done["Deploy"] = True
+
+                rework_target = self._check_rework(role.name, result_msg.content)
+                if rework_target and rework_count < max_rework:
+                    rework_count += 1
+                    logger.info("返工 #%d: %s 要求 %s 修改", rework_count, role.name, rework_target)
+                    stages_done["Code"] = False
+                    stages_done["Review"] = False
+                    stages_done["Test"] = False
+                    self._clear_downstream_inboxes(role.name)
+                    rework_msg = CompanyMessage(
+                        content=f"## {role.name} 反馈（请修改后重新提交）\n{result_msg.content}",
+                        cause_by=result_msg.cause_by,
+                        sent_from=role.name,
+                        send_to=rework_target,
+                        task_id=task.task_id,
+                    )
+                    await self._env.publish(rework_msg)
+                    self._store.save_message(rework_msg)
+                    rework_status = CompanyMessage(
+                        content=f"{role.name} 打回了代码，{rework_target} 正在修改（第 {rework_count} 次返工）",
+                        cause_by="StatusUpdate",
+                        sent_from=role.name,
+                        task_id=task.task_id,
+                    )
+                    await self._env.publish(rework_status)
+                elif rework_target and rework_count >= max_rework:
+                    logger.warning("返工次数已达上限 %d，强制通过 %s 阶段", max_rework, role.name)
+                    stages_done["Review"] = True
+                    stages_done["Test"] = True
+                    escalate = CompanyMessage(
+                        content=f"老板，{role.name} 已经打回 {max_rework} 次了，团队尽力修了但还有问题。先继续推进，后续再优化 🫡",
+                        cause_by="ChatReply",
+                        sent_from="PM",
+                        task_id=task.task_id,
+                    )
+                    await self._env.publish(escalate)
+                    forced_approve = CompanyMessage(
+                        content=f"APPROVED（已达最大返工次数，强制通过）\n\n原始审查意见：{result_msg.content[:500]}",
+                        cause_by=result_msg.cause_by,
+                        sent_from=role.name,
+                        task_id=task.task_id,
+                    )
+                    await self._env.publish(forced_approve)
+                else:
+                    await self._env.publish(result_msg)
+
+            if not round_had_work:
+                idle_rounds += 1
+                logger.info("本轮无实际工作产出 (连续空转 %d 轮)", idle_rounds)
+                if idle_rounds >= 2:
+                    logger.info("连续 %d 轮无工作产出，pipeline 结束", idle_rounds)
+                    break
+            else:
+                idle_rounds = 0
         else:
             logger.warning("达到最大轮次 %d，强制结束", max_rounds)
 
@@ -259,7 +352,7 @@ class Company:
                         task_id=task.task_id,
                     )
                     await self._env.publish(retry_msg)
-                    return await self._continue_run(task, remaining_rounds // 2)
+                    return await self._continue_run(task, requirement, remaining_rounds // 2)
                 task.status = "failed"
         else:
             task.status = "done"
@@ -616,7 +709,9 @@ class Company:
         clean = re.sub(
             r'^(老板[，,]?\s*|核心需求[是：:]*\s*|我(们)?理解[的是：:]*\s*|'
             r'需求(是|已|很)[^，,。\n]*[，,。]\s*|'
-            r'[^，,。\n]*已经对齐了[，,]\s*)',
+            r'[^，,。\n]*已经对齐了[，,]\s*|'
+            r'基于[^，,。\n]*[，,]\s*|'
+            r'[^，,。\n]*核心需求是[，,：:]*\s*)',
             '', clean,
         )
         clean = re.sub(r'^[，,：:。\s]+', '', clean)
@@ -624,7 +719,9 @@ class Company:
             if clean.startswith(prefix):
                 clean = clean[len(prefix):]
                 break
-        return clean.strip() or text.strip()
+        first_line = clean.split('\n')[0].strip()
+        first_sentence = re.split(r'[。！？\n]', first_line)[0].strip()
+        return first_sentence[:30] if first_sentence else text.strip()[:30]
 
     def _create_project_workspace(self, requirement: str) -> Path:
         """根据需求创建项目工作目录，返回项目路径."""
