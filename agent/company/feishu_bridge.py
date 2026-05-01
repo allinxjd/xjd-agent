@@ -118,8 +118,7 @@ class FeishuBridge:
         """Remove LLM-specific markup that leaks into output."""
         import re
         text = re.sub(r'<\uff5c\uff5cDSML\uff5c\uff5c[^>]*>.*?(?:</\uff5c\uff5cDSML\uff5c\uff5c[^>]*>|$)', '', text, flags=re.DOTALL)
-        text = re.sub(r'<\uff5c\uff5cDSML\uff5c\uff5c[^>]*>', '', text)
-        text = re.sub(r'<\uff5c\uff5c(?:tool_calls|invoke|parameter|/invoke|/parameter|/tool_calls)[^>]*>', '', text)
+        text = re.sub(r'</?\uff5c\uff5c[^>]*>', '', text)
         text = re.sub(r'</?antml:[a-z_]+[^>]*>', '', text)
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text.strip()

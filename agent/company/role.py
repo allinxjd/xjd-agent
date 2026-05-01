@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def _clean_model_artifacts(text: str) -> str:
     """Strip LLM-specific markup (DeepSeek DSML, tool call tags) from output."""
     text = re.sub(r'<\uff5c\uff5cDSML\uff5c\uff5c[^>]*>.*?(?:</\uff5c\uff5cDSML\uff5c\uff5c[^>]*>|$)', '', text, flags=re.DOTALL)
-    text = re.sub(r'<\uff5c\uff5c[^>]*>', '', text)
+    text = re.sub(r'</?\uff5c\uff5c[^>]*>', '', text)
     text = re.sub(r'</?antml:[a-z_]+[^>]*>', '', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
@@ -118,6 +118,8 @@ class CompanyRole(AgentRole):
         logger.info("[%s] 执行 %s", self.name, action.name)
         content = await action.run(context, self)
         content = _clean_model_artifacts(content)
+        if not content:
+            content = f"[{self.name}] {action.name} 已执行完毕，但未产生有效输出。"
         return CompanyMessage(
             content=content,
             cause_by=action.name,

@@ -31,7 +31,7 @@ def _clean_model_artifacts(text: str) -> str:
     """Strip LLM-specific markup (DeepSeek DSML, tool call tags) from model output."""
     import re
     text = re.sub(r'<\uff5c\uff5cDSML\uff5c\uff5c[^>]*>.*?(?:</\uff5c\uff5cDSML\uff5c\uff5c[^>]*>|$)', '', text, flags=re.DOTALL)
-    text = re.sub(r'<\uff5c\uff5c[^>]*>', '', text)
+    text = re.sub(r'</?\uff5c\uff5c[^>]*>', '', text)
     text = re.sub(r'</?antml:[a-z_]+[^>]*>', '', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
