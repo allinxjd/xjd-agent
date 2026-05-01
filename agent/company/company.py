@@ -219,7 +219,7 @@ class Company:
         self._store.save_run(run_id, req_for_display, task.task_id)
 
         round_num = 0
-        rework_count = 0
+        rework_counts: dict[str, int] = {}
         max_rework = 3
         stages_done: dict[str, bool] = {
             "PRD": False, "Design": False, "Code": False,
@@ -337,9 +337,10 @@ class Company:
                         stages_done["Deploy"] = True
 
                 rework_target = self._check_rework(role.name, result_msg.content)
-                if rework_target and rework_count < max_rework:
-                    rework_count += 1
-                    logger.info("返工 #%d: %s 要求 %s 修改", rework_count, role.name, rework_target)
+                role_rework = rework_counts.get(role.name, 0)
+                if rework_target and role_rework < max_rework:
+                    rework_counts[role.name] = role_rework + 1
+                    logger.info("返工 #%d: %s 要求 %s 修改", role_rework + 1, role.name, rework_target)
                     stages_done["Code"] = False
                     stages_done["Review"] = False
                     stages_done["Test"] = False
@@ -354,13 +355,13 @@ class Company:
                     await self._env.publish(rework_msg)
                     self._store.save_message(rework_msg)
                     rework_status = CompanyMessage(
-                        content=f"{role.name} 打回了代码，{rework_target} 正在修改（第 {rework_count} 次返工）",
+                        content=f"{role.name} 打回了代码，{rework_target} 正在修改（第 {role_rework + 1} 次返工）",
                         cause_by="StatusUpdate",
                         sent_from=role.name,
                         task_id=task.task_id,
                     )
                     await self._env.publish(rework_status)
-                elif rework_target and rework_count >= max_rework:
+                elif rework_target and role_rework >= max_rework:
                     logger.warning("返工次数已达上限 %d，强制通过 %s 阶段", max_rework, role.name)
                     stages_done["Review"] = True
                     stages_done["Test"] = True
@@ -714,7 +715,7 @@ class Company:
             self._standby_history.append((pm_role.name, confirm_msg.content))
 
             req_summary = eval_text.strip().split("\n", 1)[1].strip() if "\n" in eval_text.strip() else task_context
-            project_dir = self._create_project_workspace(req_summary)
+            project_dir = self._create_project_workspace(task_context)
             enriched = (
                 f"## 项目工作目录\n{project_dir}\n"
                 f"所有文件必须创建在此目录下。PRD 写入 docs/prd.md，设计写入 docs/design.md，"

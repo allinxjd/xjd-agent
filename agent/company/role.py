@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -11,6 +12,15 @@ from agent.company.message import CompanyMessage
 from agent.core.multi_agent import AgentRole
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_model_artifacts(text: str) -> str:
+    """Strip LLM-specific markup (DeepSeek DSML, tool call tags) from output."""
+    text = re.sub(r'<\uff5c\uff5cDSML\uff5c\uff5c[^>]*>.*?(?:</\uff5c\uff5cDSML\uff5c\uff5c[^>]*>|$)', '', text, flags=re.DOTALL)
+    text = re.sub(r'<\uff5c\uff5c[^>]*>', '', text)
+    text = re.sub(r'</?antml:[a-z_]+[^>]*>', '', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
 @dataclass
@@ -107,6 +117,7 @@ class CompanyRole(AgentRole):
         """执行 Action，返回结果消息."""
         logger.info("[%s] 执行 %s", self.name, action.name)
         content = await action.run(context, self)
+        content = _clean_model_artifacts(content)
         return CompanyMessage(
             content=content,
             cause_by=action.name,
