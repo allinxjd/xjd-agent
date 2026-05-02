@@ -284,7 +284,7 @@ class WebServer:
 
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, host, port)
+        site = web.TCPSite(runner, host, port, reuse_address=True)
         await site.start()
 
         self._app = app

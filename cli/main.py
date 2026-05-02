@@ -398,11 +398,10 @@ def gateway(host: str, port: int, foreground: bool) -> None:
     )
     console = Console()
 
-    if not _kill_port_occupant(port):
-        console.print(f"  [red]端口 {port} 被占用且无法释放，请手动检查: lsof -i :{port}[/red]")
-        return
-
     if not is_service_installed():
+        if not _kill_port_occupant(port):
+            console.print(f"  [red]端口 {port} 被占用且无法释放，请手动检查: lsof -i :{port}[/red]")
+            return
         console.print("  将注册为系统服务（开机自启 + 后台运行）")
         if not click.confirm("  是否继续?", default=True):
             console.print("  以前台模式启动...")
