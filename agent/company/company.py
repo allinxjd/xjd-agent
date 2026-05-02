@@ -520,16 +520,9 @@ class Company:
             )
             await self._env.publish(recovery_msg)
         else:
-            checkin_lines = {
-                "PM": "老板好 🫡 PM 诸葛到岗了，有什么需求随时说，我来安排～",
-                "Developer": "老板，码农就位 💪 随时开搞",
-                "Reviewer": "老板好，审查员在线 👀 代码质量我盯着",
-                "QA": "老板～测试就绪，准备找茬 🔍",
-                "DevOps": "老板，运维到位 ✅ 部署环境一切正常",
-            }
-
             for role in self._env.roles.values():
-                line = checkin_lines.get(role.name, f"老板好，{role.name} 已就绪，等待指令。")
+                bot_name = self._get_bot_display_name(role.name)
+                line = f"老板好 🫡 {bot_name}到岗了，随时待命"
                 checkin = CompanyMessage(
                     content=line,
                     cause_by="RoleCheckin",
@@ -589,6 +582,20 @@ class Company:
         "直接处理", "直接搞", "马上处理", "马上搞", "去处理", "去搞",
         "你来处理", "你处理", "你搞", "你去",
     ]
+
+    def _get_bot_display_name(self, role_name: str) -> str:
+        """获取角色对应飞书 Bot 的显示名称，无则回退到 role description."""
+        if self._feishu_bridge:
+            adapter = self._feishu_bridge._adapters.get(role_name)
+            if adapter:
+                bot = getattr(adapter, "_bot_user", None)
+                name = getattr(bot, "display_name", "") if bot else ""
+                if name:
+                    return name
+        role = self._env.roles.get(role_name)
+        if role:
+            return role.description.split("，")[0]
+        return role_name
 
     def _detect_quick_task(self, messages: list[CompanyMessage]) -> Optional[str]:
         """检测操作类意图，返回目标角色名或 None."""
@@ -653,7 +660,7 @@ class Company:
         )
 
         ack = CompanyMessage(
-            content=f"收到老板，让{role.name}马上处理 🫡",
+            content=f"收到老板，让{self._get_bot_display_name(role.name)}马上处理 🫡",
             cause_by="ChatReply",
             sent_from="PM",
         )
@@ -666,11 +673,11 @@ class Company:
         await self._env.publish(result_msg)
 
     _ROLE_NICK_MAP: dict[str, list[str]] = {
-        "PM": ["诸葛", "小诸葛", "PM", "pm", "产品", "产品经理"],
-        "Developer": ["小码", "码农", "开发", "程序员", "developer"],
-        "Reviewer": ["小审", "审查", "审查员", "reviewer"],
-        "QA": ["小茬", "测试", "QA", "qa"],
-        "DevOps": ["小布", "运维", "部署", "devops"],
+        "PM": ["PM", "pm", "产品", "产品经理"],
+        "Developer": ["开发", "程序员", "developer", "dev"],
+        "Reviewer": ["审查", "审查员", "reviewer", "review"],
+        "QA": ["测试", "QA", "qa", "tester"],
+        "DevOps": ["运维", "devops", "ops"],
     }
 
     _ROLE_TOPIC_KEYWORDS: dict[str, list[str]] = {

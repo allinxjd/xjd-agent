@@ -256,14 +256,14 @@ class FeishuBridge:
                 if msg.send_to:
                     break
 
-        # Strategy 3: match mention name against role nickname map
+        # Strategy 3: match mention name against role keyword map
         if not msg.send_to and mention_details:
             role_nick_map = {
-                "PM": ["诸葛", "小诸葛"],
-                "Developer": ["小码", "码农"],
-                "Reviewer": ["小审", "审查"],
-                "QA": ["小茬", "测试"],
-                "DevOps": ["小布", "运维"],
+                "PM": ["PM", "产品", "产品经理"],
+                "Developer": ["开发", "程序员"],
+                "Reviewer": ["审查", "审查员"],
+                "QA": ["测试", "QA"],
+                "DevOps": ["运维", "部署"],
             }
             for detail in mention_details:
                 mention_name = detail.get("name", "")
