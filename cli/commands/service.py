@@ -129,6 +129,10 @@ def _kill_port_occupant(port: int) -> bool:
             except (ProcessLookupError, ValueError):
                 pass
         time.sleep(1)
+        for _ in range(4):
+            if _check_port_available(port):
+                return True
+            time.sleep(1)
         return _check_port_available(port)
     except Exception as e:
         logger.debug("_kill_port_occupant error: %s", e)
