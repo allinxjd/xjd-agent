@@ -334,9 +334,12 @@ class ModelRouter:
                 logger.info(
                     "Attempting %s:%s (reason=%s)", provider.name, model, reason
                 )
-                response = await provider.complete(
-                    messages=messages, model=model, tools=tools,
-                    api_key_override=active_key, **kwargs,
+                response = await asyncio.wait_for(
+                    provider.complete(
+                        messages=messages, model=model, tools=tools,
+                        api_key_override=active_key, **kwargs,
+                    ),
+                    timeout=180.0,
                 )
                 if reason == "failover":
                     logger.warning(
@@ -347,6 +350,16 @@ class ModelRouter:
                 if active_key and self._credential_mgr:
                     self._credential_mgr.report_success(provider.name, active_key)
                 return response
+            except asyncio.TimeoutError:
+                last_error = TimeoutError(f"{provider.name}:{model} timed out after 180s")
+                logger.warning(
+                    "Provider %s:%s timed out (180s), skipping to next",
+                    provider.name, model,
+                )
+                self._provider_failures[provider_key] = self._provider_failures.get(provider_key, 0) + 1
+                if self._provider_failures[provider_key] >= 3:
+                    self._provider_cooldown[provider_key] = time.time() + 60.0
+                continue
             except Exception as e:
                 last_error = e
                 status = _extract_status_code(e)

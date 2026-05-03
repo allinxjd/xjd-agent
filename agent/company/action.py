@@ -84,8 +84,29 @@ class Action:
 
         _apply_workspace_guard(engine, prompt)
 
-        result = await engine.run_turn(prompt)
-        return result.content if hasattr(result, "content") else str(result)
+        write_count = 0
+        if self.name == "WriteCode":
+            write_tool = engine._tools.get("write_file")
+            if write_tool and write_tool.handler:
+                original_write = write_tool.handler
+                async def _counting_write(**kwargs):
+                    nonlocal write_count
+                    write_count += 1
+                    return await original_write(**kwargs)
+                write_tool.handler = _counting_write
+
+        try:
+            result = await engine.run_turn(prompt)
+            content = result.content if hasattr(result, "content") else str(result)
+        except Exception as e:
+            logger.error("[Action:%s] 执行失败: %s", self.name, e)
+            return f"[错误] {self.name} 执行失败: {e}"
+
+        if self.name == "WriteCode" and write_count == 0:
+            content += "\n\n[WARNING] write_file 未被调用，代码可能没有写入磁盘。"
+            logger.warning("WriteCode 完成但 write_file 未被调用")
+
+        return content
 
 
 # ── 内置 Actions ─────────────────────────────────────────────
@@ -154,12 +175,18 @@ WRITE_CODE = Action(
     prompt_template=(
         "根据以下设计方案和需求，编写代码实现。\n"
         "原则：最少代码解决问题，不加未要求的功能，匹配项目现有风格。\n\n"
+        "## 重要：必须严格遵循设计方案的技术选型\n"
+        "设计方案中指定了什么语言、框架、库，你就必须用什么。\n"
+        "例如设计方案写了 aiohttp，你就不能用 FastAPI；写了 Flask，你就不能用 Django。\n"
+        "技术选型是设计阶段的决策，不是你的自由发挥空间。\n"
+        "如果你认为设计方案的选型有问题，在代码开头注释说明，但仍然按设计方案实现。\n\n"
         "## 重要：必须使用 write_file 工具写入文件\n"
         "你必须通过 write_file 工具将代码写入磁盘。\n"
         "绝对不要只在回复文本中输出代码 — 那样文件不会被创建。\n"
         "每个文件都必须调用一次 write_file。\n\n"
         "如果上下文包含「项目工作目录」，所有文件操作必须在该目录下。\n"
-        "代码写入 src/，配置文件放项目根目录。\n\n"
+        "代码写入 src/，配置文件放项目根目录。\n"
+        "绝对不要写入隐藏目录（如 .xjd-agent/）。\n\n"
         "## 设计与需求\n{context}"
     ),
     tools_filter=["code", "file", "terminal"],
@@ -172,10 +199,12 @@ CODE_REVIEW = Action(
         "你的任务：审查以下代码变更。\n"
         "直接输出审查意见，不要使用任何工具。\n"
         "检查：\n"
-        "1. 每行改动是否都能追溯到需求\n"
-        "2. 安全漏洞（注入、XSS、硬编码密钥等）\n"
-        "3. 逻辑正确性\n"
-        "4. 是否过度工程\n\n"
+        "1. 技术选型是否与设计方案一致（框架、库必须完全匹配，不允许自行替换）\n"
+        "2. 每行改动是否都能追溯到需求\n"
+        "3. 安全漏洞（注入、XSS、硬编码密钥等）\n"
+        "4. 逻辑正确性\n"
+        "5. 是否过度工程\n\n"
+        "如果代码使用了设计方案中未指定的框架（如设计写 aiohttp 但代码用 FastAPI），必须 REJECTED。\n\n"
         "最后一行必须是：APPROVED 或 REJECTED + 原因。\n\n"
         "## 代码变更\n{context}"
     ),
@@ -295,7 +324,7 @@ QUICK_TASK = Action(
         "遇到其他错误（ModuleNotFoundError、ImportError、SyntaxError、端口占用等）是代码本身的问题，\n"
         "不是安全策略问题。请诊断真正的错误原因并修复。\n\n"
         "## 效率要求\n"
-        "- 你只有 12 轮工具调用机会，必须高效利用\n"
+        "- 你只有 20 轮工具调用机会，必须高效利用\n"
         "- 第1轮：cd 到项目目录 + ls 看结构\n"
         "- 第2轮：找到入口文件（如 app.py、main.py、index.html），cat 看一下\n"
         "- 第3轮起：直接执行操作（安装依赖、启动服务等）\n"
@@ -319,13 +348,13 @@ QUICK_TASK = Action(
         "## 绝对禁止\n"
         "- 不要说「安全策略拦截」「安全策略封锁」除非你真的看到了那个确切的错误信息\n"
         "- 不要编造命令执行结果，必须基于工具返回的真实输出\n"
-        "- 不要放弃，遇到错误就修复，12 轮内尽力完成\n"
+        "- 不要放弃，遇到错误就修复，尽力完成\n"
         "- 不要浪费轮次在 list_directory 上，直接用 shell 命令操作\n\n"
         "回复简短，群聊风格，汇报关键结果即可。\n\n"
         "{context}"
     ),
     tools_filter=["code", "file", "terminal", "system"],
-    max_tool_rounds=12,
+    max_tool_rounds=20,
 )
 
 ALL_ACTIONS: dict[str, Action] = {

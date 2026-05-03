@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 from agent.company.action import USER_REQUIREMENT, EVALUATE_REQUIREMENT
+from agent.company.chat_bridge import ChatBridge
 from agent.company.environment import CompanyEnvironment
 from agent.company.feishu_bridge import FeishuBotConfig, FeishuBridge
+from agent.company.locale import CompanyLocale
 from agent.company.memory import CompanyMemory
 from agent.company.message import CompanyMessage
 from agent.company.role import CompanyRole
@@ -17,6 +20,93 @@ from agent.company.task import CompanyTask
 from agent.core.config import get_projects_dir
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PipelineStage:
+    """Pipeline 中的一个阶段."""
+
+    role: str
+    action: str
+    stage_key: str = ""
+    rework_target: str = ""
+
+    def __post_init__(self):
+        if not self.stage_key:
+            self.stage_key = self.action
+
+
+@dataclass
+class PipelineConfig:
+    """Pipeline 阶段配置."""
+
+    stages: list[PipelineStage] = field(default_factory=list)
+
+    @property
+    def role_order(self) -> list[str]:
+        seen: dict[str, None] = {}
+        for s in self.stages:
+            seen.setdefault(s.role, None)
+        return list(seen.keys())
+
+    @property
+    def stage_keys(self) -> list[str]:
+        return [s.stage_key for s in self.stages]
+
+    def rework_target_for(self, role_name: str) -> str:
+        for s in self.stages:
+            if s.role == role_name and s.rework_target:
+                return s.rework_target
+        return ""
+
+    @classmethod
+    def default(cls) -> "PipelineConfig":
+        return cls(stages=[
+            PipelineStage(role="PM", action="WritePRD", stage_key="PRD"),
+            PipelineStage(role="PM", action="WriteDesign", stage_key="Design"),
+            PipelineStage(role="Developer", action="WriteCode", stage_key="Code"),
+            PipelineStage(role="Reviewer", action="CodeReview", stage_key="Review", rework_target="Developer"),
+            PipelineStage(role="QA", action="WriteTest", stage_key="Test"),
+            PipelineStage(role="QA", action="RunTest", stage_key="Test", rework_target="Developer"),
+            PipelineStage(role="DevOps", action="DeployPlan", stage_key="Deploy"),
+            PipelineStage(role="DevOps", action="ExecuteDeploy", stage_key="Deploy"),
+        ])
+
+    @classmethod
+    def from_workflow(cls, workflow: dict) -> "PipelineConfig":
+        steps = workflow.get("steps", [])
+        if not steps:
+            return cls.default()
+        stages = []
+        for step in steps:
+            role = step.get("role", "")
+            action = step.get("action", "")
+            if not role or not action:
+                continue
+            stages.append(PipelineStage(
+                role=role,
+                action=action,
+                stage_key=step.get("stage_key", action),
+                rework_target=step.get("rework_target", ""),
+            ))
+        return cls(stages=stages) if stages else cls.default()
+
+
+@dataclass
+class CompanyConfig:
+    """Company 可配置参数."""
+
+    max_rework: int = 3
+    max_rounds: int = 20
+    max_minutes: int = 30
+    max_project_chars: int = 30000
+    max_project_files: int = 100
+    standby_history_max: int = 40
+    standby_history_trim: int = 30
+    standby_history_context: int = 10
+    idle_rounds_to_stop: int = 2
+    locale: str = "zh-CN"
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig.default)
 
 KARPATHY_SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
 KARPATHY_SKILL_NAMES = [
@@ -56,7 +146,12 @@ class Company:
         memory_manager: Any = None,
         feishu_chat_id: str = "",
         feishu_bots: Optional[list[FeishuBotConfig]] = None,
+        chat_bridge: Optional[ChatBridge] = None,
+        config: Optional[CompanyConfig] = None,
     ) -> None:
+        self._config = config or CompanyConfig()
+        self._pipeline = self._config.pipeline
+        self._locale = CompanyLocale.load(self._config.locale)
         self._env = CompanyEnvironment()
         self._router = router
         self._registry = tool_registry
@@ -70,13 +165,17 @@ class Company:
         self._pipeline_running = False
         self._pipeline_user_msgs: list[CompanyMessage] = []
 
-        if feishu_chat_id and feishu_bots:
+        if chat_bridge:
+            self._feishu_bridge = chat_bridge  # type: ignore[assignment]
+            chat_bridge.set_environment(self._env)
+            self._env.chat_bridge = chat_bridge
+        elif feishu_chat_id and feishu_bots:
             self._feishu_bridge = FeishuBridge(
                 group_chat_id=feishu_chat_id,
                 bot_configs=feishu_bots,
                 environment=self._env,
             )
-            self._env._feishu_bridge = self._feishu_bridge
+            self._env.chat_bridge = self._feishu_bridge
 
     @property
     def environment(self) -> CompanyEnvironment:
@@ -122,28 +221,33 @@ class Company:
         await self._env.publish(msg)
         self._store.save_message(msg)
 
-    _REQUIREMENT_ISSUE_INDICATORS = [
-        "需求不清", "需求缺失", "需求为空", "没有需求", "需求有问题",
-        "设计与需求下面是空", "没提供需求",
-        "安全轮次上限", "如需继续",
-    ]
+    _REQUIREMENT_ISSUE_INDICATORS = None
+    _CODE_INCOMPLETE_INDICATORS = None
+    _NO_WORK_INDICATORS = None
 
-    _CODE_INCOMPLETE_INDICATORS = [
-        "没有 diff", "没有可审查", "交白卷", "无从审起", "没有变更集",
-        "没有代码", "看不到代码", "拿不到", "没有提供",
-    ]
+    def _get_indicators(self, key: str, fallback: list[str]) -> list[str]:
+        val = self._locale.get(f"keywords.{key}")
+        return val if isinstance(val, list) else fallback
 
     def _has_requirement_issue(self, content: str) -> bool:
         """检测角色输出是否表示需求/输入有问题."""
         short = content[:500]
-        return any(ind in short for ind in self._REQUIREMENT_ISSUE_INDICATORS)
+        indicators = self._get_indicators("requirement_issues", [
+            "需求不清", "需求缺失", "需求为空", "没有需求", "需求有问题",
+            "设计与需求下面是空", "没提供需求", "安全轮次上限", "如需继续",
+        ])
+        return any(ind in short for ind in indicators)
 
     def _has_code_incomplete(self, content: str) -> bool:
         """检测 Reviewer 输出是否表示代码不完整."""
         short = content[:500]
-        return any(ind in short for ind in self._CODE_INCOMPLETE_INDICATORS)
+        indicators = self._get_indicators("code_incomplete", [
+            "没有 diff", "没有可审查", "交白卷", "无从审起", "没有变更集",
+            "没有代码", "看不到代码", "拿不到", "没有提供",
+        ])
+        return any(ind in short for ind in indicators)
 
-    _NO_WORK_INDICATORS = [
+    _NO_WORK_FALLBACK = [
         "没有需求", "没有任务", "没需求", "没任务", "nothing to do",
         "没有新的", "没有待处理", "无需操作", "无需部署",
         "没有代码变更", "没有变更", "没有改动",
@@ -155,17 +259,28 @@ class Company:
         if len(content) > 300:
             return False
         short = content[:200]
-        return any(ind in short for ind in self._NO_WORK_INDICATORS)
+        indicators = self._get_indicators("no_work", self._NO_WORK_FALLBACK)
+        return any(ind in short for ind in indicators)
 
     def _is_review_approved(self, content: str) -> bool:
-        upper = content.upper()
-        return "APPROVED" in upper and "REJECTED" not in upper
+        import re
+        last_lines = "\n".join(content.strip().splitlines()[-5:]).upper()
+        if re.search(r'\bREJECTED\b', last_lines):
+            return False
+        if re.search(r'\bNOT\s+APPROVED\b', last_lines):
+            return False
+        return bool(re.search(r'\bAPPROVED\b', last_lines))
 
     def _is_test_passed(self, content: str) -> bool:
-        indicators = ["全部通过", "测试通过", "PASS", "pass", "通过率 100", "没毛病", "稳了"]
-        fail_indicators = ["失败", "FAIL", "fail", "不通过", "未通过", "error", "Error"]
-        has_pass = any(ind in content for ind in indicators)
-        has_fail = any(ind in content for ind in fail_indicators)
+        import re
+        pass_indicators = self._locale.get("keywords.test_pass") or ["全部通过", "测试通过", "通过率 100", "没毛病", "稳了"]
+        fail_keywords = self._locale.get("keywords.test_fail") or ["失败", "不通过", "未通过"]
+        has_pass = any(ind in content for ind in pass_indicators) or bool(re.search(r'\bPASS\b', content, re.IGNORECASE))
+        fail_patterns = [r'\bFAIL\b', r'\bERROR\b']
+        has_fail = any(kw in content for kw in fail_keywords)
+        has_fail = has_fail or any(bool(re.search(p, content, re.IGNORECASE)) for p in fail_patterns)
+        if has_fail and re.search(r'(?:no|0)\s*error', content, re.IGNORECASE):
+            has_fail = False
         return has_pass and not has_fail
 
     @staticmethod
@@ -180,26 +295,53 @@ class Company:
         return None
 
     @staticmethod
-    def _collect_project_files(project_dir: Path, max_chars: int = 30000) -> str:
+    def _collect_project_files(project_dir: Path, max_chars: int = 30000, max_files: int = 100) -> str:
         """收集项目 src/ 目录下的所有代码文件内容，用于 Reviewer 审查."""
         src_dir = project_dir / "src"
         has_src_files = src_dir.exists() and any(f.is_file() for f in src_dir.rglob("*"))
         if not has_src_files:
             src_dir = project_dir
         logger.debug("_collect_project_files scanning: %s", src_dir)
+        _skip_ext = {
+            ".pyc", ".class", ".o", ".so", ".db", ".sqlite",
+            ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp",
+            ".woff", ".woff2", ".ttf", ".eot",
+            ".lock", ".min.js", ".min.css", ".map",
+            ".zip", ".tar", ".gz", ".bz2", ".7z",
+            ".exe", ".dll", ".dylib", ".bin",
+            ".pdf", ".doc", ".docx", ".xls", ".xlsx",
+        }
+        _max_file_size = 50 * 1024
         files_content = []
         total = 0
+        file_count = 0
         for f in sorted(src_dir.rglob("*")):
+            if file_count >= max_files:
+                files_content.append(f"\n... (已达文件上限 {max_files})")
+                break
             if not f.is_file():
                 continue
-            if f.suffix in (".pyc", ".class", ".o", ".so", ".db", ".sqlite"):
+            if f.suffix in _skip_ext:
                 continue
             if f.name.startswith("."):
+                continue
+            try:
+                size = f.stat().st_size
+            except OSError:
+                continue
+            if size > _max_file_size or size == 0:
+                continue
+            try:
+                head = f.read_bytes()[:512]
+                if b"\x00" in head:
+                    continue
+            except Exception:
                 continue
             try:
                 text = f.read_text(encoding="utf-8", errors="ignore")
             except Exception:
                 continue
+            file_count += 1
             rel = f.relative_to(project_dir)
             entry = f"\n### {rel}\n```\n{text}\n```\n"
             if total + len(entry) > max_chars:
@@ -215,10 +357,17 @@ class Company:
         logger.debug("_collect_project_files found %d file entries", len(files_content))
         return "".join(files_content) if files_content else ""
 
-    async def run(self, requirement: str, max_rounds: int = 20) -> str:
+    async def run(self, requirement: str, max_rounds: int = 0, max_minutes: int = 0) -> str:
         """主循环：发布需求 → 角色轮转 → 直到空闲或达到上限."""
         import uuid
+        import time as _time
         run_id = uuid.uuid4().hex[:8]
+        if not max_rounds:
+            max_rounds = self._config.max_rounds
+        if not max_minutes:
+            max_minutes = self._config.max_minutes
+        pipeline_start = _time.monotonic()
+        pipeline_deadline = pipeline_start + max_minutes * 60
 
         req_for_display = requirement
         if "## 用户最新需求\n" in requirement:
@@ -237,15 +386,24 @@ class Company:
 
         round_num = 0
         rework_counts: dict[str, int] = {}
-        max_rework = 3
-        stages_done: dict[str, bool] = {
-            "PRD": False, "Design": False, "Code": False,
-            "Review": False, "Test": False, "Deploy": False,
-        }
+        max_rework = self._config.max_rework
+        stages_done: dict[str, bool] = {k: False for k in self._pipeline.stage_keys}
         idle_rounds = 0
         supplement_injected: set[str] = set()
+        stage_outputs: dict[str, str] = {}
 
         for round_num in range(1, max_rounds + 1):
+            if _time.monotonic() > pipeline_deadline:
+                logger.warning("Pipeline 超时 (%d 分钟)，强制结束 (round %d)", max_minutes, round_num)
+                timeout_msg = CompanyMessage(
+                    content=f"老板，流水线已运行超过 {max_minutes} 分钟，自动停止了。可能是 LLM 响应太慢或返工次数过多。",
+                    cause_by="ChatReply",
+                    sent_from="PM",
+                    task_id=task.task_id,
+                )
+                await self._env.publish(timeout_msg)
+                break
+
             if self._pipeline_user_msgs:
                 new_msgs = [m for m in self._pipeline_user_msgs
                             if m.content not in supplement_injected]
@@ -253,14 +411,22 @@ class Company:
                     supplement = "\n".join(m.content for m in new_msgs)
                     for m in new_msgs:
                         supplement_injected.add(m.content)
+                    requirement += f"\n\n## 老板补充需求\n{supplement}"
+                    next_role = None
+                    for rn in self._pipeline.role_order:
+                        r = self._env.roles.get(rn)
+                        if r and r.has_pending:
+                            next_role = rn
+                            break
                     inject_msg = CompanyMessage(
                         content=f"## 老板补充需求\n{supplement}",
                         cause_by="HumanDirective",
-                        sent_from="Human",
+                        sent_from="System",
+                        send_to=next_role or "PM",
                         task_id=task.task_id,
                     )
                     await self._env.publish(inject_msg)
-                    logger.info("已注入用户补充需求到 pipeline")
+                    logger.info("已注入用户补充需求到 %s", next_role or "PM")
                 self._pipeline_user_msgs.clear()
 
             if self._env.is_idle():
@@ -283,7 +449,18 @@ class Company:
                     task_id=task.task_id,
                 )
                 await self._env.publish(status_msg)
-                result_msg = await role.run()
+                try:
+                    result_msg = await role.run()
+                except Exception as e:
+                    logger.error("[Pipeline] %s.run() 异常: %s", role.name, e)
+                    error_notify = CompanyMessage(
+                        content=f"{role.name} 执行出错了: {e}，跳过继续。",
+                        cause_by="StatusUpdate",
+                        sent_from=role.name,
+                        task_id=task.task_id,
+                    )
+                    await self._env.publish(error_notify)
+                    continue
                 if not result_msg:
                     continue
 
@@ -299,9 +476,11 @@ class Company:
 
                 if result_msg.cause_by == "WritePRD":
                     stages_done["PRD"] = True
+                    stage_outputs["PRD"] = result_msg.content
                 elif result_msg.cause_by == "WriteDesign":
                     stages_done["PRD"] = True
                     stages_done["Design"] = True
+                    stage_outputs["Design"] = result_msg.content
                 elif result_msg.cause_by == "WriteCode":
                     if self._has_requirement_issue(result_msg.content):
                         logger.warning("[Developer] 输出有需求问题，回退给 PM 核实")
@@ -322,7 +501,11 @@ class Company:
                     stages_done["Code"] = True
                     workspace = self._extract_workspace_from_requirement(requirement)
                     if workspace:
-                        code_listing = self._collect_project_files(workspace)
+                        code_listing = self._collect_project_files(
+                            workspace,
+                            max_chars=self._config.max_project_chars,
+                            max_files=self._config.max_project_files,
+                        )
                         if code_listing:
                             result_msg.content += f"\n\n## 代码文件内容\n{code_listing}"
                             logger.info("已附加项目代码文件到 WriteCode 输出 (%d 字符)", len(code_listing))
@@ -330,14 +513,16 @@ class Company:
                             role_rework = rework_counts.get("Developer_empty", 0)
                             if role_rework < max_rework:
                                 rework_counts["Developer_empty"] = role_rework + 1
-                                logger.warning("WriteCode 完成但 src/ 为空，要求 Developer 重写 (第%d次)", role_rework + 1)
+                                logger.warning("WriteCode 完成但项目目录无代码文件，要求 Developer 重写 (第%d次)", role_rework + 1)
                                 stages_done["Code"] = False
                                 rework_msg = CompanyMessage(
                                     content=(
-                                        "你的代码没有写入文件系统！src/ 目录是空的。\n"
+                                        "项目目录下没有找到任何代码文件。\n"
                                         "你必须使用 write_file 工具将每个文件写入磁盘。\n"
+                                        "所有文件必须写入项目工作目录下（src/ 或项目根目录）。\n"
                                         "不要只在回复文本中输出代码，那样文件不会被创建。\n"
-                                        "请重新执行，确保每个文件都通过 write_file 写入。"
+                                        "不要写入 .xjd-agent/ 或其他隐藏目录。\n"
+                                        "请重新执行，确保每个文件都通过 write_file 写入项目目录。"
                                     ),
                                     cause_by="WriteDesign",
                                     sent_from="Reviewer",
@@ -383,8 +568,13 @@ class Company:
                     stages_done["Review"] = False
                     stages_done["Test"] = False
                     self._clear_downstream_inboxes(role.name)
+                    rework_parts = [f"## {role.name} 反馈（请修改后重新提交）\n{result_msg.content}"]
+                    if "Design" in stage_outputs:
+                        rework_parts.append(f"## 原始设计方案（必须遵循）\n{stage_outputs['Design'][:2000]}")
+                    if "PRD" in stage_outputs:
+                        rework_parts.append(f"## 原始需求\n{stage_outputs['PRD'][:1000]}")
                     rework_msg = CompanyMessage(
-                        content=f"## {role.name} 反馈（请修改后重新提交）\n{result_msg.content}",
+                        content="\n\n".join(rework_parts),
                         cause_by=result_msg.cause_by,
                         sent_from=role.name,
                         send_to=rework_target,
@@ -411,8 +601,9 @@ class Company:
                     )
                     await self._env.publish(escalate)
                     try:
-                        idx = self._PIPELINE_ORDER.index(role.name)
-                        next_role = self._PIPELINE_ORDER[idx + 1] if idx + 1 < len(self._PIPELINE_ORDER) else None
+                        role_order = self._pipeline.role_order
+                        idx = role_order.index(role.name)
+                        next_role = role_order[idx + 1] if idx + 1 < len(role_order) else None
                     except ValueError:
                         next_role = None
                     forced_approve = CompanyMessage(
@@ -429,7 +620,7 @@ class Company:
             if not round_had_work:
                 idle_rounds += 1
                 logger.info("本轮无实际工作产出 (连续空转 %d 轮)", idle_rounds)
-                if idle_rounds >= 2:
+                if idle_rounds >= self._config.idle_rounds_to_stop:
                     logger.info("连续 %d 轮无工作产出，pipeline 结束", idle_rounds)
                     break
             else:
@@ -543,45 +734,50 @@ class Company:
             await self.stop_feishu()
         return "AI Company 待命模式已结束"
 
-    _TASK_TRIGGER_KEYWORDS = [
-        "开发一个", "写一个", "做一个", "帮我开发", "帮我写", "帮我做",
-        "开始开发", "开始写", "开始做", "开干", "开搞", "启动流水线", "开始干活",
-        "写个", "做个", "搞一个", "搞个", "实现一个", "实现个",
-        "写PRD", "写 PRD", "出PRD", "出 PRD",
-        "马上开发", "立刻开发", "赶紧开发", "直接开发",
-        "马上做", "赶紧做", "赶紧搞", "快做", "快搞",
-        "创建一个", "建一个", "生成一个",
-        "安排开发", "安排一下", "动手吧", "动手做", "你就开始",
-        "现在就做", "现在就开发", "现在开始",
-        "加入", "加个", "加一个", "增加", "添加", "新增",
-        "改一下", "改个", "修改", "优化一下", "优化个",
-        "支持一下", "支持个", "接入",
-        "开发", "开发个",
-    ]
+    _TASK_TRIGGER_KEYWORDS = None
 
-    def _detect_task_intent(self, text: str) -> bool:
-        """检测用户消息是否包含开发任务意图."""
-        return any(kw in text for kw in self._TASK_TRIGGER_KEYWORDS)
+    def _detect_task_intent(self, text: str) -> bool | str:
+        """检测用户消息是否包含开发任务意图.
 
-    _QUICK_TASK_KEYWORDS: dict[str, list[str]] = {
-        "Developer": [
-            "调试", "查日志", "看日志", "查看日志",
-            "修个bug", "修一下bug", "改个bug", "热修复",
-        ],
-        "DevOps": [
-            "跑起来", "启动项目", "启动服务", "运行项目", "运行服务", "启动",
-            "执行一下", "部署", "上线", "发布", "重启服务", "重启一下",
-            "回滚", "检查服务", "健康检查", "看看服务",
-        ],
-        "QA": [
-            "跑测试", "跑一下测试", "测试一下", "回归测试", "运行测试",
-        ],
-    }
+        Returns True for strong match, "weak" for ambiguous match needing
+        confirmation, False for no match.
+        """
+        anti_keywords = self._locale.get("keywords.task_anti_keywords") or [
+            "加油", "加班", "加薪", "加入群", "加入团队",
+            "增加信心", "修改密码", "修改头像",
+            "开发者大会", "开发者文档", "开发环境", "开发工具",
+        ]
+        if any(kw in text for kw in anti_keywords):
+            return False
 
-    _QUICK_TASK_CONTEXT_KEYWORDS: list[str] = [
-        "直接处理", "直接搞", "马上处理", "马上搞", "去处理", "去搞",
-        "你来处理", "你处理", "你搞", "你去",
-    ]
+        strong = self._locale.get("keywords.strong_task_triggers") or self._locale.get("keywords.task_triggers") or [
+            "开发一个", "写一个", "做一个", "帮我开发", "帮我写", "帮我做",
+            "开始开发", "开始写", "开始做", "开干", "开搞", "启动流水线", "开始干活",
+            "写个", "做个", "搞一个", "搞个", "实现一个", "实现个",
+            "写PRD", "写 PRD", "出PRD", "出 PRD",
+            "马上开发", "立刻开发", "赶紧开发", "直接开发",
+            "马上做", "赶紧做", "赶紧搞", "快做", "快搞",
+            "创建一个", "建一个", "生成一个",
+            "安排开发", "安排一下", "动手吧", "动手做", "你就开始",
+            "现在就做", "现在就开发", "现在开始",
+        ]
+        if any(kw in text for kw in strong):
+            return True
+
+        weak = self._locale.get("keywords.weak_task_triggers") or [
+            "加入", "加个", "加一个", "增加", "添加", "新增",
+            "改一下", "改个", "修改", "优化一下", "优化个",
+            "支持一下", "支持个", "接入",
+            "开发", "开发个",
+        ]
+        if any(kw in text for kw in weak):
+            return "weak"
+
+        return False
+
+    _QUICK_TASK_KEYWORDS: dict[str, list[str]] = None
+
+    _QUICK_TASK_CONTEXT_KEYWORDS: list[str] = None
 
     def _get_bot_display_name(self, role_name: str) -> str:
         """获取角色对应飞书 Bot 的显示名称，无则回退到 role description."""
@@ -599,18 +795,27 @@ class Company:
 
     def _detect_quick_task(self, messages: list[CompanyMessage]) -> Optional[str]:
         """检测操作类意图，返回目标角色名或 None."""
+        qt_keywords = self._locale.get("keywords.quick_task") or {
+            "Developer": ["调试", "查日志", "看日志", "查看日志", "修个bug", "修一下bug", "改个bug", "热修复"],
+            "DevOps": ["跑起来", "启动项目", "启动服务", "运行项目", "运行服务", "启动", "执行一下", "部署", "上线", "发布", "重启服务", "重启一下", "回滚", "检查服务", "健康检查", "看看服务"],
+            "QA": ["跑测试", "跑一下测试", "测试一下", "回归测试", "运行测试"],
+        }
+        qt_context = self._locale.get("keywords.quick_task_context") or [
+            "直接处理", "直接搞", "马上处理", "马上搞", "去处理", "去搞",
+            "你来处理", "你处理", "你搞", "你去",
+        ]
         text = " ".join(m.content for m in messages)
-        for role_name, keywords in self._QUICK_TASK_KEYWORDS.items():
+        for role_name, keywords in qt_keywords.items():
             if any(kw in text for kw in keywords):
                 return role_name
 
         for m in messages:
             if m.send_to and m.send_to in self._env.roles:
-                if any(kw in m.content for kw in self._QUICK_TASK_CONTEXT_KEYWORDS):
+                if any(kw in m.content for kw in qt_context):
                     return m.send_to
                 recent = [c for _, c in self._standby_history[-5:]]
                 recent_text = " ".join(recent)
-                for keywords in self._QUICK_TASK_KEYWORDS.values():
+                for keywords in qt_keywords.values():
                     if any(kw in recent_text for kw in keywords):
                         return m.send_to
 
@@ -672,35 +877,37 @@ class Company:
         self._store.save_message(result_msg)
         await self._env.publish(result_msg)
 
-    _ROLE_NICK_MAP: dict[str, list[str]] = {
-        "PM": ["PM", "pm", "产品", "产品经理"],
-        "Developer": ["开发", "程序员", "developer", "dev"],
-        "Reviewer": ["审查", "审查员", "reviewer", "review"],
-        "QA": ["测试", "QA", "qa", "tester"],
-        "DevOps": ["运维", "devops", "ops"],
-    }
-
-    _ROLE_TOPIC_KEYWORDS: dict[str, list[str]] = {
-        "Developer": ["代码", "写代码", "编码", "bug", "报错", "接口", "函数", "变量", "编译"],
-        "Reviewer": ["审查", "review", "代码质量", "代码规范"],
-        "QA": ["测试", "用例", "测试结果", "通过率", "覆盖率"],
-        "DevOps": ["部署", "上线", "服务器", "运维", "环境", "发布"],
-    }
+    _ROLE_NICK_MAP: dict[str, list[str]] = None
+    _ROLE_TOPIC_KEYWORDS: dict[str, list[str]] = None
 
     def _route_message_to_role(self, msg: CompanyMessage) -> Optional[str]:
         """根据消息内容智能路由到对应角色。返回角色名或 None（默认 PM）."""
         if msg.send_to and msg.send_to in self._env.roles:
             return msg.send_to
 
+        nick_map = self._locale.get("keywords.role_nicks") or {
+            "PM": ["PM", "产品", "产品经理"],
+            "Developer": ["开发", "程序员"],
+            "Reviewer": ["审查", "审查员"],
+            "QA": ["测试", "QA"],
+            "DevOps": ["运维", "部署", "ops"],
+        }
+        topic_map = self._locale.get("keywords.role_topics") or {
+            "Developer": ["代码", "bug", "调试", "修复", "实现", "编码"],
+            "Reviewer": ["审查", "review", "代码质量"],
+            "QA": ["测试", "用例", "覆盖率"],
+            "DevOps": ["部署", "上线", "服务器", "运维", "启动", "重启"],
+        }
+
         text = msg.content
-        for role_name, nicks in self._ROLE_NICK_MAP.items():
+        for role_name, nicks in nick_map.items():
             if role_name == "PM":
                 continue
             for nick in nicks:
                 if nick in text:
                     return role_name
 
-        for role_name, keywords in self._ROLE_TOPIC_KEYWORDS.items():
+        for role_name, keywords in topic_map.items():
             for kw in keywords:
                 if kw in text:
                     return role_name
@@ -764,17 +971,25 @@ class Company:
             self._store.save_message(m)
 
         user_messages = [m for m in messages if m.sent_from not in self._env.roles]
-        has_task_intent = any(self._detect_task_intent(m.content) for m in user_messages)
+        intents = [(m, self._detect_task_intent(m.content)) for m in user_messages]
+        has_strong = any(i is True for _, i in intents)
+        has_weak = any(i == "weak" for _, i in intents)
+        has_task_intent = has_strong or has_weak
 
         if has_task_intent:
-            if len(self._standby_history) > 40:
-                self._standby_history = self._standby_history[-30:]
+            if len(self._standby_history) > self._config.standby_history_max:
+                self._standby_history = self._standby_history[-self._config.standby_history_trim:]
             task_context = "\n\n".join(m.content for m in user_messages)
             history_context = "\n".join(
                 f"[{s}]: {c}" for s, c in self._standby_history[-10:]
             )
             project_status = self._build_project_status()
-            full_context = f"{project_status}## 对话上下文\n{history_context}\n\n## 用户最新需求\n{task_context}"
+            weak_hint = ""
+            if has_weak and not has_strong:
+                weak_hint = "\n\n注意：用户消息中的任务意图不太明确，请仔细判断是否真的是开发需求。如果不确定，请回复 NEED_CLARIFY 并追问。"
+            elif has_strong:
+                weak_hint = "\n\n注意：用户已经明确表达了开发意图（使用了「开干」「开始开发」等明确指令），请直接回复 READY 并总结需求，不要再追问。如果上下文中有之前讨论过的需求细节，结合起来理解即可。"
+            full_context = f"{project_status}## 对话上下文\n{history_context}\n\n## 用户最新需求\n{task_context}{weak_hint}"
 
             eval_result = await pm_role._act(EVALUATE_REQUIREMENT, full_context)
             eval_text = eval_result.content if hasattr(eval_result, "content") else str(eval_result)
@@ -810,7 +1025,7 @@ class Company:
 
             async def _run_pipeline(req: str, pdir: Path) -> None:
                 try:
-                    result = await self.run(req, max_rounds=20)
+                    result = await self.run(req)
                     status = "done" if result else "failed"
                 except Exception as e:
                     logger.error("Pipeline 执行异常: %s", e)
@@ -868,23 +1083,27 @@ class Company:
 
     def _check_rework(self, role_name: str, content: str) -> Optional[str]:
         """检查角色输出是否需要返工。返回需要返工的目标角色名，或 None."""
+        rework_target = self._pipeline.rework_target_for(role_name)
+        if not rework_target:
+            return None
         if role_name == "Reviewer":
             upper = content.upper()
             if "REJECTED" in upper or "拒收" in content or "打回" in content:
-                return "Developer"
+                return rework_target
         if role_name == "QA":
             indicators = ["失败", "FAIL", "fail", "不通过", "未通过", "error", "Error"]
             if any(ind in content for ind in indicators):
-                return "Developer"
+                return rework_target
         return None
 
     def _clear_downstream_inboxes(self, role_name: str) -> None:
         """清空当前角色下游所有角色的 inbox，防止基于被拒代码继续工作."""
+        role_order = self._pipeline.role_order
         try:
-            idx = self._PIPELINE_ORDER.index(role_name)
+            idx = role_order.index(role_name)
         except ValueError:
             return
-        for downstream in self._PIPELINE_ORDER[idx + 1:]:
+        for downstream in role_order[idx + 1:]:
             role = self._env.roles.get(downstream)
             if role:
                 cleared = len(role._inbox)
@@ -950,6 +1169,13 @@ class Company:
             return "\n\n".join(parts) + "\n\n"
         return "## 任务状态\n当前没有任何已执行的任务记录。\n\n"
 
+    _PROJECT_NAME_STOPWORDS = {
+        "是", "的", "了", "吧", "呢", "啊", "嗯", "哦", "好", "行",
+        "对", "嗯嗯", "ok", "OK", "yes", "no", "是的", "好的", "行的",
+        "可以", "没问题", "收到", "明白", "知道", "那", "这", "就",
+        "你", "我", "他", "她", "它", "们", "接着", "继续",
+    }
+
     @staticmethod
     def _extract_project_name(text: str) -> str:
         """从 PM 评估文本中提取简短项目名（去掉寒暄/口语前缀）."""
@@ -962,17 +1188,29 @@ class Company:
             r'[^，,。\n]*已经对齐了[，,]\s*|'
             r'基于[^，,。\n]*[，,]\s*|'
             r'[^，,。\n]*核心需求是[，,：:]*\s*|'
-            r'核心是[，,：:]*\s*)',
+            r'核心是[，,：:]*\s*|'
+            r'是的[，,]?\s*)',
             '', clean,
         )
         clean = re.sub(r'^[，,：:。\s]+', '', clean)
-        for prefix in ("做一个", "开发一个", "写一个", "搞一个", "实现一个", "创建一个", "建一个"):
+        for prefix in ("做一个", "开发一个", "写一个", "搞一个", "实现一个", "创建一个", "建一个",
+                        "你接着", "你继续", "接着", "继续"):
             if clean.startswith(prefix):
                 clean = clean[len(prefix):]
                 break
+        clean = re.sub(r'^[，,：:。\s]+', '', clean)
         first_line = clean.split('\n')[0].strip()
         first_sentence = re.split(r'[。！？\n，,的]', first_line)[0].strip()
-        return first_sentence[:10] if first_sentence else text.strip()[:10]
+        if not first_sentence or first_sentence in Company._PROJECT_NAME_STOPWORDS or len(first_sentence) < 2:
+            parts = re.split(r'[。！？\n，,]', first_line)
+            for part in parts:
+                part = part.strip()
+                if part and part not in Company._PROJECT_NAME_STOPWORDS and len(part) >= 2:
+                    first_sentence = part
+                    break
+            else:
+                first_sentence = first_line[:10] if first_line and len(first_line) >= 2 and first_line not in Company._PROJECT_NAME_STOPWORDS else "project"
+        return first_sentence[:10] if first_sentence else "project"
 
     def _create_project_workspace(self, requirement: str) -> Path:
         """根据需求创建项目工作目录，返回项目路径."""

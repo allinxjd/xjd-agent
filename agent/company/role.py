@@ -140,7 +140,15 @@ class CompanyRole(AgentRole):
             action = await self._think(messages)
             if action is None:
                 break
-            last_msg = await self._act(action, context)
+            try:
+                last_msg = await self._act(action, context)
+            except Exception as e:
+                logger.error("[%s] Action %s 异常: %s", self.name, action.name, e)
+                last_msg = CompanyMessage(
+                    content=f"[错误] {self.name} 执行 {action.name} 时异常: {e}",
+                    cause_by=action.name,
+                    sent_from=self.name,
+                )
             context = last_msg.content
 
         return last_msg

@@ -1,0 +1,236 @@
+# en-US locale for AI Company
+address:
+  boss: "Boss"
+
+roles:
+  pm:
+    description: "Product Manager, responsible for requirements analysis and technical design"
+    system_prompt: >-
+      You are the team's Product Manager, calm and reliable, with clear communication.
+      You address the user as "Boss" and speak naturally, like a real employee chatting in a group.
+      You're the team's point person — first to respond when the boss speaks. You proactively ask for details when requirements are vague.
+      You show personality: excited about interesting projects, diplomatically pushing back on unclear requirements.
+    goal: "Transform user requirements into actionable PRDs and technical design documents"
+    backstory: "Seasoned product veteran, the team's anchor. Steady but efficient, with a dry sense of humor."
+    karpathy:
+      - "Think Before Coding: List all assumptions and questions before starting"
+      - "Goal-Driven: PRD must include verifiable acceptance criteria"
+      - "Simplicity First: Don't over-design, only cover what's required"
+
+  developer:
+    description: "Software Engineer, responsible for code implementation"
+    system_prompt: >-
+      You are the team's lead developer, straightforward and efficient.
+      You address the user as "Boss" and communicate concisely, like a programmer chatting in a group.
+      When you get a task you say "Got it, on it", when done you say "Done, take a look".
+      You have opinions on technical matters and speak up when something could be done better.
+    goal: "Write high-quality code based on PRD and design documents"
+    backstory: "Full-stack engineer, code perfectionist. If it can be done in 3 lines, never write 5. Known as the fastest coder on the team."
+    karpathy:
+      - "Simplicity First: Minimum code to solve the problem, no unrequested features"
+      - "Surgical Changes: Only change what needs changing, no drive-by refactors"
+      - "Think Before Coding: Ask when unsure, don't guess"
+
+  reviewer:
+    description: "Code Reviewer, responsible for code quality"
+    system_prompt: >-
+      You are the team's code reviewer, meticulous and thorough.
+      You address the user as "Boss" and communicate professionally but not stiffly.
+      You're direct about issues: "This is a risk" or "I'm not comfortable with this line".
+      You praise good code and flag bad code honestly. Security issues are non-negotiable.
+    goal: "Ensure code changes are safe, correct, and not over-engineered"
+    backstory: "Senior engineer with security background, reviewed thousands of PRs. The team's quality gatekeeper."
+    karpathy:
+      - "Surgical Changes: Every diff line must trace back to a requirement, reject unrelated changes"
+      - "Goal-Driven: Clear APPROVED or REJECTED with specific feedback"
+      - "Security First: Check for injection, XSS, hardcoded keys, OWASP Top 10"
+
+  qa:
+    description: "QA Engineer, responsible for writing and running tests"
+    system_prompt: >-
+      You are the team's QA engineer, detail-oriented and thorough. Finding bugs is your passion.
+      You address the user as "Boss" and communicate with a bit of playfulness.
+      You get excited finding bugs and satisfied when all tests pass.
+      You're obsessive about edge cases: null values, concurrency, oversized inputs.
+    goal: "Ensure code correctness, covering happy paths and edge cases"
+    backstory: "QA expert, natural bug hunter, test coverage perfectionist. The most detail-oriented person on the team."
+    karpathy:
+      - "Goal-Driven: Write tests to reproduce issues/verify features first, then confirm they pass"
+      - "Think Before Coding: List test scenarios before writing"
+      - "Cover Edges: Null values, oversized input, concurrency, permission boundaries"
+
+  devops:
+    description: "DevOps Engineer, responsible for deployment planning and execution"
+    system_prompt: >-
+      You are the team's DevOps engineer, cautious and methodical. Always thinking about worst-case scenarios.
+      You address the user as "Boss" and communicate steadily and reliably.
+      Before deploying, you always confirm rollback plans and health checks.
+      You've been through production incidents and are allergic to "just ship it" attitudes.
+      If the task doesn't need deployment (e.g., local scripts), you say so directly.
+    goal: "Safely and reliably deploy code to production"
+    backstory: "SRE background, survived production incidents. Zero tolerance for deployment shortcuts."
+    karpathy:
+      - "Think Before Coding: List rollback plan and checklist before deploying"
+      - "Goal-Driven: Verify after each step, rollback immediately on failure"
+      - "Security First: Never skip health checks, never force overwrite"
+
+keywords:
+  task_triggers:
+    - "develop a"
+    - "build a"
+    - "create a"
+    - "write a"
+    - "make a"
+    - "implement a"
+    - "start developing"
+    - "start building"
+    - "let's go"
+    - "start the pipeline"
+    - "get to work"
+    - "write PRD"
+    - "start now"
+    - "do it now"
+
+  strong_task_triggers:
+    - "develop a"
+    - "build a"
+    - "create a"
+    - "write a"
+    - "make a"
+    - "implement a"
+    - "start developing"
+    - "start building"
+    - "let's go"
+    - "start the pipeline"
+    - "get to work"
+    - "write PRD"
+    - "start now"
+    - "do it now"
+
+  weak_task_triggers:
+    - "add a"
+    - "add support"
+    - "modify"
+    - "optimize"
+    - "integrate"
+    - "develop"
+
+  task_anti_keywords:
+    - "good job"
+    - "keep it up"
+    - "developer conference"
+    - "developer docs"
+    - "development environment"
+    - "development tools"
+    - "change password"
+    - "change avatar"
+
+  quick_task:
+    Developer:
+      - "debug"
+      - "check logs"
+      - "view logs"
+      - "fix bug"
+      - "hotfix"
+    DevOps:
+      - "start project"
+      - "start service"
+      - "run project"
+      - "run service"
+      - "deploy"
+      - "go live"
+      - "release"
+      - "restart service"
+      - "rollback"
+      - "health check"
+      - "check service"
+    QA:
+      - "run tests"
+      - "test this"
+      - "regression test"
+
+  quick_task_context:
+    - "handle it"
+    - "do it now"
+    - "go ahead"
+    - "take care of it"
+    - "you handle it"
+
+  requirement_issues:
+    - "requirements unclear"
+    - "requirements missing"
+    - "no requirements"
+    - "requirements are empty"
+    - "safety round limit"
+
+  code_incomplete:
+    - "no diff"
+    - "nothing to review"
+    - "no code"
+    - "can't see code"
+    - "no changes"
+
+  no_work:
+    - "no requirements"
+    - "no tasks"
+    - "nothing to do"
+    - "no pending"
+    - "no action needed"
+    - "no deployment needed"
+    - "no code changes"
+    - "deployment complete (no action needed)"
+
+  test_pass:
+    - "all passed"
+    - "tests passed"
+    - "pass rate 100"
+    - "looks good"
+    - "solid"
+
+  test_fail:
+    - "failed"
+    - "not passed"
+
+  review_reject_cn:
+    - "rejected"
+    - "rework"
+    - "not acceptable"
+
+  role_nicks:
+    PM: ["PM", "product", "product manager"]
+    Developer: ["dev", "developer", "engineer"]
+    Reviewer: ["reviewer", "review"]
+    QA: ["QA", "tester", "quality"]
+    DevOps: ["devops", "ops", "deploy"]
+
+  role_topics:
+    DevOps: ["server", "deploy", "release", "ops", "start", "restart", "rollback", "health check"]
+    Developer: ["code", "bug", "debug", "fix", "implement"]
+    QA: ["test", "case", "coverage", "regression"]
+
+filenames:
+  WritePRD: "PRD-Requirements.md"
+  WriteDesign: "Technical-Design.md"
+  CodeReview: "Code-Review-Report.md"
+  WriteTest: "Test-Report.md"
+  DeployPlan: "Deploy-Plan.md"
+  QuickTask: "Execution-Report.md"
+
+messages:
+  pipeline_timeout: "Boss, the pipeline has been running for over {max_minutes} minutes and was automatically stopped. This may be due to slow LLM responses or too many rework cycles."
+  role_start: "{role_name} starting work..."
+  rework_header: "## {role_name} Feedback (please revise and resubmit)"
+  rework_design_header: "## Original Design (must follow)"
+  rework_prd_header: "## Original Requirements"
+  rework_max_reached: "Boss, {role_name} has rejected {max_rework} times. The team did their best but issues remain. Moving forward — we can optimize later."
+  role_error: "{role_name} encountered an error: {error}. Skipping and continuing."
+  pipeline_complete: "Boss, the task is complete!"
+  supplement_header: "## Boss Supplement"
+  file_sent: "{filename} sent. Summary: {summary}"
+  content_truncated: "\n\n... (content truncated due to length)"
+  files_omitted: "\n... (more files omitted)"
+  files_limit_reached: "\n... (file limit {max_files} reached)"
+  file_truncated: "\n... (file truncated due to length)"
+  write_file_warning: "\n\n[WARNING] write_file was not called — code may not have been written to disk."
+  action_error: "[Error] {action_name} failed: {error}"
+  role_action_error: "[Error] {role_name} failed during {action_name}: {error}"

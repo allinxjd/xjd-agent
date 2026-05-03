@@ -13,7 +13,8 @@
     result = await company.run("实现用户登录功能")
 """
 
-from agent.company.company import Company
+from agent.company.chat_bridge import ChatBridge
+from agent.company.company import Company, CompanyConfig, PipelineConfig, PipelineStage
 from agent.company.environment import CompanyEnvironment
 from agent.company.feishu_bridge import FeishuBotConfig, FeishuBridge
 from agent.company.memory import CompanyMemory
@@ -23,7 +24,11 @@ from agent.company.store import CompanyStore
 from agent.company.task import CompanyTask
 
 __all__ = [
+    "ChatBridge",
     "Company",
+    "CompanyConfig",
+    "PipelineConfig",
+    "PipelineStage",
     "CompanyEnvironment",
     "CompanyMemory",
     "CompanyMessage",

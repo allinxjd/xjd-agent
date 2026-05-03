@@ -6,6 +6,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
+from agent.company.chat_bridge import ChatBridge
+
 if TYPE_CHECKING:
     from agent.company.environment import CompanyEnvironment
     from agent.company.message import CompanyMessage
@@ -24,7 +26,7 @@ class FeishuBotConfig:
     encrypt_key: str = ""
 
 
-class FeishuBridge:
+class FeishuBridge(ChatBridge):
     """飞书群 ↔ CompanyEnvironment 双向桥接.
 
     每个 CompanyRole 绑定一个独立飞书自建应用（Bot），
@@ -87,22 +89,75 @@ class FeishuBridge:
                 adapter.on_message(self._on_feishu_message)
             logger.info("飞书桥接已启动，群: %s，Bot 数: %d",
                         self._group_chat_id, len(self._adapters))
+            import asyncio
+            self._watchdog_task = asyncio.create_task(self._bridge_watchdog())
 
     async def stop(self) -> None:
         """停止所有飞书 Bot."""
+        self._started = False
+        if hasattr(self, '_watchdog_task') and self._watchdog_task:
+            self._watchdog_task.cancel()
+            self._watchdog_task = None
         for name, adapter in self._adapters.items():
             try:
                 await adapter.stop()
             except Exception as e:
                 logger.warning("停止 Bot %s 失败: %s", name, e)
         self._adapters.clear()
-        self._started = False
+
+    async def _bridge_watchdog(self) -> None:
+        """定期检查各 Bot 连接健康状态，重启掉线的 Bot."""
+        import asyncio
+        import time as _time
+        from gateway.platforms.feishu import FeishuAdapter
+
+        while self._started:
+            await asyncio.sleep(120)
+            if not self._started:
+                break
+            for role_name, adapter in list(self._adapters.items()):
+                ws_thread = getattr(adapter, '_ws_thread', None)
+                last_activity = getattr(adapter, '_last_sdk_activity', 0)
+                idle_seconds = _time.time() - last_activity if last_activity else 999
+                thread_alive = ws_thread.is_alive() if ws_thread else False
+                if thread_alive and idle_seconds < 300:
+                    continue
+                logger.warning(
+                    "飞书 Bot %s 疑似掉线 (thread_alive=%s, idle=%.0fs)，重建连接",
+                    role_name, thread_alive, idle_seconds,
+                )
+                cfg = self._bot_configs.get(role_name)
+                if not cfg:
+                    continue
+                try:
+                    await adapter.stop()
+                except Exception:
+                    pass
+                try:
+                    new_adapter = FeishuAdapter({
+                        "app_id": cfg.app_id,
+                        "app_secret": cfg.app_secret,
+                        "verification_token": cfg.verification_token,
+                        "encrypt_key": cfg.encrypt_key,
+                        "mode": "long_poll",
+                        "accept_group_no_mention": True,
+                    })
+                    await new_adapter.start()
+                    new_adapter.on_message(self._on_feishu_message)
+                    self._adapters[role_name] = new_adapter
+                    logger.info("飞书 Bot %s 重连成功", role_name)
+                except Exception as e:
+                    logger.error("飞书 Bot %s 重连失败: %s", role_name, e)
 
     _DOC_ACTIONS = {"WritePRD", "WriteDesign", "CodeReview", "WriteTest", "DeployPlan"}
     _FILE_THRESHOLD = 500
 
     @staticmethod
-    def _action_to_filename(action_name: str) -> str:
+    def _action_to_filename(action_name: str, locale: Any = None) -> str:
+        if locale:
+            val = locale.get(f"filenames.{action_name}")
+            if val:
+                return val
         mapping = {
             "WritePRD": "PRD-需求文档.md",
             "WriteDesign": "技术设计方案.md",
@@ -122,6 +177,10 @@ class FeishuBridge:
         text = re.sub(r'</?antml:[a-z_]+[^>]*>', '', text)
         text = re.sub(r'\n{3,}', '\n\n', text)
         return text.strip()
+
+    async def mirror_to_chat(self, msg: CompanyMessage) -> None:
+        """ChatBridge 接口实现."""
+        await self.mirror_to_feishu(msg)
 
     async def mirror_to_feishu(self, msg: CompanyMessage) -> None:
         """将 CompanyMessage 通过对应角色的 Bot 发送到飞书群."""
