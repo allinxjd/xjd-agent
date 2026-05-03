@@ -96,14 +96,17 @@ class Action:
 
         write_count = 0
         if self.name == "WriteCode":
-            write_tool = engine._tools.get("write_file")
-            if write_tool and write_tool.handler:
-                original_write = write_tool.handler
-                async def _counting_write(**kwargs):
-                    nonlocal write_count
-                    write_count += 1
-                    return await original_write(**kwargs)
-                write_tool.handler = _counting_write
+            for tool_name in ("write_file", "edit_file"):
+                tool = engine._tools.get(tool_name)
+                if tool and tool.handler:
+                    original_fn = tool.handler
+                    async def _counting_fn(orig=original_fn, **kwargs):
+                        nonlocal write_count
+                        result = await orig(**kwargs)
+                        if not (isinstance(result, str) and "禁止" in result):
+                            write_count += 1
+                        return result
+                    tool.handler = _counting_fn
 
         try:
             result = await engine.run_turn(prompt)
@@ -113,7 +116,11 @@ class Action:
             return f"[错误] {self.name} 执行失败: {e}"
 
         if self.name == "WriteCode" and write_count == 0:
-            content += "\n\n[WARNING] write_file 未被调用，代码可能没有写入磁盘。"
+            content = (
+                "[错误] write_file 未被调用，代码没有写入磁盘。\n"
+                "你必须通过 write_file 工具将每个文件写入项目工作目录。\n"
+                "只在回复文本中输出代码是无效的。"
+            )
             logger.warning("WriteCode 完成但 write_file 未被调用")
 
         return content
@@ -134,11 +141,17 @@ EVALUATE_REQUIREMENT = Action(
         "## 判断标准\n"
         "- 需求必须明确说了要做什么东西（不能只有一个名字，比如「小记」「商城」不算清晰）\n"
         "- 如果对话上下文里之前讨论过细节，可以结合上下文理解\n"
-        "- 不需要完美，但至少要知道核心功能是什么\n\n"
+        "- 不需要完美，但至少要知道核心功能是什么\n"
+        "- 必须有明确的项目名称。如果用户没说项目叫什么，你必须追问确认\n"
+        "- 如果用户在讨论中逐步明确了需求（即使没说「开干」），只要需求清晰+有项目名，就可以 READY\n"
+        "- 如果用户明确说了「开干」「开始开发」等指令，即使需求不够完美也应该 READY（结合上下文补全）\n\n"
         "## 输出格式（严格遵守）\n"
         "第一行必须是 READY 或 NEED_CLARIFY\n"
-        "如果 READY：第二行起简述你理解的核心需求（2-3句话）\n"
+        "如果 READY：\n"
+        "- 第二行必须是 PROJECT_NAME: 项目名称（用户确认过的名字，或用户消息中明确提到的名字）\n"
+        "- 第三行起简述你理解的核心需求（2-3句话）\n"
         "如果 NEED_CLARIFY：第二行起用群聊口吻向老板提出具体问题（像真人PM在群里追问那样，简短有力，带表情）\n"
+        "- 如果用户没有给项目名称，必须追问「老板，这个项目叫什么名字？」\n"
         "- 如果需求明显不合理或自相矛盾，直接说出你的顾虑\n"
         "- 不要客套，直接问关键问题\n\n"
         "{context}"
@@ -180,6 +193,33 @@ WRITE_DESIGN = Action(
     tools_filter=[],
 )
 
+SETUP_ENV = Action(
+    name="SetupEnv",
+    description="检测并安装项目所需的开发环境",
+    prompt_template=(
+        "你是 Developer，在写代码之前，先确保本地开发环境满足项目需求。\n\n"
+        "## 当前环境信息\n"
+        "（已在 context 中提供）\n\n"
+        "## 你的任务\n"
+        "1. 根据设计方案判断项目需要哪些运行时和工具\n"
+        "2. 检查当前环境是否已安装（用 which/--version 验证）\n"
+        "3. 如果缺失，自动安装：\n"
+        "   - macOS: 用 brew install（如果有 brew）\n"
+        "   - pip/pip3: 用 pip3 install\n"
+        "   - npm: 用 npm install -g\n"
+        "4. 如果项目需要 Python 虚拟环境，在项目目录下创建 .venv\n"
+        "5. 不要安装不必要的东西，只装设计方案里明确需要的\n\n"
+        "## 输出格式\n"
+        "最后一行必须是以下之一：\n"
+        "- ENV_READY — 环境已就绪，所有依赖已安装\n"
+        "- ENV_READY_SKIP — 无需额外安装，当前环境已满足\n"
+        "- ENV_FAIL — 无法安装某个关键依赖，说明原因\n\n"
+        "{context}"
+    ),
+    tools_filter=["terminal"],
+    max_tool_rounds=10,
+)
+
 WRITE_CODE = Action(
     name="WriteCode",
     description="编写代码",
@@ -194,7 +234,11 @@ WRITE_CODE = Action(
         "## 重要：必须使用 write_file 工具写入文件\n"
         "你必须通过 write_file 工具将代码写入磁盘。\n"
         "绝对不要只在回复文本中输出代码 — 那样文件不会被创建。\n"
-        "每个文件都必须调用一次 write_file。\n\n"
+        "绝对不要用 run_terminal 写文件（cat >、echo >、tee、heredoc 等），那样不会被系统记录。\n"
+        "每个文件都必须调用一次 write_file。\n"
+        "write_file 的 file_path 参数必须是完整的绝对路径，以项目工作目录开头。\n"
+        "例如：如果项目工作目录是 /home/user/projects/myapp，\n"
+        "那么写入 src/main.py 时 file_path 必须是 /home/user/projects/myapp/src/main.py。\n\n"
         "如果上下文包含「项目工作目录」，所有文件操作必须在该目录下。\n"
         "代码写入 src/，配置文件放项目根目录。\n"
         "如果上下文包含「用户本地开发环境」，代码必须兼容该环境的 Python/Node 版本。\n"
@@ -202,7 +246,7 @@ WRITE_CODE = Action(
         "绝对不要写入隐藏目录（如 .xjd-agent/）。\n\n"
         "## 设计与需求\n{context}"
     ),
-    tools_filter=["code", "file", "terminal"],
+    tools_filter=["code", "file"],
 )
 
 CODE_REVIEW = Action(
@@ -241,11 +285,54 @@ RUN_TEST = Action(
     name="RunTest",
     description="运行测试",
     prompt_template=(
-        "运行以下测试并报告结果。\n"
-        "如果测试失败，分析原因并给出修复建议。\n\n"
+        "你必须实际运行测试命令，不能只分析代码就说通过。\n\n"
+        "## 步骤\n"
+        "1. cd 到项目工作目录\n"
+        "2. 找到测试文件（tests/ 目录下）\n"
+        "3. 执行测试命令：\n"
+        "   - Python 项目：python3 -m pytest tests/ -v\n"
+        "   - Node 项目：npm test 或 npx jest\n"
+        "4. 如果测试失败，分析原因并给出修复建议\n"
+        "5. 贴出完整的测试运行输出（包含 passed/failed 统计行）\n\n"
+        "## 禁止\n"
+        "- 不要只看代码就说「测试应该能通过」\n"
+        "- 不要编造测试结果\n"
+        "- 必须有真实的命令执行输出\n\n"
         "## 测试信息\n{context}"
     ),
     tools_filter=["code", "terminal"],
+)
+
+VERIFY_RUN = Action(
+    name="VerifyRun",
+    description="验证代码可运行：安装依赖、语法检查、启动服务",
+    prompt_template=(
+        "你刚写完代码，现在必须验证它能跑起来。按以下步骤执行：\n\n"
+        "## 第一步：进入项目目录\n"
+        "cd 到项目工作目录，ls 看结构。\n\n"
+        "## 第二步：安装依赖\n"
+        "- 如果有 requirements.txt → pip3 install -r requirements.txt\n"
+        "- 如果有 package.json → npm install\n"
+        "- 如果没有依赖文件，跳过\n\n"
+        "## 第三步：语法检查\n"
+        "- Python 项目：对 src/ 下每个 .py 文件执行 python3 -m py_compile\n"
+        "- Node 项目：对 src/ 下每个 .js 文件执行 node --check\n"
+        "- 如果有语法错误，用 edit_file 修复后重新检查\n\n"
+        "## 第四步：尝试启动\n"
+        "- 找到入口文件（main.py / app.py / index.js）\n"
+        "- 用 nohup 后台启动，绑定 0.0.0.0\n"
+        "- sleep 3 后 curl localhost:端口 验证\n"
+        "- 如果启动失败，查看日志修复后重试（最多重试 3 次）\n"
+        "- 如果不是 web 服务（如 CLI 工具、脚本），跳过启动，只做语法检查\n\n"
+        "## 第五步：汇报结果\n"
+        "最后一行必须是以下之一：\n"
+        "- VERIFY_PASS — 服务已启动，curl 验证通过\n"
+        "- VERIFY_PASS_NO_SERVER — 不是 web 服务，语法检查通过\n"
+        "- VERIFY_FAIL — 无法修复的问题，说明原因\n\n"
+        "{context}"
+    ),
+    tools_filter=["code", "file", "terminal"],
+    max_tool_rounds=15,
 )
 
 DEPLOY_PLAN = Action(
@@ -308,7 +395,10 @@ CHAT_REPLY = Action(
         "- 不要声称服务/项目正在运行、已部署、可以访问，除非你刚刚亲自执行了启动命令并验证\n"
         "- 任务记录里的「done」只表示流水线跑完了，不代表服务在运行中\n"
         "- 如果老板问项目能不能打开/访问，诚实说你不确定运行状态，建议启动流水线重新部署\n"
-        "- 如果老板要求你开始工作或交付成果，诚实告诉他：说一句「开干」或「开始开发 + 需求描述」就能启动团队流水线\n\n"
+        "- 如果老板要求你开始工作或交付成果，诚实告诉他：说一句「开干」「确认」「没问题了就开始」就能启动团队流水线\n"
+        "- 如果老板在讨论需求，你应该积极参与讨论，帮他理清思路，提出专业建议\n"
+        "- 讨论中可以主动提出方案草案，让老板确认后再启动开发\n"
+        "- 如果其他角色（开发、运维等）在群里提了意见，你要综合考虑并给老板建议\n\n"
         "{context}"
     ),
     tools_filter=[],
@@ -373,7 +463,7 @@ QUICK_TASK = Action(
 ALL_ACTIONS: dict[str, Action] = {
     a.name: a for a in [
         USER_REQUIREMENT, EVALUATE_REQUIREMENT, WRITE_PRD, WRITE_DESIGN,
-        WRITE_CODE, CODE_REVIEW, WRITE_TEST, RUN_TEST, DEPLOY_PLAN,
-        EXECUTE_DEPLOY, CHAT_REPLY, QUICK_TASK,
+        SETUP_ENV, WRITE_CODE, VERIFY_RUN, CODE_REVIEW, WRITE_TEST, RUN_TEST,
+        DEPLOY_PLAN, EXECUTE_DEPLOY, CHAT_REPLY, QUICK_TASK,
     ]
 }

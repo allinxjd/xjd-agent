@@ -299,6 +299,7 @@ class FeishuAdapter(BasePlatformAdapter):
                 pass
 
             while self._running:
+                new_loop = None
                 try:
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
@@ -322,6 +323,9 @@ class FeishuAdapter(BasePlatformAdapter):
                     ws_client.start()  # 阻塞直到连接彻底断开
                 except Exception as e:
                     logger.error("飞书长连接异常退出: %s", e)
+                finally:
+                    if new_loop and not new_loop.is_closed():
+                        new_loop.close()
 
                 self._ws_client = None
                 if self._running:

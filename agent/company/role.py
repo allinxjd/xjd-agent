@@ -126,32 +126,38 @@ class CompanyRole(AgentRole):
             sent_from=self.name,
         )
 
-    async def run(self) -> Optional[CompanyMessage]:
-        """主入口：observe → think → act."""
+    async def run(self) -> list[CompanyMessage]:
+        """主入口：observe → think → act. 返回所有中间结果."""
         messages = await self._observe()
         if not messages:
-            return None
+            return []
 
-        context = "\n\n---\n\n".join(m.content for m in messages)
+        original_context = "\n\n---\n\n".join(m.content for m in messages)
+        context = original_context
         self._state = -1
-        last_msg: Optional[CompanyMessage] = None
+        results: list[CompanyMessage] = []
 
         while True:
             action = await self._think(messages)
             if action is None:
                 break
             try:
-                last_msg = await self._act(action, context)
+                msg = await self._act(action, context)
             except Exception as e:
                 logger.error("[%s] Action %s 异常: %s", self.name, action.name, e)
-                last_msg = CompanyMessage(
+                msg = CompanyMessage(
                     content=f"[错误] {self.name} 执行 {action.name} 时异常: {e}",
                     cause_by=action.name,
                     sent_from=self.name,
                 )
-            context = last_msg.content
+            results.append(msg)
+            context = f"{original_context}\n\n---\n\n## {action.name} 执行结果\n{msg.content}"
 
-        return last_msg
+            if any(m.cause_by == "HumanDirective" for m in self._inbox):
+                logger.info("[%s] 检测到新用户消息，暂停后续 action", self.name)
+                break
+
+        return results
 
     def build_system_prompt(self) -> str:
         """组合 system prompt: 基础 + goal/backstory + Karpathy 约束."""

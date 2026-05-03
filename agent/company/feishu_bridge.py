@@ -120,7 +120,7 @@ class FeishuBridge(ChatBridge):
                 last_activity = getattr(adapter, '_last_sdk_activity', 0)
                 idle_seconds = _time.time() - last_activity if last_activity else 999
                 thread_alive = ws_thread.is_alive() if ws_thread else False
-                if thread_alive and idle_seconds < 300:
+                if thread_alive:
                     continue
                 logger.warning(
                     "飞书 Bot %s 疑似掉线 (thread_alive=%s, idle=%.0fs)，重建连接",

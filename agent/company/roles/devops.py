@@ -45,6 +45,6 @@ def create_devops(locale: Optional[CompanyLocale] = None) -> CompanyRole:
         watch_actions=["RunTest"],
         actions=[DEPLOY_PLAN, EXECUTE_DEPLOY],
         tools_filter=["system", "terminal"],
-        max_tool_rounds=5,
+        max_tool_rounds=10,
         karpathy_constraints=karpathy,
     )

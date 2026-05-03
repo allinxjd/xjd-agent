@@ -11,13 +11,13 @@ class TestActionDefinitions:
     def test_all_actions_registered(self):
         expected = {
             "UserRequirement", "EvaluateRequirement", "WritePRD", "WriteDesign",
-            "WriteCode", "CodeReview", "WriteTest", "RunTest", "DeployPlan",
-            "ExecuteDeploy", "ChatReply", "QuickTask",
+            "SetupEnv", "WriteCode", "VerifyRun", "CodeReview", "WriteTest", "RunTest",
+            "DeployPlan", "ExecuteDeploy", "ChatReply", "QuickTask",
         }
         assert set(ALL_ACTIONS.keys()) == expected
 
     def test_write_code_has_tools(self):
-        assert ALL_ACTIONS["WriteCode"].tools_filter == ["code", "file", "terminal"]
+        assert ALL_ACTIONS["WriteCode"].tools_filter == ["code", "file"]
 
     def test_write_prd_no_tools(self):
         assert ALL_ACTIONS["WritePRD"].tools_filter == []
@@ -29,6 +29,18 @@ class TestActionDefinitions:
         qt = ALL_ACTIONS["QuickTask"]
         assert "terminal" in qt.tools_filter
         assert qt.max_tool_rounds == 20
+
+    def test_verify_run_has_tools_and_rounds(self):
+        vr = ALL_ACTIONS["VerifyRun"]
+        assert "terminal" in vr.tools_filter
+        assert "code" in vr.tools_filter
+        assert "file" in vr.tools_filter
+        assert vr.max_tool_rounds == 15
+
+    def test_setup_env_has_tools_and_rounds(self):
+        se = ALL_ACTIONS["SetupEnv"]
+        assert "terminal" in se.tools_filter
+        assert se.max_tool_rounds == 10
 
     def test_prompt_templates_have_context_placeholder(self):
         for name, action in ALL_ACTIONS.items():

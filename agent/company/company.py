@@ -64,7 +64,9 @@ class PipelineConfig:
         return cls(stages=[
             PipelineStage(role="PM", action="WritePRD", stage_key="PRD"),
             PipelineStage(role="PM", action="WriteDesign", stage_key="Design"),
+            PipelineStage(role="Developer", action="SetupEnv", stage_key="Env"),
             PipelineStage(role="Developer", action="WriteCode", stage_key="Code"),
+            PipelineStage(role="Developer", action="VerifyRun", stage_key="Verify"),
             PipelineStage(role="Reviewer", action="CodeReview", stage_key="Review", rework_target="Developer"),
             PipelineStage(role="QA", action="WriteTest", stage_key="Test"),
             PipelineStage(role="QA", action="RunTest", stage_key="Test", rework_target="Developer"),
@@ -165,6 +167,7 @@ class Company:
         self._shared_memory = CompanyMemory(memory_manager)
         self._pipeline_running = False
         self._pipeline_user_msgs: list[CompanyMessage] = []
+        self._pending_project_name: Optional[dict] = None
 
         if chat_bridge:
             self._feishu_bridge = chat_bridge  # type: ignore[assignment]
@@ -274,6 +277,11 @@ class Company:
 
     def _is_test_passed(self, content: str) -> bool:
         import re
+        pytest_match = re.search(r'(\d+)\s+passed', content)
+        jest_match = re.search(r'Tests:\s+(\d+)\s+passed', content)
+        if pytest_match or jest_match:
+            has_fail = bool(re.search(r'(\d+)\s+failed', content))
+            return not has_fail
         pass_indicators = self._locale.get("keywords.test_pass") or ["全部通过", "测试通过", "通过率 100", "没毛病", "稳了"]
         fail_keywords = self._locale.get("keywords.test_fail") or ["失败", "不通过", "未通过"]
         has_pass = any(ind in content for ind in pass_indicators) or bool(re.search(r'\bPASS\b', content, re.IGNORECASE))
@@ -303,6 +311,11 @@ class Company:
         if not has_src_files:
             src_dir = project_dir
         logger.debug("_collect_project_files scanning: %s", src_dir)
+        _skip_dirs = {
+            ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules",
+            ".git", ".tox", ".mypy_cache", ".ruff_cache", "dist", "build",
+            ".egg-info", ".eggs",
+        }
         _skip_ext = {
             ".pyc", ".class", ".o", ".so", ".db", ".sqlite",
             ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".webp",
@@ -321,6 +334,8 @@ class Company:
                 files_content.append(f"\n... (已达文件上限 {max_files})")
                 break
             if not f.is_file():
+                continue
+            if any(part in _skip_dirs for part in f.relative_to(src_dir).parts):
                 continue
             if f.suffix in _skip_ext:
                 continue
@@ -451,7 +466,7 @@ class Company:
                 )
                 await self._env.publish(status_msg)
                 try:
-                    result_msg = await role.run()
+                    result_msgs = await role.run()
                 except Exception as e:
                     logger.error("[Pipeline] %s.run() 异常: %s", role.name, e)
                     error_notify = CompanyMessage(
@@ -462,161 +477,200 @@ class Company:
                     )
                     await self._env.publish(error_notify)
                     continue
-                if not result_msg:
+                if not result_msgs:
                     continue
 
-                result_msg.task_id = task.task_id
-                task.result = result_msg.content
-                self._store.save_message(result_msg)
+                for result_msg in result_msgs:
 
-                if self._is_no_work(result_msg.content):
-                    logger.info("[%s] 无实际工作，跳过", role.name)
-                    continue
+                    result_msg.task_id = task.task_id
+                    task.result = result_msg.content
+                    self._store.save_message(result_msg)
 
-                round_had_work = True
-
-                if result_msg.cause_by == "WritePRD":
-                    stages_done["PRD"] = True
-                    stage_outputs["PRD"] = result_msg.content
-                elif result_msg.cause_by == "WriteDesign":
-                    stages_done["PRD"] = True
-                    stages_done["Design"] = True
-                    stage_outputs["Design"] = result_msg.content
-                elif result_msg.cause_by == "WriteCode":
-                    if self._has_requirement_issue(result_msg.content):
-                        logger.warning("[Developer] 输出有需求问题，回退给 PM 核实")
-                        self._clear_downstream_inboxes(role.name)
-                        escalate = CompanyMessage(
-                            content=(
-                                f"## Developer 反馈需求问题\n{result_msg.content[:1000]}\n\n"
-                                "请检查对话记录，确认需求是否清晰。如果需求没有跟老板确认过，"
-                                "请在群里向老板核实后，重新整理需求和设计方案给 Developer。"
-                            ),
-                            cause_by="WriteCode",
-                            sent_from="Developer",
-                            send_to="PM",
-                            task_id=task.task_id,
-                        )
-                        await self._env.publish(escalate)
+                    if self._is_no_work(result_msg.content):
+                        logger.info("[%s] 无实际工作，跳过", role.name)
                         continue
-                    stages_done["Code"] = True
-                    workspace = self._extract_workspace_from_requirement(requirement)
-                    if workspace:
-                        code_listing = self._collect_project_files(
-                            workspace,
-                            max_chars=self._config.max_project_chars,
-                            max_files=self._config.max_project_files,
-                        )
-                        if code_listing:
-                            result_msg.content += f"\n\n## 代码文件内容\n{code_listing}"
-                            logger.info("已附加项目代码文件到 WriteCode 输出 (%d 字符)", len(code_listing))
+
+                    round_had_work = True
+
+                    if result_msg.cause_by == "WritePRD":
+                        stages_done["PRD"] = True
+                        stage_outputs["PRD"] = result_msg.content
+                    elif result_msg.cause_by == "WriteDesign":
+                        stages_done["PRD"] = True
+                        stages_done["Design"] = True
+                        stage_outputs["Design"] = result_msg.content
+                    elif result_msg.cause_by == "SetupEnv":
+                        stages_done["Env"] = True
+                        if "ENV_FAIL" in result_msg.content:
+                            logger.warning("环境安装失败，继续执行（Developer 可能需要手动处理）")
+                    elif result_msg.cause_by == "WriteCode":
+                        if self._has_requirement_issue(result_msg.content):
+                            logger.warning("[Developer] 输出有需求问题，回退给 PM 核实")
+                            self._clear_downstream_inboxes(role.name)
+                            escalate = CompanyMessage(
+                                content=(
+                                    f"## Developer 反馈需求问题\n{result_msg.content[:1000]}\n\n"
+                                    "请检查对话记录，确认需求是否清晰。如果需求没有跟老板确认过，"
+                                    "请在群里向老板核实后，重新整理需求和设计方案给 Developer。"
+                                ),
+                                cause_by="WriteCode",
+                                sent_from="Developer",
+                                send_to="PM",
+                                task_id=task.task_id,
+                            )
+                            await self._env.publish(escalate)
+                            break
+                        stages_done["Code"] = True
+                        workspace = self._extract_workspace_from_requirement(requirement)
+                        if workspace:
+                            code_listing = self._collect_project_files(
+                                workspace,
+                                max_chars=self._config.max_project_chars,
+                                max_files=self._config.max_project_files,
+                            )
+                            if code_listing:
+                                result_msg.content += f"\n\n## 代码文件内容\n{code_listing}"
+                                logger.info("已附加项目代码文件到 WriteCode 输出 (%d 字符)", len(code_listing))
+                            else:
+                                role_rework = rework_counts.get("Developer_empty", 0)
+                                if role_rework < max_rework:
+                                    rework_counts["Developer_empty"] = role_rework + 1
+                                    logger.warning("WriteCode 完成但项目目录无代码文件，要求 Developer 重写 (第%d次)", role_rework + 1)
+                                    stages_done["Code"] = False
+                                    rework_msg = CompanyMessage(
+                                        content=(
+                                            "项目目录下没有找到任何代码文件。\n"
+                                            "你必须使用 write_file 工具将每个文件写入磁盘。\n"
+                                            "所有文件必须写入项目工作目录下（src/ 或项目根目录）。\n"
+                                            "不要只在回复文本中输出代码，那样文件不会被创建。\n"
+                                            "不要写入 .xjd-agent/ 或其他隐藏目录。\n"
+                                            "请重新执行，确保每个文件都通过 write_file 写入项目目录。"
+                                        ),
+                                        cause_by="WriteDesign",
+                                        sent_from="Reviewer",
+                                        send_to="Developer",
+                                        task_id=task.task_id,
+                                    )
+                                    await self._env.publish(rework_msg)
+                                    break
+                    elif result_msg.cause_by == "VerifyRun":
+                        if "VERIFY_PASS" in result_msg.content:
+                            stages_done["Verify"] = True
                         else:
-                            role_rework = rework_counts.get("Developer_empty", 0)
-                            if role_rework < max_rework:
-                                rework_counts["Developer_empty"] = role_rework + 1
-                                logger.warning("WriteCode 完成但项目目录无代码文件，要求 Developer 重写 (第%d次)", role_rework + 1)
+                            verify_rework = rework_counts.get("Developer_verify", 0)
+                            if verify_rework < max_rework:
+                                rework_counts["Developer_verify"] = verify_rework + 1
+                                logger.warning("VerifyRun 失败，回退给 Developer 修复 (第%d次)", verify_rework + 1)
                                 stages_done["Code"] = False
+                                stages_done["Verify"] = False
+                                rework_parts = [f"## 验证失败，请修复后重新提交\n{result_msg.content}"]
+                                if "Design" in stage_outputs:
+                                    rework_parts.append(f"## 原始设计方案（必须遵循）\n{stage_outputs['Design'][:2000]}")
                                 rework_msg = CompanyMessage(
-                                    content=(
-                                        "项目目录下没有找到任何代码文件。\n"
-                                        "你必须使用 write_file 工具将每个文件写入磁盘。\n"
-                                        "所有文件必须写入项目工作目录下（src/ 或项目根目录）。\n"
-                                        "不要只在回复文本中输出代码，那样文件不会被创建。\n"
-                                        "不要写入 .xjd-agent/ 或其他隐藏目录。\n"
-                                        "请重新执行，确保每个文件都通过 write_file 写入项目目录。"
-                                    ),
+                                    content="\n\n".join(rework_parts),
                                     cause_by="WriteDesign",
-                                    sent_from="Reviewer",
+                                    sent_from="Developer",
                                     send_to="Developer",
                                     task_id=task.task_id,
                                 )
                                 await self._env.publish(rework_msg)
-                                continue
-                elif result_msg.cause_by == "CodeReview":
-                    if self._has_code_incomplete(result_msg.content) or self._has_requirement_issue(result_msg.content):
-                        logger.warning("[Reviewer] 输出表示代码不完整，回退给 Developer 重写")
-                        self._clear_downstream_inboxes(role.name)
+                                break
+                            else:
+                                logger.warning("VerifyRun 返工次数已达上限，强制通过")
+                                stages_done["Verify"] = True
+                    elif result_msg.cause_by == "CodeReview":
+                        if self._has_code_incomplete(result_msg.content) or self._has_requirement_issue(result_msg.content):
+                            logger.warning("[Reviewer] 输出表示代码不完整，回退给 Developer 重写")
+                            self._clear_downstream_inboxes(role.name)
+                            stages_done["Code"] = False
+                            stages_done["Verify"] = False
+                            stages_done["Review"] = False
+                            rework_msg = CompanyMessage(
+                                content=(
+                                    "Reviewer 反馈：收到的代码不完整，无法审查。\n"
+                                    "请确保所有代码文件都通过 write_file 写入了 src/ 目录。\n"
+                                    "重新执行 WriteCode，确保每个文件都落盘。"
+                                ),
+                                cause_by="WriteDesign",
+                                sent_from="Reviewer",
+                                send_to="Developer",
+                                task_id=task.task_id,
+                            )
+                            await self._env.publish(rework_msg)
+                            break
+                        if self._is_review_approved(result_msg.content):
+                            stages_done["Review"] = True
+                    elif result_msg.cause_by in ("WriteTest", "RunTest"):
+                        if result_msg.cause_by == "RunTest" and self._is_test_passed(result_msg.content):
+                            stages_done["Test"] = True
+                    elif result_msg.cause_by in ("DeployPlan", "ExecuteDeploy"):
+                        if result_msg.cause_by == "ExecuteDeploy":
+                            import re as _re
+                            has_curl = "curl" in result_msg.content.lower()
+                            has_url = bool(_re.search(r'http://[\d.]+:\d+', result_msg.content))
+                            no_deploy = "无需部署" in result_msg.content or "无需操作" in result_msg.content
+                            if (has_curl and has_url) or no_deploy:
+                                stages_done["Deploy"] = True
+
+                    rework_target = self._check_rework(role.name, result_msg.content)
+                    role_rework = rework_counts.get(role.name, 0)
+                    if rework_target and role_rework < max_rework:
+                        rework_counts[role.name] = role_rework + 1
+                        logger.info("返工 #%d: %s 要求 %s 修改", role_rework + 1, role.name, rework_target)
                         stages_done["Code"] = False
+                        stages_done["Verify"] = False
                         stages_done["Review"] = False
+                        stages_done["Test"] = False
+                        self._clear_downstream_inboxes(role.name)
+                        rework_parts = [f"## {role.name} 反馈（请修改后重新提交）\n{result_msg.content}"]
+                        if "Design" in stage_outputs:
+                            rework_parts.append(f"## 原始设计方案（必须遵循）\n{stage_outputs['Design'][:2000]}")
+                        if "PRD" in stage_outputs:
+                            rework_parts.append(f"## 原始需求\n{stage_outputs['PRD'][:1000]}")
                         rework_msg = CompanyMessage(
-                            content=(
-                                "Reviewer 反馈：收到的代码不完整，无法审查。\n"
-                                "请确保所有代码文件都通过 write_file 写入了 src/ 目录。\n"
-                                "重新执行 WriteCode，确保每个文件都落盘。"
-                            ),
-                            cause_by="WriteDesign",
-                            sent_from="Reviewer",
-                            send_to="Developer",
+                            content="\n\n".join(rework_parts),
+                            cause_by=result_msg.cause_by,
+                            sent_from=role.name,
+                            send_to=rework_target,
                             task_id=task.task_id,
                         )
                         await self._env.publish(rework_msg)
-                        continue
-                    if self._is_review_approved(result_msg.content):
+                        self._store.save_message(rework_msg)
+                        rework_status = CompanyMessage(
+                            content=f"{role.name} 打回了代码，{rework_target} 正在修改（第 {role_rework + 1} 次返工）",
+                            cause_by="StatusUpdate",
+                            sent_from=role.name,
+                            task_id=task.task_id,
+                        )
+                        await self._env.publish(rework_status)
+                        break
+                    elif rework_target and role_rework >= max_rework:
+                        logger.warning("返工次数已达上限 %d，强制通过 %s 阶段", max_rework, role.name)
                         stages_done["Review"] = True
-                elif result_msg.cause_by in ("WriteTest", "RunTest"):
-                    if result_msg.cause_by == "RunTest" and self._is_test_passed(result_msg.content):
                         stages_done["Test"] = True
-                elif result_msg.cause_by in ("DeployPlan", "ExecuteDeploy"):
-                    if result_msg.cause_by == "ExecuteDeploy":
-                        stages_done["Deploy"] = True
-
-                rework_target = self._check_rework(role.name, result_msg.content)
-                role_rework = rework_counts.get(role.name, 0)
-                if rework_target and role_rework < max_rework:
-                    rework_counts[role.name] = role_rework + 1
-                    logger.info("返工 #%d: %s 要求 %s 修改", role_rework + 1, role.name, rework_target)
-                    stages_done["Code"] = False
-                    stages_done["Review"] = False
-                    stages_done["Test"] = False
-                    self._clear_downstream_inboxes(role.name)
-                    rework_parts = [f"## {role.name} 反馈（请修改后重新提交）\n{result_msg.content}"]
-                    if "Design" in stage_outputs:
-                        rework_parts.append(f"## 原始设计方案（必须遵循）\n{stage_outputs['Design'][:2000]}")
-                    if "PRD" in stage_outputs:
-                        rework_parts.append(f"## 原始需求\n{stage_outputs['PRD'][:1000]}")
-                    rework_msg = CompanyMessage(
-                        content="\n\n".join(rework_parts),
-                        cause_by=result_msg.cause_by,
-                        sent_from=role.name,
-                        send_to=rework_target,
-                        task_id=task.task_id,
-                    )
-                    await self._env.publish(rework_msg)
-                    self._store.save_message(rework_msg)
-                    rework_status = CompanyMessage(
-                        content=f"{role.name} 打回了代码，{rework_target} 正在修改（第 {role_rework + 1} 次返工）",
-                        cause_by="StatusUpdate",
-                        sent_from=role.name,
-                        task_id=task.task_id,
-                    )
-                    await self._env.publish(rework_status)
-                elif rework_target and role_rework >= max_rework:
-                    logger.warning("返工次数已达上限 %d，强制通过 %s 阶段", max_rework, role.name)
-                    stages_done["Review"] = True
-                    stages_done["Test"] = True
-                    escalate = CompanyMessage(
-                        content=f"老板，{role.name} 已经打回 {max_rework} 次了，团队尽力修了但还有问题。先继续推进，后续再优化 🫡",
-                        cause_by="ChatReply",
-                        sent_from="PM",
-                        task_id=task.task_id,
-                    )
-                    await self._env.publish(escalate)
-                    try:
-                        role_order = self._pipeline.role_order
-                        idx = role_order.index(role.name)
-                        next_role = role_order[idx + 1] if idx + 1 < len(role_order) else None
-                    except ValueError:
-                        next_role = None
-                    forced_approve = CompanyMessage(
-                        content=f"APPROVED（已达最大返工次数，强制通过）\n\n原始审查意见：{result_msg.content[:500]}",
-                        cause_by=result_msg.cause_by,
-                        sent_from=role.name,
-                        send_to=next_role or "",
-                        task_id=task.task_id,
-                    )
-                    await self._env.publish(forced_approve)
-                else:
-                    await self._env.publish(result_msg)
+                        escalate = CompanyMessage(
+                            content=f"老板，{role.name} 已经打回 {max_rework} 次了，团队尽力修了但还有问题。先继续推进，后续再优化 🫡",
+                            cause_by="ChatReply",
+                            sent_from="PM",
+                            task_id=task.task_id,
+                        )
+                        await self._env.publish(escalate)
+                        try:
+                            role_order = self._pipeline.role_order
+                            idx = role_order.index(role.name)
+                            next_role = role_order[idx + 1] if idx + 1 < len(role_order) else None
+                        except ValueError:
+                            next_role = None
+                        forced_approve = CompanyMessage(
+                            content=f"APPROVED（已达最大返工次数，强制通过）\n\n原始审查意见：{result_msg.content[:500]}",
+                            cause_by=result_msg.cause_by,
+                            sent_from=role.name,
+                            send_to=next_role or "",
+                            task_id=task.task_id,
+                        )
+                        await self._env.publish(forced_approve)
+                    else:
+                        await self._env.publish(result_msg)
 
             if not round_had_work:
                 idle_rounds += 1
@@ -672,8 +726,8 @@ class Company:
                     sent_from=role.name,
                 )
                 await self._env.publish(status_msg)
-                result_msg = await role.run()
-                if result_msg:
+                result_msgs = await role.run()
+                for result_msg in result_msgs:
                     task.result = result_msg.content
                     await self._env.publish(result_msg)
 
@@ -770,6 +824,9 @@ class Company:
             "改一下", "改个", "修改", "优化一下", "优化个",
             "支持一下", "支持个", "接入",
             "开发", "开发个",
+            "没问题了", "就这样吧", "可以开始了", "确认", "就按这个来",
+            "方案没问题", "设计没问题", "需求确认", "可以动手了",
+            "那就这样", "行吧", "OK开始", "ok开始",
         ]
         if any(kw in text for kw in weak):
             return "weak"
@@ -835,6 +892,43 @@ class Company:
             return None
         except Exception:
             return None
+
+    def _find_project_by_name(self, text: str) -> Optional[Path]:
+        """从需求文本中匹配已有项目目录。"""
+        import json
+        import re
+
+        projects_dir = get_projects_dir()
+        if not projects_dir.exists():
+            return None
+
+        iterate_keywords = ["接着开发", "继续开发", "接着做", "继续做", "迭代", "升级", "加个功能", "加一个功能", "改一下"]
+        is_iterate = any(kw in text for kw in iterate_keywords)
+
+        dirs = sorted(projects_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+        project_dirs = [d for d in dirs if d.is_dir() and (d / ".project.json").exists()]
+
+        if not project_dirs:
+            return None
+
+        text_lower = text.lower()
+        for d in project_dirs:
+            dir_name = d.name.split("-", 1)[1] if "-" in d.name else d.name
+            if dir_name and dir_name.lower() in text_lower:
+                return d
+            try:
+                meta = json.loads((d / ".project.json").read_text())
+                req = meta.get("requirement", "")
+                name_match = re.search(r'[\u4e00-\u9fff\w]{2,}', dir_name)
+                if name_match and name_match.group() in text:
+                    return d
+            except Exception:
+                continue
+
+        if is_iterate and project_dirs:
+            return project_dirs[0]
+
+        return None
 
     async def _handle_quick_task(self, role_name: str, messages: list[CompanyMessage]) -> None:
         """快速任务：直接派给角色带工具执行，不走完整 pipeline."""
@@ -933,14 +1027,26 @@ class Company:
                     self._standby_history.append((m.sent_from, m.content))
                     self._store.save_message(m)
 
-                req_msgs = [m for m in collected if self._detect_task_intent(m.content)]
+                _confirm_only_prefixes = (
+                    "开干", "可以", "没问题", "OK", "ok", "好的", "行",
+                    "确认", "就这样", "可以开始", "开始吧", "动手吧",
+                    "好", "嗯", "对", "是的", "没问题了", "就按这个",
+                    "可以，开干", "好，开干", "行，开干",
+                )
+                req_msgs = []
+                for m in collected:
+                    intent = self._detect_task_intent(m.content)
+                    text = m.content.strip()
+                    is_confirm = len(text) <= 15 and text.startswith(_confirm_only_prefixes)
+                    if intent and not is_confirm:
+                        req_msgs.append(m)
                 chat_msgs = [m for m in collected if m not in req_msgs]
 
                 if req_msgs:
                     self._pipeline_user_msgs.extend(req_msgs)
-                    summary = "、".join(m.content[:20] for m in req_msgs)
+                    summary = "、".join(m.content[:30] for m in req_msgs)
                     ack = CompanyMessage(
-                        content=f"收到老板 🫡 已记录补充需求（{summary}），会纳入当前开发",
+                        content=f"收到老板 🫡 补充需求已记录，会纳入当前开发：\n{summary}",
                         cause_by="ChatReply",
                         sent_from="PM",
                     )
@@ -976,6 +1082,78 @@ class Company:
             self._store.save_message(m)
 
         user_messages = [m for m in messages if m.sent_from not in self._env.roles]
+
+        if self._pending_project_name and user_messages:
+            import re as _re_pn
+            raw_name = user_messages[-1].content.strip()
+            clean_name = _re_pn.sub(r'[^\w\u4e00-\u9fff-]', '', raw_name)[:10]
+            if clean_name and len(clean_name) >= 2:
+                pending = self._pending_project_name
+                self._pending_project_name = None
+
+                confirm_msg = CompanyMessage(
+                    content=f"收到老板 👌 项目名「{clean_name}」已确认，这就安排团队开干！",
+                    cause_by="ChatReply",
+                    sent_from=pm_role.name,
+                )
+                await self._env.publish(confirm_msg)
+                self._standby_history.append((pm_role.name, confirm_msg.content))
+
+                from agent.company.local_env import detect_local_env, format_env_for_context
+                env_context = format_env_for_context(detect_local_env())
+
+                from agent.company.secret_extractor import extract_secrets, write_env_file
+                secrets = extract_secrets(self._standby_history)
+
+                project_dir = self._create_project_workspace(
+                    pending["task_context"], project_name=clean_name,
+                )
+                if secrets:
+                    env_file = write_env_file(project_dir, secrets)
+                    if env_file:
+                        logger.info("已写入 %d 个密钥到 %s", len(secrets), env_file)
+                enriched = (
+                    f"## 项目工作目录\n{project_dir}\n"
+                    f"所有文件必须创建在此目录下。PRD 写入 docs/prd.md，设计写入 docs/design.md，"
+                    f"代码写入 src/，测试写入 tests/。\n\n"
+                    f"{env_context}\n\n"
+                    f"{pending['full_context']}"
+                )
+
+                async def _run_pipeline(req: str, pdir: Path) -> None:
+                    try:
+                        result = await self.run(req)
+                        status = "done" if result else "failed"
+                    except Exception as e:
+                        logger.error("Pipeline 执行异常: %s", e)
+                        status = "failed"
+                    finally:
+                        self._pipeline_running = False
+                        self._env._pipeline_user_queue = None
+                        self._update_project_status(pdir, status)
+                        done_msg = CompanyMessage(
+                            content=f"老板，任务{'完成' if status == 'done' else '执行出错了'}！项目目录: {pdir}",
+                            cause_by="StatusUpdate",
+                            sent_from="PM",
+                        )
+                        await self._env.publish(done_msg)
+
+                import asyncio
+                self._pipeline_running = True
+                self._env._pipeline_user_queue = []
+                asyncio.create_task(_run_pipeline(enriched, project_dir))
+                return
+            else:
+                retry_msg = CompanyMessage(
+                    content="老板，项目名太短了或者格式不对，给个 2-6 个字的名字？比如「智能计算器」「Holu资讯」",
+                    cause_by="ChatReply",
+                    sent_from=pm_role.name,
+                )
+                await self._env.publish(retry_msg)
+                self._standby_history.append((pm_role.name, retry_msg.content))
+                self._store.save_message(retry_msg)
+                return
+
         intents = [(m, self._detect_task_intent(m.content)) for m in user_messages]
         has_strong = any(i is True for _, i in intents)
         has_weak = any(i == "weak" for _, i in intents)
@@ -1021,25 +1199,71 @@ class Company:
             self._standby_history.append((pm_role.name, confirm_msg.content))
 
             req_summary = eval_text.strip().split("\n", 1)[1].strip() if "\n" in eval_text.strip() else task_context
-            project_dir = self._create_project_workspace(task_context)
+
+            project_name = None
+            import re as _re_name
+            name_match = _re_name.search(r'PROJECT_NAME:\s*(.+)', eval_text)
+            if name_match:
+                project_name = name_match.group(1).strip()[:10]
+
+            existing_project = self._find_project_by_name(task_context)
+
+            if not project_name and not existing_project:
+                self._pending_project_name = {
+                    "eval_text": eval_text,
+                    "task_context": task_context,
+                    "full_context": full_context,
+                    "req_summary": req_summary,
+                }
+                clarify_msg = CompanyMessage(
+                    content="老板，项目叫什么名字？给个正式的项目名我好建档 📋",
+                    cause_by="ChatReply",
+                    sent_from=pm_role.name,
+                )
+                await self._env.publish(clarify_msg)
+                self._standby_history.append((pm_role.name, clarify_msg.content))
+                self._store.save_message(clarify_msg)
+                return
 
             from agent.company.local_env import detect_local_env, format_env_for_context
             env_context = format_env_for_context(detect_local_env())
 
             from agent.company.secret_extractor import extract_secrets, write_env_file
             secrets = extract_secrets(self._standby_history)
-            if secrets:
-                env_file = write_env_file(project_dir, secrets)
-                if env_file:
-                    logger.info("已写入 %d 个密钥到 %s", len(secrets), env_file)
 
-            enriched = (
-                f"## 项目工作目录\n{project_dir}\n"
-                f"所有文件必须创建在此目录下。PRD 写入 docs/prd.md，设计写入 docs/design.md，"
-                f"代码写入 src/，测试写入 tests/。\n\n"
-                f"{env_context}\n\n"
-                f"{full_context}"
-            )
+            if existing_project:
+                project_dir = existing_project
+                if secrets:
+                    env_file = write_env_file(project_dir, secrets)
+                    if env_file:
+                        logger.info("已写入 %d 个密钥到 %s", len(secrets), env_file)
+                existing_code = self._collect_project_files(
+                    project_dir,
+                    max_chars=self._config.max_project_chars,
+                    max_files=self._config.max_project_files,
+                )
+                enriched = (
+                    f"## 项目工作目录\n{project_dir}\n"
+                    f"这是一个已有项目，你需要在现有代码基础上修改，不要从头重写。\n"
+                    f"所有文件操作必须在此目录下。\n\n"
+                    f"## 现有代码\n{existing_code}\n\n"
+                    f"{env_context}\n\n"
+                    f"{full_context}"
+                )
+                logger.info("迭代开发模式：使用已有项目 %s", project_dir)
+            else:
+                project_dir = self._create_project_workspace(task_context, project_name=project_name)
+                if secrets:
+                    env_file = write_env_file(project_dir, secrets)
+                    if env_file:
+                        logger.info("已写入 %d 个密钥到 %s", len(secrets), env_file)
+                enriched = (
+                    f"## 项目工作目录\n{project_dir}\n"
+                    f"所有文件必须创建在此目录下。PRD 写入 docs/prd.md，设计写入 docs/design.md，"
+                    f"代码写入 src/，测试写入 tests/。\n\n"
+                    f"{env_context}\n\n"
+                    f"{full_context}"
+                )
 
             async def _run_pipeline(req: str, pdir: Path) -> None:
                 try:
@@ -1078,16 +1302,33 @@ class Company:
         history_text = "\n".join(history_lines)
         project_status = self._build_project_status()
 
-        responded_roles: set[str] = set()
+        target_roles: set[str] = set()
         for m in user_messages:
             target = self._route_message_to_role(m)
-            role_name = target if target and target in self._env.roles else "PM"
+            if target:
+                target_roles.add(target)
+            target_roles.add("PM")
+
+        responded_roles: set[str] = set()
+        for role_name in ["PM"] + [r for r in target_roles if r != "PM"]:
             if role_name in responded_roles:
                 continue
             responded_roles.add(role_name)
             responder = self._env.roles.get(role_name) or pm_role
-            chat_context = f"当前时间: {now}\n\n{project_status}## 对话记录\n{history_text}"
+            role_hint = ""
+            if role_name != "PM":
+                role_hint = (
+                    f"\n\n你是{responder.description}，用户的讨论涉及你的专业领域。"
+                    f"从你的专业角度参与讨论，提出建议或指出潜在问题。"
+                    f"如果话题跟你无关，回复「这块我没意见，听老板和 PM 的」即可，不要硬凑。"
+                )
+            chat_context = (
+                f"当前时间: {now}\n\n{project_status}"
+                f"## 对话记录\n{history_text}{role_hint}"
+            )
             reply_msg = await responder._act(CHAT_REPLY, chat_context)
+            if role_name != "PM" and any(skip in reply_msg.content for skip in ["没意见", "听老板", "不涉及", "跟我无关"]):
+                continue
             self._standby_history.append((responder.name, reply_msg.content))
             self._store.save_message(reply_msg)
             await self._env.publish(reply_msg)
@@ -1230,15 +1471,18 @@ class Company:
                 first_sentence = first_line[:10] if first_line and len(first_line) >= 2 and first_line not in Company._PROJECT_NAME_STOPWORDS else "project"
         return first_sentence[:10] if first_sentence else "project"
 
-    def _create_project_workspace(self, requirement: str) -> Path:
+    def _create_project_workspace(self, requirement: str, project_name: Optional[str] = None) -> Path:
         """根据需求创建项目工作目录，返回项目路径."""
         import json
         import re
         from datetime import datetime
 
         date_str = datetime.now().strftime("%Y%m%d")
-        short_name = self._extract_project_name(requirement)
-        slug = short_name[:10].strip()
+        if project_name:
+            slug = project_name[:10].strip()
+        else:
+            short_name = self._extract_project_name(requirement)
+            slug = short_name[:10].strip()
         slug = re.sub(r'[^\w\u4e00-\u9fff-]', '_', slug)
         slug = re.sub(r'_+', '_', slug).strip('_') or "project"
         project_name = f"{date_str}-{slug}"
@@ -1296,8 +1540,8 @@ class Company:
             for role in self._env.roles.values():
                 if not role.has_pending:
                     continue
-                result_msg = await role.run()
-                if result_msg:
+                result_msgs = await role.run()
+                for result_msg in result_msgs:
                     task.result = result_msg.content
                     print(f"\n[{result_msg.sent_from}] ({result_msg.cause_by})")
                     print(result_msg.content[:500])

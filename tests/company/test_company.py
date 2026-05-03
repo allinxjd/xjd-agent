@@ -84,6 +84,22 @@ class TestIsTestPassed:
     def test_no_indicators(self):
         assert self.c._is_test_passed("代码已经写好了") is False
 
+    def test_real_pytest_output_pass(self):
+        output = "tests/test_main.py::test_add PASSED\ntests/test_main.py::test_sub PASSED\n\n2 passed in 0.03s"
+        assert self.c._is_test_passed(output) is True
+
+    def test_real_pytest_output_fail(self):
+        output = "tests/test_main.py::test_add PASSED\ntests/test_main.py::test_sub FAILED\n\n1 passed, 1 failed in 0.05s"
+        assert self.c._is_test_passed(output) is False
+
+    def test_real_jest_output_pass(self):
+        output = "Test Suites: 1 passed, 1 total\nTests: 5 passed, 5 total"
+        assert self.c._is_test_passed(output) is True
+
+    def test_real_jest_output_fail(self):
+        output = "Test Suites: 1 failed, 1 total\nTests: 3 passed, 2 failed, 5 total"
+        assert self.c._is_test_passed(output) is False
+
 
 # ── _detect_task_intent ──────────────────────────────────────
 
@@ -402,7 +418,9 @@ class TestPipelineConfig:
         from agent.company.company import PipelineConfig
         pc = PipelineConfig.default()
         assert "PRD" in pc.stage_keys
+        assert "Env" in pc.stage_keys
         assert "Code" in pc.stage_keys
+        assert "Verify" in pc.stage_keys
         assert "Deploy" in pc.stage_keys
 
     def test_rework_target_for(self):
@@ -441,3 +459,79 @@ class TestPipelineConfig:
         c = Company(router=_FakeRouter(), config=cfg)
         assert c._check_rework("QA", "3 个测试失败") == "Developer"
         assert c._check_rework("Reviewer", "REJECTED") is None
+
+
+# ── _find_project_by_name ──────────────────────────────────
+
+class TestFindProjectByName:
+    def setup_method(self):
+        self.c = _make_company()
+
+    def test_match_by_dir_name(self, tmp_path, monkeypatch):
+        import json
+        proj = tmp_path / "20260502-Holu"
+        proj.mkdir()
+        (proj / ".project.json").write_text(json.dumps({"requirement": "Holu项目"}))
+
+        monkeypatch.setattr("agent.company.company.get_projects_dir", lambda: tmp_path)
+        result = self.c._find_project_by_name("接着开发Holu")
+        assert result == proj
+
+    def test_iterate_keyword_returns_latest(self, tmp_path, monkeypatch):
+        import json, time
+        proj1 = tmp_path / "20260501-old"
+        proj1.mkdir()
+        (proj1 / ".project.json").write_text(json.dumps({"requirement": "old"}))
+        time.sleep(0.05)
+        proj2 = tmp_path / "20260502-new"
+        proj2.mkdir()
+        (proj2 / ".project.json").write_text(json.dumps({"requirement": "new"}))
+
+        monkeypatch.setattr("agent.company.company.get_projects_dir", lambda: tmp_path)
+        result = self.c._find_project_by_name("接着开发")
+        assert result == proj2
+
+    def test_no_match_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("agent.company.company.get_projects_dir", lambda: tmp_path)
+        result = self.c._find_project_by_name("做一个全新的项目")
+        assert result is None
+
+    def test_no_projects_dir(self, tmp_path, monkeypatch):
+        nonexistent = tmp_path / "nonexistent"
+        monkeypatch.setattr("agent.company.company.get_projects_dir", lambda: nonexistent)
+        result = self.c._find_project_by_name("接着开发Holu")
+        assert result is None
+
+
+# ── _create_project_workspace with project_name ──────────
+
+class TestCreateProjectWorkspace:
+    def setup_method(self):
+        self.c = _make_company()
+
+    def test_uses_project_name_when_provided(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("agent.company.company.get_projects_dir", lambda: tmp_path)
+        result = self.c._create_project_workspace("写一个计算器", project_name="智能计算器")
+        assert "智能计算器" in result.name
+
+    def test_falls_back_to_extract_when_no_name(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("agent.company.company.get_projects_dir", lambda: tmp_path)
+        result = self.c._create_project_workspace("写一个Python计算器")
+        assert result.exists()
+
+
+# ── PROJECT_NAME parsing ──────────────────────────────────
+
+class TestProjectNameParsing:
+    def test_parse_project_name_from_eval(self):
+        import re
+        eval_text = "READY\nPROJECT_NAME: 智能计算器\n核心需求是做一个支持四则运算的计算器"
+        match = re.search(r'PROJECT_NAME:\s*(.+)', eval_text)
+        assert match is not None
+        assert match.group(1).strip() == "智能计算器"
+
+    def test_no_project_name_line(self):
+        import re
+        eval_text = "READY\n核心需求是做一个计算器"
+        match = re.search(r'PROJECT_NAME:\s*(.+)', eval_text)
+        assert match is None

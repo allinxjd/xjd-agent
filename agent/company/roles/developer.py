@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from agent.company.action import WRITE_CODE
+from agent.company.action import SETUP_ENV, WRITE_CODE, VERIFY_RUN
 from agent.company.role import CompanyRole
 
 if TYPE_CHECKING:
@@ -42,7 +42,8 @@ def create_developer(locale: Optional[CompanyLocale] = None) -> CompanyRole:
         goal=goal,
         backstory=backstory,
         watch_actions=["WritePRD", "WriteDesign", "CodeReview"],
-        actions=[WRITE_CODE],
+        actions=[SETUP_ENV, WRITE_CODE, VERIFY_RUN],
         tools_filter=["code", "file", "terminal"],
+        max_tool_rounds=15,
         karpathy_constraints=karpathy,
     )
