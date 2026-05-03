@@ -607,10 +607,13 @@ class Company:
                         if result_msg.cause_by == "ExecuteDeploy":
                             import re as _re
                             has_curl = "curl" in result_msg.content.lower()
-                            has_url = bool(_re.search(r'http://[\d.]+:\d+', result_msg.content))
+                            url_m = _re.search(r'http://[\d.]+:\d+', result_msg.content)
+                            has_url = bool(url_m)
                             no_deploy = "无需部署" in result_msg.content or "无需操作" in result_msg.content
                             if (has_curl and has_url) or no_deploy:
                                 stages_done["Deploy"] = True
+                            if url_m:
+                                stage_outputs["Deploy"] = url_m.group(0)
 
                     rework_target = self._check_rework(role.name, result_msg.content)
                     role_rework = rework_counts.get(role.name, 0)
@@ -708,6 +711,7 @@ class Company:
         else:
             task.status = "done"
 
+        self._last_deploy_url = stage_outputs.get("Deploy", "")
         self._store.save_task(task)
         self._store.finish_run(run_id, task.status, round_num, task.result[:500] if task.result else "")
         return task.result
@@ -1087,7 +1091,8 @@ class Company:
             import re as _re_pn
             raw_name = user_messages[-1].content.strip()
             clean_name = _re_pn.sub(r'[^\w\u4e00-\u9fff-]', '', raw_name)[:10]
-            if clean_name and len(clean_name) >= 2:
+            is_confirm_only = clean_name in self._PROJECT_NAME_STOPWORDS or len(clean_name) < 2
+            if clean_name and not is_confirm_only:
                 pending = self._pending_project_name
                 self._pending_project_name = None
 
@@ -1121,6 +1126,7 @@ class Company:
                 )
 
                 async def _run_pipeline(req: str, pdir: Path) -> None:
+                    result = None
                     try:
                         result = await self.run(req)
                         status = "done" if result else "failed"
@@ -1131,8 +1137,20 @@ class Company:
                         self._pipeline_running = False
                         self._env._pipeline_user_queue = None
                         self._update_project_status(pdir, status)
+                        import re as _re
+                        access_url = getattr(self, '_last_deploy_url', '')
+                        if not access_url and result:
+                            m = _re.search(r'http://[\d.]+:\d+', result)
+                            access_url = m.group(0) if m else ''
+                        if access_url and status == 'done':
+                            try:
+                                import webbrowser
+                                webbrowser.open(access_url)
+                            except Exception:
+                                pass
+                        url_info = f"\n访问地址: {access_url}" if access_url else ""
                         done_msg = CompanyMessage(
-                            content=f"老板，任务{'完成' if status == 'done' else '执行出错了'}！项目目录: {pdir}",
+                            content=f"老板，任务{'完成' if status == 'done' else '执行出错了'}！项目目录: {pdir}{url_info}",
                             cause_by="StatusUpdate",
                             sent_from="PM",
                         )
@@ -1145,7 +1163,7 @@ class Company:
                 return
             else:
                 retry_msg = CompanyMessage(
-                    content="老板，项目名太短了或者格式不对，给个 2-6 个字的名字？比如「智能计算器」「Holu资讯」",
+                    content="老板，还没给项目名呢！给个 2-6 个字的正式名字？比如「智能计算器」「Holu资讯」",
                     cause_by="ChatReply",
                     sent_from=pm_role.name,
                 )
@@ -1204,7 +1222,9 @@ class Company:
             import re as _re_name
             name_match = _re_name.search(r'PROJECT_NAME:\s*(.+)', eval_text)
             if name_match:
-                project_name = name_match.group(1).strip()[:10]
+                candidate = _re_name.sub(r'[^\w\u4e00-\u9fff-]', '', name_match.group(1).strip())[:10]
+                if candidate and candidate not in self._PROJECT_NAME_STOPWORDS:
+                    project_name = candidate
 
             existing_project = self._find_project_by_name(task_context)
 
@@ -1433,6 +1453,8 @@ class Company:
         "对", "嗯嗯", "ok", "OK", "yes", "no", "是的", "好的", "行的",
         "可以", "没问题", "收到", "明白", "知道", "那", "这", "就",
         "你", "我", "他", "她", "它", "们", "接着", "继续",
+        "开干", "开始", "开始吧", "动手", "动手吧", "可以开干",
+        "可以开始", "就这样", "确认", "没问题开干", "好的开干",
     }
 
     @staticmethod

@@ -231,12 +231,30 @@ class FeishuBridge(ChatBridge):
         content = self._strip_markdown(content)
 
         try:
-            from gateway.platforms.base import OutgoingMessage
-            out = OutgoingMessage(
-                chat_id=self._group_chat_id,
-                content=content,
-                message_type="text",
-            )
+            from gateway.platforms.base import OutgoingMessage, MessageType
+            import re
+            url_match = re.search(r'https?://[\d.]+:\d+\S*', content)
+            if url_match:
+                url = url_match.group(0)
+                before = content[:url_match.start()]
+                after = content[url_match.end():]
+                post_elements = []
+                if before.strip():
+                    post_elements.append({"tag": "text", "text": before})
+                post_elements.append({"tag": "a", "text": url, "href": url})
+                if after.strip():
+                    post_elements.append({"tag": "text", "text": after})
+                out = OutgoingMessage(
+                    chat_id=self._group_chat_id,
+                    message_type=MessageType.RICH_TEXT,
+                    metadata={"post_content": [post_elements]},
+                )
+            else:
+                out = OutgoingMessage(
+                    chat_id=self._group_chat_id,
+                    content=content,
+                    message_type="text",
+                )
             await adapter.send_message(out)
         except Exception as e:
             logger.warning("飞书发送失败 [%s]: %r", role_name, e)

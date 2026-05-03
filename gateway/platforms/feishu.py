@@ -482,12 +482,18 @@ class FeishuAdapter(BasePlatformAdapter):
                 content = json.dumps({"text": message.content or "[语音消息]"}, ensure_ascii=False)
         elif message.message_type == MessageType.RICH_TEXT:
             msg_type = "post"
-            content = json.dumps({
-                "zh_cn": {
-                    "title": "",
-                    "content": [[{"tag": "text", "text": message.content}]],
-                }
-            }, ensure_ascii=False)
+            custom_content = (message.metadata or {}).get("post_content")
+            if custom_content:
+                content = json.dumps({
+                    "zh_cn": {"title": "", "content": custom_content}
+                }, ensure_ascii=False)
+            else:
+                content = json.dumps({
+                    "zh_cn": {
+                        "title": "",
+                        "content": [[{"tag": "text", "text": message.content}]],
+                    }
+                }, ensure_ascii=False)
         elif message.message_type == MessageType.FILE:
             file_data = message.media_data
             filename = message.metadata.get("filename", "file")
