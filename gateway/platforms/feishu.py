@@ -388,6 +388,7 @@ class FeishuAdapter(BasePlatformAdapter):
                     "message_type": msg.message_type or "text",
                     "content": msg.content or "{}",
                     "parent_id": msg.parent_id,
+                    "create_time": getattr(msg, "create_time", "") or "",
                     "mentions": [],
                 },
                 "sender": {
@@ -770,7 +771,7 @@ class FeishuAdapter(BasePlatformAdapter):
             media_url=media_url,
             reply_to_id=msg.get("parent_id"),
             mentions=mentions,
-            timestamp=time.time(),
+            timestamp=int(msg.get("create_time", 0)) / 1000 or time.time(),
             raw=event,
         )
         if mention_details:

@@ -418,6 +418,7 @@ class Company:
                     task_id=task.task_id,
                 )
                 await self._env.publish(timeout_msg)
+                task.status = "timeout"
                 break
 
             if self._pipeline_user_msgs:
@@ -708,10 +709,11 @@ class Company:
                     return await self._continue_run(task, requirement, max_rounds - round_num)
                 else:
                     logger.warning("任务验证失败且已达最大重试: %s", feedback)
-        else:
+        elif task.status != "timeout":
             task.status = "done"
 
         self._last_deploy_url = stage_outputs.get("Deploy", "")
+        self._last_task = task
         self._store.save_task(task)
         self._store.finish_run(run_id, task.status, round_num, task.result[:500] if task.result else "")
         return task.result
@@ -1129,7 +1131,11 @@ class Company:
                     result = None
                     try:
                         result = await self.run(req)
-                        status = "done" if result else "failed"
+                        last_task = getattr(self, '_last_task', None)
+                        if last_task and getattr(last_task, 'status', '') == 'timeout':
+                            status = "timeout"
+                        else:
+                            status = "done" if result else "failed"
                     except Exception as e:
                         logger.error("Pipeline 执行异常: %s", e)
                         status = "failed"
@@ -1149,8 +1155,14 @@ class Company:
                             except Exception:
                                 pass
                         url_info = f"\n访问地址: {access_url}" if access_url else ""
+                        if status == "timeout":
+                            msg_text = f"老板，任务超时了，没能全部完成。项目目录: {pdir}{url_info}"
+                        elif status == "done":
+                            msg_text = f"老板，任务完成！项目目录: {pdir}{url_info}"
+                        else:
+                            msg_text = f"老板，任务执行出错了！项目目录: {pdir}{url_info}"
                         done_msg = CompanyMessage(
-                            content=f"老板，任务{'完成' if status == 'done' else '执行出错了'}！项目目录: {pdir}{url_info}",
+                            content=msg_text,
                             cause_by="StatusUpdate",
                             sent_from="PM",
                         )

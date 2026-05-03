@@ -45,6 +45,7 @@ class FeishuBridge(ChatBridge):
         self._bot_configs = {c.role_name: c for c in bot_configs}
         self._started = False
         self._seen_msg_ids: dict[str, bool] = {}
+        self._start_ts: float = 0.0
 
     def set_environment(self, env: CompanyEnvironment) -> None:
         self._environment = env
@@ -61,27 +62,44 @@ class FeishuBridge(ChatBridge):
 
     async def start(self) -> None:
         """为每个角色创建 FeishuAdapter 实例."""
+        import asyncio
+        import time as _time
         from gateway.platforms.feishu import FeishuAdapter
 
+        self._start_ts = _time.time()
+
+        max_retries = 3
+        retry_delay = 10
+        failed_roles: list[str] = []
+
         for role_name, cfg in self._bot_configs.items():
-            adapter = FeishuAdapter({
-                "app_id": cfg.app_id,
-                "app_secret": cfg.app_secret,
-                "verification_token": cfg.verification_token,
-                "encrypt_key": cfg.encrypt_key,
-                "mode": "long_poll",
-                "accept_group_no_mention": True,
-            })
-            try:
-                await adapter.start()
-                self._adapters[role_name] = adapter
-                bot = getattr(adapter, "_bot_user", None)
-                bot_id = getattr(bot, "user_id", "") if bot else ""
-                bot_name = getattr(bot, "display_name", "") if bot else ""
-                logger.info("飞书 Bot 启动: %s (app=%s, open_id=%s, name=%s)",
-                            role_name, cfg.app_id, bot_id, bot_name)
-            except Exception as e:
-                logger.error("飞书 Bot 启动失败: %s — %s", role_name, e)
+            started = False
+            for attempt in range(1, max_retries + 1):
+                adapter = FeishuAdapter({
+                    "app_id": cfg.app_id,
+                    "app_secret": cfg.app_secret,
+                    "verification_token": cfg.verification_token,
+                    "encrypt_key": cfg.encrypt_key,
+                    "mode": "long_poll",
+                    "accept_group_no_mention": True,
+                })
+                try:
+                    await adapter.start()
+                    self._adapters[role_name] = adapter
+                    bot = getattr(adapter, "_bot_user", None)
+                    bot_id = getattr(bot, "user_id", "") if bot else ""
+                    bot_name = getattr(bot, "display_name", "") if bot else ""
+                    logger.info("飞书 Bot 启动: %s (app=%s, open_id=%s, name=%s)",
+                                role_name, cfg.app_id, bot_id, bot_name)
+                    started = True
+                    break
+                except Exception as e:
+                    logger.warning("飞书 Bot 启动失败: %s — %s (第%d次)", role_name, e, attempt)
+                    if attempt < max_retries:
+                        await asyncio.sleep(retry_delay)
+            if not started:
+                failed_roles.append(role_name)
+                logger.error("飞书 Bot 启动彻底失败: %s (已重试%d次)", role_name, max_retries)
 
         if self._adapters:
             self._started = True
@@ -89,8 +107,11 @@ class FeishuBridge(ChatBridge):
                 adapter.on_message(self._on_feishu_message)
             logger.info("飞书桥接已启动，群: %s，Bot 数: %d",
                         self._group_chat_id, len(self._adapters))
-            import asyncio
-            self._watchdog_task = asyncio.create_task(self._bridge_watchdog())
+        elif failed_roles:
+            self._started = True
+            logger.warning("飞书桥接：所有 Bot 启动失败，watchdog 将持续重试")
+
+        self._watchdog_task = asyncio.create_task(self._bridge_watchdog())
 
     async def stop(self) -> None:
         """停止所有飞书 Bot."""
@@ -106,7 +127,7 @@ class FeishuBridge(ChatBridge):
         self._adapters.clear()
 
     async def _bridge_watchdog(self) -> None:
-        """定期检查各 Bot 连接健康状态，重启掉线的 Bot."""
+        """定期检查各 Bot 连接健康状态，重启掉线的 Bot，补启未启动的 Bot."""
         import asyncio
         import time as _time
         from gateway.platforms.feishu import FeishuAdapter
@@ -115,16 +136,15 @@ class FeishuBridge(ChatBridge):
             await asyncio.sleep(120)
             if not self._started:
                 break
+
             for role_name, adapter in list(self._adapters.items()):
                 ws_thread = getattr(adapter, '_ws_thread', None)
-                last_activity = getattr(adapter, '_last_sdk_activity', 0)
-                idle_seconds = _time.time() - last_activity if last_activity else 999
                 thread_alive = ws_thread.is_alive() if ws_thread else False
                 if thread_alive:
                     continue
                 logger.warning(
-                    "飞书 Bot %s 疑似掉线 (thread_alive=%s, idle=%.0fs)，重建连接",
-                    role_name, thread_alive, idle_seconds,
+                    "飞书 Bot %s 疑似掉线 (thread_alive=%s)，重建连接",
+                    role_name, thread_alive,
                 )
                 cfg = self._bot_configs.get(role_name)
                 if not cfg:
@@ -148,6 +168,56 @@ class FeishuBridge(ChatBridge):
                     logger.info("飞书 Bot %s 重连成功", role_name)
                 except Exception as e:
                     logger.error("飞书 Bot %s 重连失败: %s", role_name, e)
+
+            missing = set(self._bot_configs.keys()) - set(self._adapters.keys())
+            for role_name in missing:
+                cfg = self._bot_configs[role_name]
+                try:
+                    new_adapter = FeishuAdapter({
+                        "app_id": cfg.app_id,
+                        "app_secret": cfg.app_secret,
+                        "verification_token": cfg.verification_token,
+                        "encrypt_key": cfg.encrypt_key,
+                        "mode": "long_poll",
+                        "accept_group_no_mention": True,
+                    })
+                    await new_adapter.start()
+                    new_adapter.on_message(self._on_feishu_message)
+                    self._adapters[role_name] = new_adapter
+                    logger.info("飞书 Bot %s 补启成功", role_name)
+                except Exception as e:
+                    logger.warning("飞书 Bot %s 补启失败: %s", role_name, e)
+
+    _MSG_LIMIT = 3500
+
+    @staticmethod
+    def _split_message(text: str, limit: int = 3500) -> list[str]:
+        """Split long text into chunks that fit Feishu's message limit.
+
+        Splits on paragraph boundaries first, then sentence boundaries."""
+        if len(text) <= limit:
+            return [text]
+
+        chunks: list[str] = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= limit:
+                chunks.append(remaining)
+                break
+            cut = remaining.rfind("\n\n", 0, limit)
+            if cut < limit // 3:
+                cut = remaining.rfind("\n", 0, limit)
+            if cut < limit // 3:
+                for sep in ("。", "；", ".", ";", "，", ",", " "):
+                    cut = remaining.rfind(sep, 0, limit)
+                    if cut >= limit // 3:
+                        cut += len(sep)
+                        break
+            if cut < limit // 3:
+                cut = limit
+            chunks.append(remaining[:cut].rstrip())
+            remaining = remaining[cut:].lstrip()
+        return chunks
 
     _DOC_ACTIONS = {"WritePRD", "WriteDesign", "CodeReview", "WriteTest", "DeployPlan"}
     _FILE_THRESHOLD = 500
@@ -225,37 +295,39 @@ class FeishuBridge(ChatBridge):
             except Exception as e:
                 logger.warning("飞书文件发送失败 [%s]，降级为文本: %r", role_name, e)
 
-        if len(content) > 3000:
-            content = content[:3000] + "\n\n... (内容过长已截断)"
-
         content = self._strip_markdown(content)
+        chunks = self._split_message(content)
 
         try:
             from gateway.platforms.base import OutgoingMessage, MessageType
+            import asyncio
             import re
-            url_match = re.search(r'https?://[\d.]+:\d+\S*', content)
-            if url_match:
-                url = url_match.group(0)
-                before = content[:url_match.start()]
-                after = content[url_match.end():]
-                post_elements = []
-                if before.strip():
-                    post_elements.append({"tag": "text", "text": before})
-                post_elements.append({"tag": "a", "text": url, "href": url})
-                if after.strip():
-                    post_elements.append({"tag": "text", "text": after})
-                out = OutgoingMessage(
-                    chat_id=self._group_chat_id,
-                    message_type=MessageType.RICH_TEXT,
-                    metadata={"post_content": [post_elements]},
-                )
-            else:
-                out = OutgoingMessage(
-                    chat_id=self._group_chat_id,
-                    content=content,
-                    message_type="text",
-                )
-            await adapter.send_message(out)
+            for i, chunk in enumerate(chunks):
+                if i > 0:
+                    await asyncio.sleep(0.5)
+                url_match = re.search(r'https?://[\d.]+:\d+\S*', chunk)
+                if url_match:
+                    url = url_match.group(0)
+                    before = chunk[:url_match.start()]
+                    after = chunk[url_match.end():]
+                    post_elements = []
+                    if before.strip():
+                        post_elements.append({"tag": "text", "text": before})
+                    post_elements.append({"tag": "a", "text": url, "href": url})
+                    if after.strip():
+                        post_elements.append({"tag": "text", "text": after})
+                    out = OutgoingMessage(
+                        chat_id=self._group_chat_id,
+                        message_type=MessageType.RICH_TEXT,
+                        metadata={"post_content": [post_elements]},
+                    )
+                else:
+                    out = OutgoingMessage(
+                        chat_id=self._group_chat_id,
+                        content=chunk,
+                        message_type="text",
+                    )
+                await adapter.send_message(out)
         except Exception as e:
             logger.warning("飞书发送失败 [%s]: %r", role_name, e)
 
@@ -263,12 +335,18 @@ class FeishuBridge(ChatBridge):
         """飞书群消息 → CompanyMessage → publish 到 environment.
 
         所有 adapter 都会收到群消息，用 message_id 去重，只处理一次。
+        忽略 bridge 启动之前的历史消息（防止重启后重复投递）。
         """
         if not self._environment:
             return
 
         msg_id = getattr(platform_msg, "message_id", "")
         if not msg_id:
+            return
+
+        msg_ts = getattr(platform_msg, "timestamp", 0)
+        if msg_ts and self._start_ts and msg_ts < self._start_ts:
+            logger.debug("忽略历史消息 %s (msg_ts=%.0f < start_ts=%.0f)", msg_id, msg_ts, self._start_ts)
             return
 
         if msg_id in self._seen_msg_ids:
