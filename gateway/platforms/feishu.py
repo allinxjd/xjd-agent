@@ -299,7 +299,6 @@ class FeishuAdapter(BasePlatformAdapter):
                 pass
 
             while self._running:
-                new_loop = None
                 try:
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
@@ -316,16 +315,26 @@ class FeishuAdapter(BasePlatformAdapter):
                         app_id, app_secret,
                         event_handler=handler,
                         log_level=lark.LogLevel.INFO,
+                        auto_reconnect=False,
                     )
+
+                    # Patch _disconnect: swallow cross-loop RuntimeError,
+                    # then stop the event loop so start() returns.
+                    _orig_disconnect = ws_client._disconnect
+                    async def _safe_disconnect(_orig=_orig_disconnect, _loop=new_loop):
+                        try:
+                            await _orig()
+                        except RuntimeError:
+                            ws_client._conn = None
+                        _loop.call_soon(_loop.stop)
+                    ws_client._disconnect = _safe_disconnect
+
                     self._ws_client = ws_client
                     self._last_sdk_activity = _time.time()
                     logger.info("飞书长连接启动 (新 Client)")
                     ws_client.start()  # 阻塞直到连接彻底断开
                 except Exception as e:
                     logger.error("飞书长连接异常退出: %s", e)
-                finally:
-                    if new_loop and not new_loop.is_closed():
-                        new_loop.close()
 
                 self._ws_client = None
                 if self._running:
