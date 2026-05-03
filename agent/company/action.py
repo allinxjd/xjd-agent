@@ -48,9 +48,25 @@ def _apply_workspace_guard(engine: Any, prompt: str) -> None:
     if terminal_tool:
         original_terminal = terminal_tool.handler
 
-        async def _guarded_terminal(orig=original_terminal, ws=workspace, **kwargs):
-            kwargs["workdir"] = str(ws)
-            return await orig(**kwargs)
+        async def _guarded_terminal(*, _orig=original_terminal, _ws=workspace, **kwargs):
+            kwargs["workdir"] = str(_ws)
+            command = kwargs.get("command", "")
+            if command:
+                import shlex
+                ws_str = str(_ws)
+                dangerous = False
+                for token in command.split("&&"):
+                    token = token.strip()
+                    if token.startswith("cd "):
+                        target = token[3:].strip().strip("'\"")
+                        if target and not target.startswith(ws_str) and target not in (".", ".."):
+                            resolved = Path(target).resolve() if target.startswith("/") else None
+                            if resolved and not str(resolved).startswith(ws_str):
+                                dangerous = True
+                                break
+                if dangerous:
+                    return f"错误：禁止 cd 到项目目录外。请在 {_ws} 内操作。"
+            return await _orig(**kwargs)
 
         terminal_tool.handler = _guarded_terminal
 

@@ -982,6 +982,15 @@ class Company:
         self._store.save_message(result_msg)
         await self._env.publish(result_msg)
 
+        import re as _re
+        url_m = _re.search(r'http://[\d.]+:\d+', result_msg.content)
+        if url_m:
+            try:
+                import webbrowser
+                webbrowser.open(url_m.group(0))
+            except Exception:
+                pass
+
     _ROLE_NICK_MAP: dict[str, list[str]] = None
     _ROLE_TOPIC_KEYWORDS: dict[str, list[str]] = None
 
@@ -1077,11 +1086,23 @@ class Company:
             return
 
         pm_role = self._env.roles.get("PM")
-        if not pm_role or not pm_role.has_pending:
+        if not pm_role:
             return
-        messages = await pm_role._observe()
-        if not messages:
+
+        all_messages = []
+        if pm_role.has_pending:
+            all_messages.extend(await pm_role._observe())
+        for rname, role in self._env.roles.items():
+            if rname == "PM":
+                continue
+            if role.has_pending:
+                role_msgs = await role._observe()
+                human_msgs = [m for m in role_msgs if m.cause_by == "HumanDirective"]
+                all_messages.extend(human_msgs)
+
+        if not all_messages:
             return
+        messages = all_messages
 
         for m in messages:
             self._standby_history.append((m.sent_from, m.content))
@@ -1298,9 +1319,14 @@ class Company:
                 )
 
             async def _run_pipeline(req: str, pdir: Path) -> None:
+                result = None
                 try:
                     result = await self.run(req)
-                    status = "done" if result else "failed"
+                    last_task = getattr(self, '_last_task', None)
+                    if last_task and getattr(last_task, 'status', '') == 'timeout':
+                        status = "timeout"
+                    else:
+                        status = "done" if result else "failed"
                 except Exception as e:
                     logger.error("Pipeline 执行异常: %s", e)
                     status = "failed"
@@ -1308,8 +1334,26 @@ class Company:
                     self._pipeline_running = False
                     self._env._pipeline_user_queue = None
                     self._update_project_status(pdir, status)
+                    import re as _re
+                    access_url = getattr(self, '_last_deploy_url', '')
+                    if not access_url and result:
+                        m = _re.search(r'http://[\d.]+:\d+', result)
+                        access_url = m.group(0) if m else ''
+                    if access_url and status == 'done':
+                        try:
+                            import webbrowser
+                            webbrowser.open(access_url)
+                        except Exception:
+                            pass
+                    url_info = f"\n访问地址: {access_url}" if access_url else ""
+                    if status == "timeout":
+                        msg_text = f"老板，任务超时了，没能全部完成。项目目录: {pdir}{url_info}"
+                    elif status == "done":
+                        msg_text = f"老板，任务完成！项目目录: {pdir}{url_info}"
+                    else:
+                        msg_text = f"老板，任务执行出错了！项目目录: {pdir}{url_info}"
                     done_msg = CompanyMessage(
-                        content=f"老板，任务{'完成' if status == 'done' else '执行出错了'}！项目目录: {pdir}",
+                        content=msg_text,
                         cause_by="StatusUpdate",
                         sent_from="PM",
                     )
