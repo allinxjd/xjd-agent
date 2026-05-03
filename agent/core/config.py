@@ -43,7 +43,12 @@ def get_workspace_dir() -> Path:
     return d
 
 def get_projects_dir() -> Path:
-    d = get_home() / "projects"
+    d = Path.home() / "xjd-projects"
+    old = get_home() / "projects"
+    if old.exists() and old.is_dir() and not d.exists():
+        import shutil
+        shutil.move(str(old), str(d))
+        logger.info("项目目录已迁移: %s → %s", old, d)
     d.mkdir(exist_ok=True)
     return d
 

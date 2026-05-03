@@ -69,3 +69,88 @@ class TestWorkspaceGuard:
         prompt = f"## 项目工作目录\n{tmp_path}\nrest of prompt"
         _apply_workspace_guard(engine, prompt)
         assert engine._tools["write_file"].handler is not fake_write
+
+    @pytest.mark.asyncio
+    async def test_write_file_blocked_outside_workspace(self, tmp_path):
+        async def fake_write(**kwargs):
+            return "ok"
+
+        class FakeTool:
+            def __init__(self, handler):
+                self.handler = handler
+        class FakeEngine:
+            def __init__(self):
+                self._tools = {
+                    "write_file": FakeTool(fake_write),
+                }
+
+        engine = FakeEngine()
+        prompt = f"## 项目工作目录\n{tmp_path}\nrest"
+        _apply_workspace_guard(engine, prompt)
+
+        result = await engine._tools["write_file"].handler(path="/etc/passwd")
+        assert "禁止" in result
+
+    @pytest.mark.asyncio
+    async def test_write_file_allowed_inside_workspace(self, tmp_path):
+        async def fake_write(**kwargs):
+            return "ok"
+
+        class FakeTool:
+            def __init__(self, handler):
+                self.handler = handler
+        class FakeEngine:
+            def __init__(self):
+                self._tools = {
+                    "write_file": FakeTool(fake_write),
+                }
+
+        engine = FakeEngine()
+        prompt = f"## 项目工作目录\n{tmp_path}\nrest"
+        _apply_workspace_guard(engine, prompt)
+
+        result = await engine._tools["write_file"].handler(path=str(tmp_path / "src" / "main.py"))
+        assert result == "ok"
+
+    def test_terminal_workdir_forced(self, tmp_path):
+        called_kwargs = {}
+        async def fake_terminal(**kwargs):
+            called_kwargs.update(kwargs)
+            return "ok"
+
+        class FakeTool:
+            def __init__(self, handler):
+                self.handler = handler
+        class FakeEngine:
+            def __init__(self):
+                self._tools = {
+                    "run_terminal": FakeTool(fake_terminal),
+                }
+
+        engine = FakeEngine()
+        prompt = f"## 项目工作目录\n{tmp_path}\nrest"
+        _apply_workspace_guard(engine, prompt)
+        assert engine._tools["run_terminal"].handler is not fake_terminal
+
+    @pytest.mark.asyncio
+    async def test_terminal_workdir_overridden(self, tmp_path):
+        called_kwargs = {}
+        async def fake_terminal(**kwargs):
+            called_kwargs.update(kwargs)
+            return "ok"
+
+        class FakeTool:
+            def __init__(self, handler):
+                self.handler = handler
+        class FakeEngine:
+            def __init__(self):
+                self._tools = {
+                    "run_terminal": FakeTool(fake_terminal),
+                }
+
+        engine = FakeEngine()
+        prompt = f"## 项目工作目录\n{tmp_path}\nrest"
+        _apply_workspace_guard(engine, prompt)
+
+        await engine._tools["run_terminal"].handler(command="ls", workdir="/tmp")
+        assert called_kwargs["workdir"] == str(tmp_path.resolve())

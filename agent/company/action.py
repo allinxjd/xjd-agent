@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def _apply_workspace_guard(engine: Any, prompt: str) -> None:
-    """如果 prompt 包含项目工作目录，包装 write_file/edit_file 拒绝目录外写入."""
+    """如果 prompt 包含项目工作目录，包装 write_file/edit_file/run_terminal 拒绝目录外操作."""
     import re
     from pathlib import Path
 
@@ -43,6 +43,16 @@ def _apply_workspace_guard(engine: Any, prompt: str) -> None:
             return wrapper
 
         tool_handler.handler = _guarded()
+
+    terminal_tool = engine._tools.get("run_terminal")
+    if terminal_tool:
+        original_terminal = terminal_tool.handler
+
+        async def _guarded_terminal(orig=original_terminal, ws=workspace, **kwargs):
+            kwargs["workdir"] = str(ws)
+            return await orig(**kwargs)
+
+        terminal_tool.handler = _guarded_terminal
 
 
 @dataclass
@@ -163,7 +173,8 @@ WRITE_DESIGN = Action(
         "3. 核心接口/函数签名\n"
         "4. 数据流（输入→处理→输出）\n\n"
         "文件清单是最重要的部分，Developer 会严格按照这个清单创建文件。\n"
-        "保持简洁，不要过度抽象。\n\n"
+        "保持简洁，不要过度抽象。\n"
+        "如果上下文包含「用户本地开发环境」，技术选型必须兼容该环境版本。\n\n"
         "## PRD\n{context}"
     ),
     tools_filter=[],
@@ -186,6 +197,8 @@ WRITE_CODE = Action(
         "每个文件都必须调用一次 write_file。\n\n"
         "如果上下文包含「项目工作目录」，所有文件操作必须在该目录下。\n"
         "代码写入 src/，配置文件放项目根目录。\n"
+        "如果上下文包含「用户本地开发环境」，代码必须兼容该环境的 Python/Node 版本。\n"
+        "如果项目目录下有 .env 文件，代码中应使用 os.environ 或 dotenv 读取配置，不要硬编码密钥。\n"
         "绝对不要写入隐藏目录（如 .xjd-agent/）。\n\n"
         "## 设计与需求\n{context}"
     ),

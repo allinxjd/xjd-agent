@@ -106,6 +106,7 @@ class CompanyConfig:
     standby_history_context: int = 10
     idle_rounds_to_stop: int = 2
     locale: str = "zh-CN"
+    projects_dir: str = ""
     pipeline: PipelineConfig = field(default_factory=PipelineConfig.default)
 
 KARPATHY_SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
@@ -857,8 +858,12 @@ class Company:
                 f"直接 cd 到这个目录操作，不要浪费时间浏览其他目录。\n\n"
             )
 
+        from agent.company.local_env import detect_local_env, format_env_for_context
+        env_context = format_env_for_context(detect_local_env())
+
         context = (
             f"{project_hint}"
+            f"{env_context}\n\n"
             f"{project_status}"
             f"## 对话上下文\n" + "\n".join(history_lines) +
             f"\n\n## 用户指令\n{task_text}"
@@ -1017,10 +1022,23 @@ class Company:
 
             req_summary = eval_text.strip().split("\n", 1)[1].strip() if "\n" in eval_text.strip() else task_context
             project_dir = self._create_project_workspace(task_context)
+
+            from agent.company.local_env import detect_local_env, format_env_for_context
+            env_context = format_env_for_context(detect_local_env())
+
+            from agent.company.secret_extractor import extract_secrets, write_env_file
+            secrets = extract_secrets(self._standby_history)
+            if secrets:
+                env_file = write_env_file(project_dir, secrets)
+                if env_file:
+                    logger.info("已写入 %d 个密钥到 %s", len(secrets), env_file)
+
             enriched = (
                 f"## 项目工作目录\n{project_dir}\n"
                 f"所有文件必须创建在此目录下。PRD 写入 docs/prd.md，设计写入 docs/design.md，"
-                f"代码写入 src/，测试写入 tests/。\n\n{full_context}"
+                f"代码写入 src/，测试写入 tests/。\n\n"
+                f"{env_context}\n\n"
+                f"{full_context}"
             )
 
             async def _run_pipeline(req: str, pdir: Path) -> None:
@@ -1225,7 +1243,8 @@ class Company:
         slug = re.sub(r'_+', '_', slug).strip('_') or "project"
         project_name = f"{date_str}-{slug}"
 
-        project_dir = get_projects_dir() / project_name
+        projects_base = Path(self._config.projects_dir) if self._config.projects_dir else get_projects_dir()
+        project_dir = projects_base / project_name
         for sub in ("docs", "src", "tests"):
             (project_dir / sub).mkdir(parents=True, exist_ok=True)
 
