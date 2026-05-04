@@ -138,13 +138,13 @@ class FeishuBridge(ChatBridge):
                 break
 
             for role_name, adapter in list(self._adapters.items()):
-                ws_thread = getattr(adapter, '_ws_thread', None)
-                thread_alive = ws_thread.is_alive() if ws_thread else False
-                if thread_alive:
+                feishu_proc = getattr(adapter, '_feishu_proc', None)
+                proc_alive = feishu_proc is not None and feishu_proc.is_alive()
+                if proc_alive:
                     continue
                 logger.warning(
-                    "飞书 Bot %s 疑似掉线 (thread_alive=%s)，重建连接",
-                    role_name, thread_alive,
+                    "飞书 Bot %s 疑似掉线 (proc_alive=%s)，重建连接",
+                    role_name, proc_alive,
                 )
                 cfg = self._bot_configs.get(role_name)
                 if not cfg:

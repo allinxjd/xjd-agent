@@ -425,17 +425,21 @@ class Company:
 
         import re as _resume_re
         pdir_match = _resume_re.search(r'## 项目工作目录\n(.+)\n', requirement)
+        _project_dir: Optional[Path] = None
         if pdir_match:
             from pathlib import Path as _Path
             _pdir = _Path(pdir_match.group(1))
+            _project_dir = _pdir
             _meta_file = _pdir / ".project.json"
             if _meta_file.exists():
                 try:
                     import json as _json
                     _meta = _json.loads(_meta_file.read_text())
-                    if _meta.get("status") == "timeout" and _meta.get("stages_done"):
+                    _saved_stages = _meta.get("stages_done", {})
+                    _has_progress = any(_saved_stages.values())
+                    if _has_progress and _meta.get("status") != "done":
                         for k in stages_done:
-                            if _meta["stages_done"].get(k, False):
+                            if _saved_stages.get(k, False):
                                 stages_done[k] = True
                         stage_outputs.update(_meta.get("stage_outputs", {}))
                         logger.info("断点恢复: 跳过已完成阶段 %s",
@@ -787,6 +791,8 @@ class Company:
                     break
             else:
                 idle_rounds = 0
+                if _project_dir:
+                    self._persist_pipeline_state(_project_dir, stages_done, stage_outputs)
         else:
             logger.warning("达到最大轮次 %d，强制结束", max_rounds)
 
@@ -1166,6 +1172,20 @@ class Company:
                     "好", "嗯", "对", "是的", "没问题了", "就按这个",
                     "可以，开干", "好，开干", "行，开干",
                 )
+
+                quick_target = self._detect_quick_task(collected)
+                if quick_target:
+                    quick_msgs = collected
+                    ack = CompanyMessage(
+                        content="收到老板，先处理操作任务 🫡",
+                        cause_by="ChatReply",
+                        sent_from="PM",
+                    )
+                    await self._env.publish(ack)
+                    import asyncio as _asyncio_qt
+                    _asyncio_qt.create_task(self._run_quick_task(quick_target, quick_msgs))
+                    return
+
                 req_msgs = []
                 for m in collected:
                     intent = self._detect_task_intent(m.content)
@@ -1757,10 +1777,13 @@ class Company:
 
             logger.info("模块 %s 完成 (%d/%d)", mod_name, i + 1, len(modules))
 
-        # 标记整体 Code/Verify/Review 完成
         stages_done["Code"] = True
         stages_done["Verify"] = True
         stages_done["Review"] = True
+
+        project_dir = self._extract_workspace_from_requirement(requirement)
+        if project_dir:
+            self._persist_pipeline_state(project_dir, stages_done, stage_outputs)
 
     def _restore_standby_history(self) -> list[tuple[str, str]]:
         """从 CompanyStore 恢复最近的对话历史."""
@@ -1920,6 +1943,26 @@ class Company:
             meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
         except Exception as e:
             logger.warning("更新项目状态失败: %s", e)
+
+    @staticmethod
+    def _persist_pipeline_state(
+        project_dir: Path,
+        stages_done: dict[str, bool],
+        stage_outputs: dict[str, str],
+    ) -> None:
+        """实时持久化 pipeline 状态到 .project.json（每个 stage 完成后调用）."""
+        import json
+        meta_file = project_dir / ".project.json"
+        if not meta_file.exists():
+            return
+        try:
+            meta = json.loads(meta_file.read_text())
+            meta["status"] = "in_progress"
+            meta["stages_done"] = dict(stages_done)
+            meta["stage_outputs"] = {k: v[:3000] for k, v in stage_outputs.items()}
+            meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+        except Exception as e:
+            logger.warning("持久化 pipeline 状态失败: %s", e)
 
     async def run_interactive(self, requirement: str, max_rounds: int = 50) -> str:
         """交互模式：每轮结束后等待用户输入."""
