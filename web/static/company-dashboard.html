@@ -24,6 +24,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .tag{font-size:10px;padding:2px 6px;border-radius:3px;background:#334155;color:#cbd5e1}
 .tag.action{background:#1e3a5f;color:#7dd3fc}
 .tag.custom{background:#3b1f2b;color:#f472b6}
+.project-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.project-card{background:#0f172a;border-radius:6px;padding:12px;border:1px solid #334155}
+.project-card .name{font-weight:600;color:#38bdf8;margin-bottom:4px;font-size:14px}
+.project-card .meta{font-size:12px;color:#94a3b8;margin-bottom:8px}
+.project-card .url{font-size:12px;color:#4ade80;word-break:break-all}
+.project-card .actions{display:flex;gap:6px;margin-top:8px}
+.btn{font-size:11px;padding:4px 10px;border-radius:4px;border:none;cursor:pointer;color:#e2e8f0}
+.btn-stop{background:#dc2626}.btn-restart{background:#2563eb}.btn-rollback{background:#d97706}
+.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}
+.status-running{background:#4ade80}.status-stopped{background:#f87171}.status-unknown{background:#64748b}
 </style>
 </head>
 <body>
@@ -37,6 +47,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     <div class="card"><h2>Team</h2><div class="stat" id="teamStat">-</div><div class="stat-label">角色总数</div></div>
   </div>
 <!-- PLACEHOLDER_TEAM -->
+  <div class="card" style="grid-column:1/-1">
+    <h2>Projects</h2>
+    <div class="project-grid" id="projectGrid"><div style="color:#64748b">Loading...</div></div>
+  </div>
   <div class="card" style="grid-column:1/-1">
     <h2>Team Roles</h2>
     <div class="team-grid" id="teamGrid"></div>
@@ -53,11 +67,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 <script>
 async function load(){
   try{
-    const [status,team,runs,msgs]=await Promise.all([
+    const [status,team,runs,msgs,projects]=await Promise.all([
       fetch('/api/company/status').then(r=>r.json()),
       fetch('/api/company/team').then(r=>r.json()),
       fetch('/api/company/runs').then(r=>r.json()),
       fetch('/api/company/messages?limit=30').then(r=>r.json()),
+      fetch('/api/company/projects').then(r=>r.json()).catch(()=>[]),
     ]);
     document.getElementById('statusText').textContent=
       status.karpathy_loaded?'Karpathy Active':'Karpathy Not Loaded';
@@ -92,13 +107,36 @@ async function load(){
       <div style="padding:6px 0;border-bottom:1px solid #1e293b">
         <span style="color:#38bdf8;font-weight:600">[${m.sent_from}]</span>
         <span style="color:#64748b">(${m.cause_by})</span>
-        ${m.send_to?`<span style="color:#94a3b8">→${m.send_to}</span>`:''}
+        ${m.send_to?`<span style="color:#94a3b8">\u2192${m.send_to}</span>`:''}
         <div style="color:#cbd5e1;margin-top:2px">${m.content_preview.substring(0,200)}</div>
+      </div>
+    `).join('');}
+    const pg=document.getElementById('projectGrid');
+    if(projects.length===0){pg.innerHTML='<div style="color:#64748b">No projects yet</div>';}
+    else{pg.innerHTML=projects.map(p=>`
+      <div class="project-card">
+        <div class="name"><span class="status-dot status-${p.status}"></span>${p.name}</div>
+        <div class="meta">Port: ${p.port||'-'} | Created: ${p.created_at}</div>
+        ${p.deploy_url?`<div class="url">${p.deploy_url}</div>`:''}
+        <div class="actions">
+          ${p.status==='running'?`<button class="btn btn-stop" onclick="projectAction('${p.name}','stop')">Stop</button>`:''}
+          <button class="btn btn-restart" onclick="projectAction('${p.name}','restart')">Restart</button>
+          <button class="btn btn-rollback" onclick="projectAction('${p.name}','rollback')">Rollback</button>
+        </div>
       </div>
     `).join('');}
   }catch(e){document.getElementById('statusText').textContent='Error: '+e.message;}
 }
 load();setInterval(load,10000);
+async function projectAction(name,action){
+  const method=action==='cleanup'?'DELETE':'POST';
+  const url=action==='cleanup'?`/api/company/projects/${name}`:`/api/company/projects/${name}/${action}`;
+  try{
+    const r=await fetch(url,{method});
+    const d=await r.json();
+    if(d.success){load();}else{alert(`${action} failed for ${name}`);}
+  }catch(e){alert('Error: '+e.message);}
+}
 </script>
 </body>
 </html>

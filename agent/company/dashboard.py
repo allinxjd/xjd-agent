@@ -19,6 +19,11 @@ def register_company_routes(app: Any) -> None:
     app.router.add_get("/api/company/messages", _api_messages)
     app.router.add_get("/api/company/runs", _api_runs)
     app.router.add_get("/api/company/status", _api_status)
+    app.router.add_get("/api/company/projects", _api_projects)
+    app.router.add_post("/api/company/projects/{name}/stop", _api_project_stop)
+    app.router.add_post("/api/company/projects/{name}/restart", _api_project_restart)
+    app.router.add_post("/api/company/projects/{name}/rollback", _api_project_rollback)
+    app.router.add_delete("/api/company/projects/{name}", _api_project_cleanup)
 
 
 async def _serve_dashboard(request: Any) -> Any:
@@ -148,3 +153,52 @@ async def _api_status(request: Any) -> Any:
         "resumable_run": resumable,
         "recent_runs": recent_runs,
     })
+
+
+async def _api_projects(request: Any) -> Any:
+    from aiohttp import web
+    from agent.company.project_manager import ProjectManager
+
+    mgr = ProjectManager()
+    projects = mgr.list_projects()
+    return web.json_response([p.to_dict() for p in projects])
+
+
+async def _api_project_stop(request: Any) -> Any:
+    from aiohttp import web
+    from agent.company.project_manager import ProjectManager
+
+    name = request.match_info["name"]
+    mgr = ProjectManager()
+    ok = mgr.stop_project(name)
+    return web.json_response({"success": ok, "action": "stop", "project": name})
+
+
+async def _api_project_restart(request: Any) -> Any:
+    from aiohttp import web
+    from agent.company.project_manager import ProjectManager
+
+    name = request.match_info["name"]
+    mgr = ProjectManager()
+    ok = mgr.restart_project(name)
+    return web.json_response({"success": ok, "action": "restart", "project": name})
+
+
+async def _api_project_rollback(request: Any) -> Any:
+    from aiohttp import web
+    from agent.company.project_manager import ProjectManager
+
+    name = request.match_info["name"]
+    mgr = ProjectManager()
+    ok = mgr.rollback(name)
+    return web.json_response({"success": ok, "action": "rollback", "project": name})
+
+
+async def _api_project_cleanup(request: Any) -> Any:
+    from aiohttp import web
+    from agent.company.project_manager import ProjectManager
+
+    name = request.match_info["name"]
+    mgr = ProjectManager()
+    ok = mgr.cleanup_project(name)
+    return web.json_response({"success": ok, "action": "cleanup", "project": name})

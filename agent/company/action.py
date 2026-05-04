@@ -15,6 +15,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _has_workspace_guard(prompt: str) -> bool:
+    """检查 prompt 是否包含项目工作目录声明（即有 Workspace Guard 保护）."""
+    return "## 项目工作目录\n" in prompt
+
+
 def _apply_workspace_guard(engine: Any, prompt: str) -> None:
     """如果 prompt 包含项目工作目录，包装 write_file/edit_file/run_terminal 拒绝目录外操作."""
     import re
@@ -80,6 +85,7 @@ class Action:
     prompt_template: str = ""
     tools_filter: Optional[list[str]] = None
     max_tool_rounds: Optional[int] = None
+    use_cheap_model: bool = False
 
     async def run(self, context: str, role: CompanyRole) -> str:
         from agent.core.engine import AgentEngine
@@ -88,7 +94,14 @@ class Action:
         system_prompt = role.build_system_prompt()
 
         router = role._runtime_router
-        if getattr(role, 'model_override', None):
+        if self.use_cheap_model and getattr(router, '_cheap_provider', None) and getattr(router, '_cheap_model', None):
+            try:
+                cheap_spec = f"{router._cheap_provider}:{router._cheap_model}"
+                router = router.clone_with_primary(cheap_spec)
+                logger.info("[Action:%s] 使用 cheap 模型: %s", self.name, cheap_spec)
+            except Exception as e:
+                logger.warning("[Action:%s] cheap 模型切换失败，回退默认: %s", self.name, e)
+        elif getattr(role, 'model_override', None):
             try:
                 router = router.clone_with_primary(role.model_override)
                 logger.info("[Action:%s] 使用角色专属模型: %s", self.name, role.model_override)
@@ -105,6 +118,7 @@ class Action:
         registry = role._runtime_registry
         if registry:
             filters = self.tools_filter if self.tools_filter is not None else role.tools_filter
+            auto_approve = _has_workspace_guard(prompt)
             if filters:
                 for tool in registry.list_tools():
                     if tool.category in filters:
@@ -113,12 +127,13 @@ class Action:
                             description=tool.description,
                             parameters=tool.parameters,
                             handler=tool.handler,
-                            requires_approval=tool.requires_approval,
+                            requires_approval=False if auto_approve else tool.requires_approval,
                         )
 
         _apply_workspace_guard(engine, prompt)
 
         write_count = 0
+        terminal_count = 0
         if self.name == "WriteCode":
             for tool_name in ("write_file", "edit_file"):
                 tool = engine._tools.get(tool_name)
@@ -131,6 +146,15 @@ class Action:
                             write_count += 1
                         return result
                     tool.handler = _counting_fn
+            term_tool = engine._tools.get("run_terminal")
+            if term_tool and term_tool.handler:
+                _orig_term = term_tool.handler
+                async def _term_counting_fn(orig=_orig_term, **kwargs):
+                    nonlocal terminal_count
+                    result = await orig(**kwargs)
+                    terminal_count += 1
+                    return result
+                term_tool.handler = _term_counting_fn
 
         try:
             result = await engine.run_turn(prompt)
@@ -139,13 +163,15 @@ class Action:
             logger.error("[Action:%s] 执行失败: %s", self.name, e)
             return f"[错误] {self.name} 执行失败: {e}"
 
-        if self.name == "WriteCode" and write_count == 0:
+        if self.name == "WriteCode" and write_count == 0 and terminal_count == 0:
             content = (
                 "[错误] write_file 未被调用，代码没有写入磁盘。\n"
                 "你必须通过 write_file 工具将每个文件写入项目工作目录。\n"
                 "只在回复文本中输出代码是无效的。"
             )
-            logger.warning("WriteCode 完成但 write_file 未被调用")
+            logger.warning("WriteCode 完成但 write_file 未被调用 (terminal_count=%d)", terminal_count)
+        elif self.name == "WriteCode" and write_count == 0 and terminal_count > 0:
+            logger.info("WriteCode 未写入新文件，但执行了 %d 次 run_terminal 验证，视为有效工作", terminal_count)
 
         return content
 
@@ -160,6 +186,7 @@ USER_REQUIREMENT = Action(
 EVALUATE_REQUIREMENT = Action(
     name="EvaluateRequirement",
     description="评估需求是否足够清晰，决定是否启动流水线",
+    use_cheap_model=True,
     prompt_template=(
         "你是专业 PM，老板刚给了一个开发需求。你要判断这个需求是否足够清晰可以启动开发流水线。\n\n"
         "## 判断标准\n"
@@ -437,6 +464,11 @@ EXECUTE_DEPLOY = Action(
         "按照以下部署方案执行部署。\n"
         "如果方案说「无需部署」，直接回复：部署完成（无需操作）。\n"
         "否则每一步执行后验证，失败则回滚。\n\n"
+        "## 部署规范\n"
+        "- 如果项目目录下有 .port 文件，读取其中的端口号作为服务端口\n"
+        "- 启动命令格式：nohup ... > {项目目录}/app.log 2>&1 & echo $! > {项目目录}/.pid\n"
+        "- 启动后 sleep 3 && curl -s http://localhost:{端口} 验证\n"
+        "- 如果验证失败，cat app.log 查看错误，修复后重试（最多 3 次）\n\n"
         "## 部署完成后必须汇报\n"
         "- 用 `ifconfig | grep inet` 获取本机局域网 IP\n"
         "- 汇报访问地址，格式：http://局域网IP:端口\n"
@@ -451,6 +483,7 @@ EXECUTE_DEPLOY = Action(
 CHAT_REPLY = Action(
     name="ChatReply",
     description="回复用户消息（待命模式）",
+    use_cheap_model=True,
     prompt_template=(
         "你当前处于待命模式，在飞书群里和老板聊天。\n\n"
         "## 回复规则\n"

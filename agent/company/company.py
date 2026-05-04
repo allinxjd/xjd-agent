@@ -182,6 +182,7 @@ class Company:
         self._pipeline_running = False
         self._pipeline_user_msgs: list[CompanyMessage] = []
         self._pending_project_name: Optional[dict] = None
+        self._task_queue: list[dict] = []
 
         if chat_bridge:
             self._feishu_bridge = chat_bridge  # type: ignore[assignment]
@@ -706,7 +707,7 @@ class Company:
                                 stages_done["Test"] = True
                     elif result_msg.cause_by in ("DeployPlan", "ExecuteDeploy"):
                         if result_msg.cause_by == "ExecuteDeploy":
-                            url_m = _re.search(r'http://[\w.\-]+:\d+', result_msg.content)
+                            url_m = _re.search(r'http://[\w.\-]+:\d+[/\w.\-]*', result_msg.content)
                             if url_m:
                                 stage_outputs["Deploy"] = url_m.group(0)
                             stages_done["Deploy"] = True
@@ -825,6 +826,7 @@ class Company:
         self._last_stages_done = dict(stages_done)
         self._last_stage_outputs = dict(stage_outputs)
         self._last_task = task
+
         self._store.save_task(task)
         self._store.finish_run(run_id, task.status, round_num, task.result[:500] if task.result else "")
         return task.result
@@ -1154,6 +1156,7 @@ class Company:
 
     async def _process_standby_messages(self) -> None:
         """处理待命模式下的消息：关键词检测触发流水线，否则聊天回复."""
+        import asyncio
         from datetime import datetime
         from agent.company.action import CHAT_REPLY
 
@@ -1182,8 +1185,7 @@ class Company:
                         sent_from="PM",
                     )
                     await self._env.publish(ack)
-                    import asyncio as _asyncio_qt
-                    _asyncio_qt.create_task(self._run_quick_task(quick_target, quick_msgs))
+                    asyncio.create_task(self._run_quick_task(quick_target, quick_msgs))
                     return
 
                 req_msgs = []
@@ -1196,14 +1198,37 @@ class Company:
                 chat_msgs = [m for m in collected if m not in req_msgs]
 
                 if req_msgs:
-                    self._pipeline_user_msgs.extend(req_msgs)
-                    summary = "、".join(m.content[:30] for m in req_msgs)
-                    ack = CompanyMessage(
-                        content=f"收到老板 🫡 补充需求已记录，会纳入当前开发：\n{summary}",
-                        cause_by="ChatReply",
-                        sent_from="PM",
+                    new_project_keywords = (
+                        "做一个新", "另一个项目", "下一个任务", "新项目", "再做一个",
+                        "做完这个再", "排队", "下一个", "另外一个",
                     )
-                    await self._env.publish(ack)
+                    new_project_msgs = []
+                    supplement_msgs = []
+                    for m in req_msgs:
+                        if any(kw in m.content for kw in new_project_keywords):
+                            new_project_msgs.append(m)
+                        else:
+                            supplement_msgs.append(m)
+
+                    if supplement_msgs:
+                        self._pipeline_user_msgs.extend(supplement_msgs)
+                        summary = "、".join(m.content[:30] for m in supplement_msgs)
+                        ack = CompanyMessage(
+                            content=f"收到老板 🫡 补充需求已记录，会纳入当前开发：\n{summary}",
+                            cause_by="ChatReply",
+                            sent_from="PM",
+                        )
+                        await self._env.publish(ack)
+
+                    for m in new_project_msgs:
+                        self._task_queue.append({"raw_message": m.content})
+                        pos = len(self._task_queue)
+                        queue_ack = CompanyMessage(
+                            content=f"收到老板 🫡 新任务已排队（第 {pos} 位），当前项目完成后自动开始",
+                            cause_by="ChatReply",
+                            sent_from="PM",
+                        )
+                        await self._env.publish(queue_ack)
 
                 if chat_msgs:
                     for cm in chat_msgs:
@@ -1286,7 +1311,6 @@ class Company:
                     f"{pending['full_context']}"
                 )
 
-                import asyncio
                 self._pipeline_running = True
                 self._env._pipeline_user_queue = []
                 asyncio.create_task(self._run_pipeline_task(enriched, project_dir))
@@ -1435,7 +1459,6 @@ class Company:
                     f"{full_context}"
                 )
 
-            import asyncio
             self._pipeline_running = True
             self._env._pipeline_user_queue = []
             asyncio.create_task(self._run_pipeline_task(enriched, project_dir))
@@ -1498,6 +1521,16 @@ class Company:
         result = None
         status = "failed"
         try:
+            try:
+                from agent.company.project_manager import ProjectManager
+                mgr = ProjectManager()
+                project_path = Path(pdir) if not isinstance(pdir, Path) else pdir
+                project_name = project_path.name.split("-", 1)[-1] if "-" in project_path.name else project_path.name
+                backup = mgr.backup_before_deploy(project_name)
+                if backup:
+                    logger.info("部署前备份: %s", backup)
+            except Exception as e:
+                logger.warning("部署前备份失败: %s", e)
             result = await self.run(req)
             last_task = getattr(self, '_last_task', None)
             if last_task and getattr(last_task, 'status', '') == 'timeout':
@@ -1513,7 +1546,7 @@ class Company:
             import re as _re
             access_url = getattr(self, '_last_deploy_url', '')
             if not access_url and result:
-                m = _re.search(r'http://[\w.\-]+:\d+', result)
+                m = _re.search(r'http://[\w.\-]+:\d+[/\w.\-]*', result)
                 access_url = m.group(0) if m else ''
             if access_url and status == 'done':
                 try:
@@ -1528,15 +1561,40 @@ class Company:
                 progress = f"（已完成: {', '.join(done_list)}）" if done_list else ""
                 msg_text = f"老板，任务超时了{progress}。代码已保存在项目目录，说「继续」可以从断点恢复。\n项目目录: {pdir}{url_info}"
             elif status == "done":
-                msg_text = f"老板，任务完成！项目目录: {pdir}{url_info}"
+                if access_url:
+                    msg_text = f"老板，项目开发完成！访问地址：{access_url}\n已部署上线，可以直接打开查看 ✅\n项目目录: {pdir}"
+                else:
+                    msg_text = f"老板，项目开发完成！代码已写入项目目录 ✅\n项目目录: {pdir}"
             else:
-                msg_text = f"老板，任务执行出错了！项目目录: {pdir}{url_info}"
+                msg_text = f"老板，项目开发遇到问题，未能完成。团队会继续跟进 🫡\n项目目录: {pdir}{url_info}"
             done_msg = CompanyMessage(
                 content=msg_text,
-                cause_by="StatusUpdate",
+                cause_by="PipelineComplete",
                 sent_from="PM",
             )
             await self._env.publish(done_msg)
+
+            if self._task_queue:
+                next_task = self._task_queue.pop(0)
+                queue_remaining = len(self._task_queue)
+                queue_info = f"（队列还有 {queue_remaining} 个）" if queue_remaining else ""
+                notify = CompanyMessage(
+                    content=f"老板，开始处理下一个排队任务{queue_info} 🚀",
+                    cause_by="ChatReply",
+                    sent_from="PM",
+                )
+                await self._env.publish(notify)
+                raw_msg = next_task["raw_message"]
+                queued_msg = CompanyMessage(
+                    content=raw_msg,
+                    cause_by="UserMessage",
+                    sent_from="User",
+                    send_to="PM",
+                )
+                pm_role = self._env.roles.get("PM")
+                if pm_role:
+                    pm_role.put_message(queued_msg)
+                    self._standby_history.append(("User", raw_msg))
 
     _PIPELINE_ORDER = ["PM", "Developer", "Reviewer", "QA", "DevOps"]
 
@@ -1917,6 +1975,15 @@ class Company:
                 "created_at": datetime.now().isoformat(),
                 "status": "in_progress",
             }
+            try:
+                from agent.company.port_manager import PortManager
+                pm = PortManager()
+                port = pm.allocate(slug)
+                meta["port"] = port
+                (project_dir / ".port").write_text(str(port))
+                logger.info("为项目 %s 分配端口 %d", slug, port)
+            except Exception as e:
+                logger.warning("端口分配失败: %s", e)
             meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
 
         logger.info("项目工作目录已创建: %s", project_dir)
