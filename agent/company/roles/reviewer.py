@@ -43,6 +43,7 @@ def create_reviewer(locale: Optional[CompanyLocale] = None) -> CompanyRole:
         system_prompt=sp,
         goal=goal,
         backstory=backstory,
+        model_override=locale.get("roles.reviewer.model", None) if locale else None,
         watch_actions=["WriteDesign", "WriteCode", "VerifyRun"],
         actions=[CODE_REVIEW],
         tools_filter=[],

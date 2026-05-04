@@ -42,6 +42,7 @@ def create_qa(locale: Optional[CompanyLocale] = None) -> CompanyRole:
         system_prompt=sp,
         goal=goal,
         backstory=backstory,
+        model_override=locale.get("roles.qa.model", None) if locale else None,
         watch_actions=["WriteCode", "CodeReview"],
         actions=[WRITE_TEST, RUN_TEST],
         tools_filter=["code", "file", "terminal"],

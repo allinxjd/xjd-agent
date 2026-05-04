@@ -43,6 +43,7 @@ def create_devops(locale: Optional[CompanyLocale] = None) -> CompanyRole:
         system_prompt=sp,
         goal=goal,
         backstory=backstory,
+        model_override=locale.get("roles.devops.model", None) if locale else None,
         watch_actions=["RunTest"],
         actions=[DEPLOY_PLAN, EXECUTE_DEPLOY],
         tools_filter=["system", "terminal"],

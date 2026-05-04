@@ -42,6 +42,7 @@ def create_pm(locale: Optional[CompanyLocale] = None) -> CompanyRole:
         system_prompt=sp,
         goal=goal,
         backstory=backstory,
+        model_override=locale.get("roles.pm.model", None) if locale else None,
         watch_actions=["UserRequirement", "HumanDirective"],
         actions=[WRITE_PRD, WRITE_DESIGN],
         tools_filter=[],

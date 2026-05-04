@@ -211,8 +211,26 @@ class ModelRouter:
                 self._failover_chain.append((fc.provider, model))
                 logger.info("Failover added from config: %s:%s", fc.provider, model)
 
+    def clone_with_primary(self, model_spec: str) -> "ModelRouter":
+        """创建副本并切换 primary 模型，共享 providers 和 credentials."""
+        clone = ModelRouter(self._credential_mgr)
+        clone._providers = self._providers
+        clone._credentials = self._credentials
+        clone._cheap_provider = self._cheap_provider
+        clone._cheap_model = self._cheap_model
+        clone._cheap_routing_enabled = self._cheap_routing_enabled
+        clone._max_simple_chars = self._max_simple_chars
+        clone._max_simple_words = self._max_simple_words
+        if ":" in model_spec:
+            provider, model = model_spec.split(":", 1)
+            clone.set_primary(provider, model)
+        else:
+            clone._primary_provider = self._primary_provider
+            clone._primary_model = model_spec
+            clone._failover_chain = list(self._failover_chain)
+        return clone
+
     def _is_simple_message(self, text: str) -> bool:
-        """判断是否是简单消息 (可用便宜模型处理)."""
         if not text.strip():
             return False
 

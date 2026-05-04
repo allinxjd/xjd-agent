@@ -87,8 +87,16 @@ class Action:
         prompt = self.prompt_template.format(context=context) if self.prompt_template else context
         system_prompt = role.build_system_prompt()
 
+        router = role._runtime_router
+        if getattr(role, 'model_override', None):
+            try:
+                router = router.clone_with_primary(role.model_override)
+                logger.info("[Action:%s] 使用角色专属模型: %s", self.name, role.model_override)
+            except Exception as e:
+                logger.warning("[Action:%s] 角色模型切换失败，回退默认: %s", self.name, e)
+
         engine = AgentEngine(
-            router=role._runtime_router,
+            router=router,
             system_prompt=system_prompt,
             max_tool_rounds=self.max_tool_rounds or (1 if self.tools_filter is not None and not self.tools_filter else role.max_tool_rounds),
             skip_grounding=True,
@@ -252,67 +260,98 @@ SETUP_ENV = Action(
 
 WRITE_CODE = Action(
     name="WriteCode",
-    description="编写代码",
+    description="编写代码（SOP：理解→编写→自验证→汇报）",
     prompt_template=(
-        "根据以下设计方案和需求，编写代码实现。\n"
+        "你是专业开发工程师。严格按以下 SOP 逐步执行，每步完成后再进入下一步。\n\n"
+        "## Step 1: 理解设计方案\n"
+        "仔细阅读设计方案，列出要创建的文件清单和每个文件的职责。\n"
+        "如果设计方案不清楚，在输出中标注疑问（但继续执行）。\n\n"
+        "## Step 2: 逐文件编写代码\n"
+        "按依赖顺序（基础模块先、入口文件最后），每个文件：\n"
+        "1. 用 write_file 写入完整代码（file_path 必须是完整绝对路径）\n"
+        "2. 写完后用 read_file 确认文件内容正确落盘\n"
         "原则：最少代码解决问题，不加未要求的功能，匹配项目现有风格。\n\n"
-        "## 重要：必须严格遵循设计方案的技术选型\n"
-        "设计方案中指定了什么语言、框架、库，你就必须用什么。\n"
-        "例如设计方案写了 aiohttp，你就不能用 FastAPI；写了 Flask，你就不能用 Django。\n"
-        "技术选型是设计阶段的决策，不是你的自由发挥空间。\n"
-        "如果你认为设计方案的选型有问题，在代码开头注释说明，但仍然按设计方案实现。\n\n"
-        "## 重要：必须使用 write_file 工具写入文件\n"
-        "你必须通过 write_file 工具将代码写入磁盘。\n"
-        "绝对不要只在回复文本中输出代码 — 那样文件不会被创建。\n"
-        "绝对不要用 run_terminal 写文件（cat >、echo >、tee、heredoc 等），那样不会被系统记录。\n"
-        "每个文件都必须调用一次 write_file。\n"
-        "write_file 的 file_path 参数必须是完整的绝对路径，以项目工作目录开头。\n"
-        "例如：如果项目工作目录是 /home/user/projects/myapp，\n"
-        "那么写入 src/main.py 时 file_path 必须是 /home/user/projects/myapp/src/main.py。\n\n"
-        "如果上下文包含「项目工作目录」，所有文件操作必须在该目录下。\n"
-        "代码写入 src/，配置文件放项目根目录。\n"
-        "如果上下文包含「用户本地开发环境」，代码必须兼容该环境的 Python/Node 版本。\n"
-        "如果项目目录下有 .env 文件，代码中应使用 os.environ 或 dotenv 读取配置，不要硬编码密钥。\n"
-        "绝对不要写入隐藏目录（如 .xjd-agent/）。\n\n"
+        "## Step 3: 自验证\n"
+        "所有文件写完后，必须自行验证：\n"
+        "1. 用 run_terminal 对每个 .py 文件执行 python3 -m py_compile（Node 项目用 node --check）\n"
+        "2. 如果有语法错误，用 edit_file 修复后重新检查\n"
+        "3. 如果有 requirements.txt，执行 pip3 install -r requirements.txt\n"
+        "4. 如果项目有入口文件（app.py/main.py），尝试后台启动并 curl 验证\n"
+        "5. 如果启动失败，查看错误日志，修复后重试（最多 3 次）\n"
+        "6. 验证完成后，如果启动了服务，保持运行不要关闭\n\n"
+        "## Step 4: 汇报\n"
+        "简洁列出：已创建的文件清单、语法检查结果、启动验证结果、遗留问题（如有）。\n\n"
+        "## 重要规则\n"
+        "- 必须严格遵循设计方案的技术选型，不要自行替换框架\n"
+        "- 必须用 write_file 写文件，绝对不要只在回复文本中输出代码\n"
+        "- 绝对不要用 run_terminal 写文件（cat >、echo >、tee、heredoc 等）\n"
+        "- write_file 的 file_path 必须是完整绝对路径，以项目工作目录开头\n"
+        "- 如果上下文包含「项目工作目录」，所有文件操作必须在该目录下\n"
+        "- 代码写入 src/，配置文件放项目根目录\n"
+        "- 如果项目目录下有 .env 文件，用 os.environ 或 dotenv 读取配置\n"
+        "- 绝对不要写入隐藏目录（如 .xjd-agent/）\n\n"
         "## 设计与需求\n{context}"
     ),
-    tools_filter=["code", "file"],
+    tools_filter=["code", "file", "terminal"],
+    max_tool_rounds=30,
 )
 
 CODE_REVIEW = Action(
     name="CodeReview",
-    description="代码审查",
+    description="代码审查（SOP：读代码→对照设计→质量审查→报告）",
     prompt_template=(
-        "你的任务：审查以下代码变更。\n"
-        "直接输出审查意见，不要使用任何工具。\n"
+        "你是资深代码审查员。按以下 SOP 执行审查：\n\n"
+        "## Step 1: 读取源码\n"
+        "用 read_file 逐个读取项目工作目录下的源码文件（src/ 目录）。\n"
+        "不要只看 context 中的代码片段，要读完整文件确认实际内容。\n\n"
+        "## Step 2: 对照设计方案审查\n"
         "检查：\n"
-        "1. 技术选型是否与设计方案一致（框架、库必须完全匹配，不允许自行替换）\n"
-        "2. 每行改动是否都能追溯到需求\n"
-        "3. 安全漏洞（注入、XSS、硬编码密钥等）\n"
-        "4. 逻辑正确性\n"
-        "5. 是否过度工程\n\n"
-        "如果代码使用了设计方案中未指定的框架（如设计写 aiohttp 但代码用 FastAPI），必须 REJECTED。\n\n"
-        "## 输出风格\n"
+        "1. 技术选型是否与设计方案一致（框架、库必须完全匹配）\n"
+        "2. 设计方案中的每个文件是否都已创建\n"
+        "3. 核心接口/函数签名是否与设计方案匹配\n"
+        "如果代码使用了设计方案中未指定的框架，必须 REJECTED。\n\n"
+        "## Step 3: 代码质量审查\n"
+        "检查：\n"
+        "1. 安全漏洞（注入、XSS、硬编码密钥等）\n"
+        "2. 逻辑正确性（边界条件、错误处理）\n"
+        "3. 是否过度工程（不需要的抽象、未要求的功能）\n\n"
+        "## Step 4: 输出审查报告\n"
         "简洁专业的审查报告：\n"
         "- 总结不超过 5 行，只说关键发现\n"
         "- 没问题就一句话带过，有问题才展开\n"
         "- 最后一行必须是：APPROVED 或 REJECTED + 原因\n\n"
         "## 代码变更\n{context}"
     ),
-    tools_filter=[],
+    tools_filter=["code", "file"],
+    max_tool_rounds=10,
 )
 
 WRITE_TEST = Action(
     name="WriteTest",
-    description="编写测试",
+    description="编写并运行测试（SOP：读源码→写测试→跑测试→修复→汇报）",
     prompt_template=(
-        "根据以下代码和验收标准，编写测试。\n"
-        "原则：先写测试复现问题/验证功能，再确认通过。\n"
-        "覆盖正常路径和边界情况。\n"
-        "如果上下文包含「项目工作目录」，测试文件写入该目录的 tests/ 下。\n\n"
+        "你是测试工程师。按以下 SOP 执行：\n\n"
+        "## Step 1: 读取源码\n"
+        "用 read_file 读取项目工作目录下的源码文件，理解要测试什么。\n"
+        "同时读取 PRD 中的验收标准，确保测试覆盖所有验收条件。\n\n"
+        "## Step 2: 编写测试\n"
+        "用 write_file 写入测试文件到项目工作目录的 tests/ 下。\n"
+        "覆盖：正常路径、边界情况、验收标准中的每个条件。\n"
+        "Python 项目用 pytest，Node 项目用 jest。\n\n"
+        "## Step 3: 运行测试\n"
+        "用 run_terminal 执行测试命令（python3 -m pytest tests/ -v 或 npx jest）。\n"
+        "如果测试失败，分析原因：\n"
+        "- 如果是测试代码本身的问题（import 错误、断言写错），用 edit_file 修复测试后重跑\n"
+        "- 如果是源码的 bug，记录到报告中（不要修改源码）\n"
+        "- 最多修复重跑 3 次\n\n"
+        "## Step 4: 汇报\n"
+        "贴出测试通过/失败的统计行。\n"
+        "失败的用例列出名称和原因，通过的不用逐条列。\n"
+        "总结不超过 10 行。\n\n"
         "## 代码与验收标准\n{context}"
     ),
     tools_filter=["code", "file", "terminal"],
+    max_tool_rounds=15,
 )
 
 RUN_TEST = Action(

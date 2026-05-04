@@ -42,6 +42,7 @@ def create_developer(locale: Optional[CompanyLocale] = None) -> CompanyRole:
         system_prompt=sp,
         goal=goal,
         backstory=backstory,
+        model_override=locale.get("roles.developer.model", None) if locale else None,
         watch_actions=["WritePRD", "WriteDesign", "CodeReview"],
         actions=[SETUP_ENV, WRITE_CODE, VERIFY_RUN],
         tools_filter=["code", "file", "terminal"],

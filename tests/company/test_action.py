@@ -18,13 +18,26 @@ class TestActionDefinitions:
         assert set(ALL_ACTIONS.keys()) == expected
 
     def test_write_code_has_tools(self):
-        assert ALL_ACTIONS["WriteCode"].tools_filter == ["code", "file"]
+        assert ALL_ACTIONS["WriteCode"].tools_filter == ["code", "file", "terminal"]
+
+    def test_write_code_has_self_verify_rounds(self):
+        assert ALL_ACTIONS["WriteCode"].max_tool_rounds == 30
 
     def test_write_prd_no_tools(self):
         assert ALL_ACTIONS["WritePRD"].tools_filter == []
 
     def test_chat_reply_no_tools(self):
         assert ALL_ACTIONS["ChatReply"].tools_filter == []
+
+    def test_code_review_has_file_tools(self):
+        cr = ALL_ACTIONS["CodeReview"]
+        assert "file" in cr.tools_filter
+        assert cr.max_tool_rounds == 10
+
+    def test_write_test_has_terminal(self):
+        wt = ALL_ACTIONS["WriteTest"]
+        assert "terminal" in wt.tools_filter
+        assert wt.max_tool_rounds == 15
 
     def test_quick_task_has_tools_and_rounds(self):
         qt = ALL_ACTIONS["QuickTask"]

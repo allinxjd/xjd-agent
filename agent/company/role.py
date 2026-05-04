@@ -35,6 +35,7 @@ class CompanyRole(AgentRole):
 
     goal: str = ""
     backstory: str = ""
+    model_override: Optional[str] = None
     watch_actions: list[str] = field(default_factory=list)
     actions: list[Action] = field(default_factory=list)
     react_mode: str = "by_order"
