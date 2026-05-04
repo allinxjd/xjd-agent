@@ -127,10 +127,15 @@ class FeishuBridge(ChatBridge):
         self._adapters.clear()
 
     async def _bridge_watchdog(self) -> None:
-        """定期检查各 Bot 连接健康状态，重启掉线的 Bot，补启未启动的 Bot."""
+        """定期检查各 Bot 连接健康状态，重启掉线的 Bot，补启未启动的 Bot.
+
+        除了检查进程存活，还检查消息活跃度 — 静默断连时强制重连并补漏消息。
+        """
         import asyncio
         import time as _time
         from gateway.platforms.feishu import FeishuAdapter
+
+        _ACTIVITY_TIMEOUT = 300  # 5 min
 
         while self._started:
             await asyncio.sleep(120)
@@ -140,12 +145,38 @@ class FeishuBridge(ChatBridge):
             for role_name, adapter in list(self._adapters.items()):
                 feishu_proc = getattr(adapter, '_feishu_proc', None)
                 proc_alive = feishu_proc is not None and feishu_proc.is_alive()
-                if proc_alive:
+                last_activity = getattr(adapter, '_last_sdk_activity', 0)
+                idle_secs = _time.time() - last_activity if last_activity else 0
+
+                adapter_restart_reason = getattr(adapter, '_last_restart_reason', '')
+
+                needs_reconnect = False
+                reason = ""
+                if not proc_alive:
+                    needs_reconnect = True
+                    reason = "process_dead"
+                elif last_activity and idle_secs > _ACTIVITY_TIMEOUT:
+                    needs_reconnect = True
+                    reason = f"silent_timeout({idle_secs:.0f}s)"
+
+                if adapter_restart_reason == "activity_timeout":
+                    adapter._last_restart_reason = ""
+                    if not needs_reconnect:
+                        logger.info(
+                            "飞书 Bot %s adapter 层已因静默超时重启子进程，bridge 层补漏消息",
+                            role_name,
+                        )
+                        await self._recover_missed_messages(adapter, _time.time())
+                        continue
+
+                if not needs_reconnect:
                     continue
+
                 logger.warning(
-                    "飞书 Bot %s 疑似掉线 (proc_alive=%s)，重建连接",
-                    role_name, proc_alive,
+                    "飞书 Bot %s 需要重连 (reason=%s, proc_alive=%s, idle=%.0fs)",
+                    role_name, reason, proc_alive, idle_secs,
                 )
+                reconnect_ts = _time.time()
                 cfg = self._bot_configs.get(role_name)
                 if not cfg:
                     continue
@@ -166,6 +197,8 @@ class FeishuBridge(ChatBridge):
                     new_adapter.on_message(self._on_feishu_message)
                     self._adapters[role_name] = new_adapter
                     logger.info("飞书 Bot %s 重连成功", role_name)
+
+                    await self._recover_missed_messages(new_adapter, reconnect_ts)
                 except Exception as e:
                     logger.error("飞书 Bot %s 重连失败: %s", role_name, e)
 
@@ -187,6 +220,29 @@ class FeishuBridge(ChatBridge):
                     logger.info("飞书 Bot %s 补启成功", role_name)
                 except Exception as e:
                     logger.warning("飞书 Bot %s 补启失败: %s", role_name, e)
+
+    async def _recover_missed_messages(self, adapter: Any, reconnect_ts: float) -> None:
+        """重连后通过 REST API 补漏断连期间的消息."""
+        if not self._group_chat_id or not self._environment:
+            return
+        try:
+            since_ts = reconnect_ts - 600
+            missed = await adapter.fetch_missed_messages(self._group_chat_id, since_ts)
+            if not missed:
+                logger.info("飞书补漏: 无遗漏消息")
+                return
+            for event_dict in missed:
+                msg_id = event_dict.get("message", {}).get("message_id", "")
+                if msg_id in self._seen_msg_ids:
+                    continue
+                self._seen_msg_ids[msg_id] = True
+                try:
+                    await adapter._handle_message_event(event_dict)
+                except Exception as e:
+                    logger.warning("飞书补漏消息处理失败 [%s]: %s", msg_id, e)
+            logger.info("飞书补漏: 注入 %d 条遗漏消息", len(missed))
+        except Exception as e:
+            logger.warning("飞书消息补漏异常: %s", e)
 
     _MSG_LIMIT = 3500
 

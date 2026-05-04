@@ -174,6 +174,7 @@ class FeishuAdapter(BasePlatformAdapter):
         self._http_client = None  # 共享 httpx.AsyncClient
         self._feishu_proc = None  # 飞书 SDK 子进程
         self._last_sdk_activity: float = 0  # SDK 最后活动时间
+        self._last_restart_reason: str = ""  # "process_dead" | "activity_timeout"
         self._accept_group_no_mention: bool = config.get("accept_group_no_mention", False)
         # 事件去重缓存: event_id → timestamp
         self._processed_events: dict[str, float] = {}
@@ -413,7 +414,8 @@ class FeishuAdapter(BasePlatformAdapter):
         self._queue_reader_task = asyncio.create_task(_queue_reader())
 
         async def _watchdog():
-            """每 30 秒检查子进程存活，死掉则重启."""
+            """每 30 秒检查子进程存活 + 消息活跃度，静默断连时强制重启."""
+            _ACTIVITY_TIMEOUT = 300  # 5 min no messages → assume silent disconnect
             while self._running:
                 await asyncio.sleep(30)
                 if not self._running:
@@ -421,7 +423,22 @@ class FeishuAdapter(BasePlatformAdapter):
                 if self._feishu_proc and not self._feishu_proc.is_alive():
                     logger.warning("飞书 SDK 子进程已退出 (exit=%s)，重启中...",
                                    self._feishu_proc.exitcode)
+                    self._last_restart_reason = "process_dead"
                     _start_subprocess()
+                elif self._feishu_proc and self._feishu_proc.is_alive():
+                    idle = _time.time() - self._last_sdk_activity
+                    if idle > _ACTIVITY_TIMEOUT:
+                        logger.warning(
+                            "飞书 SDK 静默超时 (%.0fs 无消息)，疑似 WebSocket 断连，强制重启子进程",
+                            idle,
+                        )
+                        self._last_restart_reason = "activity_timeout"
+                        self._feishu_proc.terminate()
+                        self._feishu_proc.join(timeout=3)
+                        if self._feishu_proc.is_alive():
+                            self._feishu_proc.kill()
+                        _start_subprocess()
+                        self._last_sdk_activity = _time.time()
 
         self._ws_watchdog_task = asyncio.create_task(_watchdog())
 
@@ -627,6 +644,70 @@ class FeishuAdapter(BasePlatformAdapter):
             return True
         self._processed_events[event_id] = now
         return False
+
+    async def fetch_missed_messages(self, chat_id: str, since_ts: float, limit: int = 50) -> list[dict]:
+        """通过 REST API 拉取群聊历史消息，用于断连后补漏.
+
+        Args:
+            chat_id: 群聊 ID (oc_ 开头)
+            since_ts: 起始时间戳 (秒)，只返回此时间之后的消息
+            limit: 最多拉取条数
+        Returns:
+            未处理过的消息事件列表 (与 _handle_message_event 格式兼容)
+        """
+        missed: list[dict] = []
+        try:
+            start_time = str(int(since_ts * 1000))
+            params = f"?container_id_type=chat&container_id={chat_id}&start_time={start_time}&sort_type=ByCreateTimeAsc&page_size={min(limit, 50)}"
+            result = await self._api_request("GET", f"/im/v1/messages{params}")
+            if result.get("code") != 0:
+                logger.warning("飞书历史消息拉取失败: %s", result.get("msg", ""))
+                return missed
+
+            items = result.get("data", {}).get("items", [])
+            bot_open_id = self._bot_user.user_id if self._bot_user else ""
+
+            for item in items:
+                msg_id = item.get("message_id", "")
+                if not msg_id:
+                    continue
+                if msg_id in self._processed_events:
+                    continue
+                sender_info = item.get("sender", {})
+                sender_open_id = sender_info.get("id", "")
+                if sender_open_id == bot_open_id:
+                    continue
+                event_dict = {
+                    "message": {
+                        "message_id": msg_id,
+                        "chat_id": chat_id,
+                        "chat_type": item.get("chat_type", "group"),
+                        "message_type": item.get("msg_type", "text"),
+                        "content": item.get("body", {}).get("content", "{}"),
+                        "parent_id": item.get("parent_id"),
+                        "create_time": item.get("create_time", ""),
+                        "mentions": [],
+                    },
+                    "sender": {
+                        "sender_id": {
+                            "open_id": sender_open_id,
+                            "user_id": sender_info.get("id", ""),
+                        }
+                    },
+                }
+                if item.get("mentions"):
+                    for m in item["mentions"]:
+                        event_dict["message"]["mentions"].append({
+                            "id": {"open_id": m.get("id", {}).get("open_id", "") if isinstance(m.get("id"), dict) else m.get("id", "")},
+                            "name": m.get("name", ""),
+                        })
+                self._processed_events[msg_id] = time.time()
+                missed.append(event_dict)
+
+            logger.info("飞书历史消息补漏: 拉取 %d 条，新消息 %d 条", len(items), len(missed))
+        except Exception as e:
+            logger.warning("飞书历史消息补漏异常: %s", e)
+        return missed
 
     # ── Webhook 处理 ──────────────────────────────────────────
 
