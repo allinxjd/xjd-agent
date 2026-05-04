@@ -39,6 +39,107 @@ from gateway.platforms.base import (
 
 logger = logging.getLogger(__name__)
 
+
+def _feishu_subprocess(app_id: str, app_secret: str, encrypt_key: str,
+                       verification_token: str, event_queue) -> None:
+    """飞书 SDK 子进程入口 — 完全独立的 event loop，通过 queue 传递事件."""
+    import os
+    import signal
+    for k in ("ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy",
+               "HTTP_PROXY", "http_proxy"):
+        os.environ.pop(k, None)
+
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
+
+    try:
+        import websockets
+        _OrigConnect = websockets.connect
+
+        class _DirectConnect(_OrigConnect):
+            def __init__(self, *args, **kwargs):
+                kwargs.setdefault("proxy", None)
+                super().__init__(*args, **kwargs)
+
+        websockets.connect = _DirectConnect
+    except Exception:
+        pass
+
+    import lark_oapi as lark
+
+    consecutive_failures = 0
+
+    while True:
+        try:
+            import asyncio
+            import lark_oapi.ws.client as ws_mod
+
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            ws_mod.loop = new_loop
+
+            def _on_message(data):
+                try:
+                    event = data.event
+                    if not event or not event.message:
+                        return
+                    msg = event.message
+                    sender_info = event.sender
+                    event_dict = {
+                        "message": {
+                            "message_id": msg.message_id or "",
+                            "chat_id": msg.chat_id or "",
+                            "chat_type": msg.chat_type or "p2p",
+                            "message_type": msg.message_type or "text",
+                            "content": msg.content or "{}",
+                            "parent_id": msg.parent_id,
+                            "create_time": getattr(msg, "create_time", "") or "",
+                            "mentions": [],
+                        },
+                        "sender": {
+                            "sender_id": {
+                                "open_id": sender_info.sender_id.open_id if sender_info and sender_info.sender_id else "",
+                                "user_id": sender_info.sender_id.user_id if sender_info and sender_info.sender_id else "",
+                            }
+                        },
+                    }
+                    if msg.mentions:
+                        for m in msg.mentions:
+                            open_id = m.id.open_id if m.id else ""
+                            name = m.name or ""
+                            event_dict["message"]["mentions"].append({
+                                "id": {"open_id": open_id},
+                                "name": name,
+                            })
+                    event_queue.put(event_dict)
+                except Exception as e:
+                    logging.getLogger(__name__).error("飞书子进程消息处理异常: %s", e)
+
+            handler = lark.EventDispatcherHandler.builder(
+                encrypt_key, verification_token,
+            ).register_p2_im_message_receive_v1(
+                _on_message
+            ).build()
+
+            ws_client = lark.ws.Client(
+                app_id, app_secret,
+                event_handler=handler,
+                log_level=lark.LogLevel.INFO,
+                auto_reconnect=True,
+            )
+
+            logging.getLogger(__name__).info("飞书子进程: SDK 启动 (pid=%d)", os.getpid())
+            ws_client.start()
+            consecutive_failures = 0
+        except Exception as e:
+            logging.getLogger(__name__).error("飞书子进程: SDK 异常退出: %s", e)
+            consecutive_failures += 1
+
+        import time
+        backoff = min(5 * (2 ** consecutive_failures), 120)
+        logging.getLogger(__name__).info("飞书子进程: %d秒后重连 (连续失败: %d)",
+                                         backoff, consecutive_failures)
+        time.sleep(backoff)
+
 class FeishuAdapter(BasePlatformAdapter):
     """飞书机器人适配器.
 
@@ -71,8 +172,7 @@ class FeishuAdapter(BasePlatformAdapter):
         self._token_expire_time: float = 0
         self._server = None  # aiohttp web server
         self._http_client = None  # 共享 httpx.AsyncClient
-        self._ws_task = None  # 长连接任务
-        self._ws_watchdog_task = None  # 长连接 watchdog
+        self._feishu_proc = None  # 飞书 SDK 子进程
         self._last_sdk_activity: float = 0  # SDK 最后活动时间
         self._accept_group_no_mention: bool = config.get("accept_group_no_mention", False)
         # 事件去重缓存: event_id → timestamp
@@ -254,14 +354,14 @@ class FeishuAdapter(BasePlatformAdapter):
         )
 
     async def _start_long_poll(self) -> None:
-        """启动长连接模式 — 使用飞书官方 SDK lark_oapi.ws.Client."""
+        """启动长连接模式 — 飞书 SDK 运行在独立子进程中，彻底隔离 event loop."""
         import asyncio
+        import multiprocessing
         import threading
         import time as _time
 
         try:
-            import lark_oapi as lark
-            import lark_oapi.ws.client as ws_mod
+            import lark_oapi  # noqa: F401
         except ImportError:
             raise ImportError("长连接模式需要 lark-oapi。请运行: pip install lark-oapi")
 
@@ -269,222 +369,83 @@ class FeishuAdapter(BasePlatformAdapter):
         self._event_loop = asyncio.get_event_loop()
         self._last_sdk_activity = _time.time()
 
-        app_id = self._app_id
-        app_secret = self._app_secret
-        encrypt_key = self._encrypt_key or ""
-        verification_token = self._verification_token or ""
+        event_queue: multiprocessing.Queue = multiprocessing.Queue()
+        self._feishu_queue = event_queue
+        self._feishu_proc = None
 
-        def _run_ws():
-            """带自动重连的 SDK 长连接线程.
+        def _start_subprocess():
+            """启动/重启飞书 SDK 子进程."""
+            if self._feishu_proc and self._feishu_proc.is_alive():
+                self._feishu_proc.terminate()
+                self._feishu_proc.join(timeout=3)
+            proc = multiprocessing.Process(
+                target=_feishu_subprocess,
+                args=(
+                    self._app_id, self._app_secret,
+                    self._encrypt_key or "", self._verification_token or "",
+                    event_queue,
+                ),
+                daemon=True,
+            )
+            proc.start()
+            self._feishu_proc = proc
+            logger.info("飞书 SDK 子进程已启动 (pid=%d)", proc.pid)
 
-            不依赖 SDK 内置重连 (重连后事件回调可能失效),
-            而是每次 start() 退出后创建全新 Client 重试。
-            每轮循环显式关闭旧 event loop 防止 fd 泄漏,
-            指数退避防止重连风暴。
-            """
-            import os
-            for k in ("ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy",
-                       "HTTP_PROXY", "http_proxy"):
-                os.environ.pop(k, None)
+        _start_subprocess()
 
-            try:
-                import websockets
-                _OrigConnect = websockets.connect
-
-                class _DirectConnect(_OrigConnect):
-                    def __init__(self, *args, **kwargs):
-                        kwargs.setdefault("proxy", None)
-                        super().__init__(*args, **kwargs)
-
-                websockets.connect = _DirectConnect
-            except Exception:
-                pass
-
-            consecutive_failures = 0
-            current_loop = None
-
+        async def _queue_reader():
+            """从子进程队列读取事件，分发到主 event loop."""
             while self._running:
-                if current_loop is not None:
-                    try:
-                        pending = asyncio.all_tasks(current_loop)
-                        for t in pending:
-                            t.cancel()
-                        if pending:
-                            current_loop.run_until_complete(
-                                asyncio.gather(*pending, return_exceptions=True))
-                    except Exception:
-                        pass
-                    try:
-                        current_loop.close()
-                    except Exception:
-                        pass
-                    current_loop = None
-
                 try:
-                    current_loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(current_loop)
-                    ws_mod.loop = current_loop
-
-                    handler = lark.EventDispatcherHandler.builder(
-                        encrypt_key, verification_token,
-                    ).register_p2_im_message_receive_v1(
-                        self._on_sdk_message
-                    ).build()
-
-                    ws_client = lark.ws.Client(
-                        app_id, app_secret,
-                        event_handler=handler,
-                        log_level=lark.LogLevel.INFO,
-                        auto_reconnect=False,
+                    event_dict = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: event_queue.get(timeout=2),
                     )
-
-                    _orig_disconnect = ws_client._disconnect
-                    async def _safe_disconnect(_orig=_orig_disconnect, _loop=current_loop):
-                        try:
-                            await _orig()
-                        except RuntimeError:
-                            ws_client._conn = None
-                        _loop.call_soon(_loop.stop)
-                    ws_client._disconnect = _safe_disconnect
-
-                    self._ws_client = ws_client
-                    self._last_sdk_activity = _time.time()
-                    logger.info("飞书长连接启动 (新 Client)")
-                    ws_client.start()
-                    consecutive_failures = 0
-                except Exception as e:
-                    logger.error("飞书长连接异常退出: %s", e)
-                    consecutive_failures += 1
-
-                self._ws_client = None
-                if self._running:
-                    backoff = min(5 * (2 ** consecutive_failures), 300)
-                    logger.info("飞书长连接断开，%d秒后重连... (连续失败: %d)",
-                                backoff, consecutive_failures)
-                    _time.sleep(backoff)
-
-            if current_loop is not None:
-                try:
-                    pending = asyncio.all_tasks(current_loop)
-                    for t in pending:
-                        t.cancel()
-                    if pending:
-                        current_loop.run_until_complete(
-                            asyncio.gather(*pending, return_exceptions=True))
-                    current_loop.close()
                 except Exception:
-                    pass
+                    continue
+                if event_dict is None:
+                    continue
+                self._last_sdk_activity = _time.time()
+                try:
+                    await self._handle_message_event(event_dict)
+                except Exception as e:
+                    logger.error("飞书消息处理失败: %s", e, exc_info=True)
 
-            logger.info("飞书长连接线程退出")
+        self._queue_reader_task = asyncio.create_task(_queue_reader())
 
-        self._ws_thread = threading.Thread(target=_run_ws, daemon=True)
-        self._ws_thread.start()
-
-        # Watchdog: 检测 SDK 重连后事件失效的情况
         async def _watchdog():
-            """每 60 秒检查一次, 如果 SDK 线程死掉了则重启."""
+            """每 30 秒检查子进程存活，死掉则重启."""
             while self._running:
-                await asyncio.sleep(60)
+                await asyncio.sleep(30)
                 if not self._running:
                     break
-                if self._ws_thread and not self._ws_thread.is_alive():
-                    logger.warning("飞书 SDK 线程已退出, 尝试重启连接")
-                    self._ws_thread = threading.Thread(target=_run_ws, daemon=True)
-                    self._ws_thread.start()
+                if self._feishu_proc and not self._feishu_proc.is_alive():
+                    logger.warning("飞书 SDK 子进程已退出 (exit=%s)，重启中...",
+                                   self._feishu_proc.exitcode)
+                    _start_subprocess()
 
         self._ws_watchdog_task = asyncio.create_task(_watchdog())
 
         await asyncio.sleep(2)
         logger.info(
-            "飞书适配器已启动 [长连接/官方SDK]: %s",
+            "飞书适配器已启动 [长连接/子进程隔离]: %s",
             self._bot_user.display_name if self._bot_user else "unknown",
         )
-
-    def _on_sdk_message(self, data) -> None:
-        """官方 SDK 长连接收到消息的回调 (同步, 在 SDK 线程中执行)."""
-        import time as _time
-        self._last_sdk_activity = _time.time()
-        logger.info("飞书 SDK 回调触发: %s", type(data).__name__)
-        try:
-            event = data.event
-            if not event or not event.message:
-                return
-
-            msg = event.message
-            sender_info = event.sender
-
-            # 构造与 webhook 模式相同的 event dict, 复用 _handle_message_event
-            event_dict = {
-                "message": {
-                    "message_id": msg.message_id or "",
-                    "chat_id": msg.chat_id or "",
-                    "chat_type": msg.chat_type or "p2p",
-                    "message_type": msg.message_type or "text",
-                    "content": msg.content or "{}",
-                    "parent_id": msg.parent_id,
-                    "create_time": getattr(msg, "create_time", "") or "",
-                    "mentions": [],
-                },
-                "sender": {
-                    "sender_id": {
-                        "open_id": sender_info.sender_id.open_id if sender_info and sender_info.sender_id else "",
-                        "user_id": sender_info.sender_id.user_id if sender_info and sender_info.sender_id else "",
-                    }
-                },
-            }
-
-            # SDK mentions 转换
-            if msg.mentions:
-                for m in msg.mentions:
-                    open_id = m.id.open_id if m.id else ""
-                    name = m.name or ""
-                    logger.info("飞书 SDK mention: open_id=%s, name=%s, key=%s",
-                                open_id, name, getattr(m, "key", ""))
-                    event_dict["message"]["mentions"].append({
-                        "id": {"open_id": open_id},
-                        "name": name,
-                    })
-
-            # 跨线程调度到主事件循环 (fire-and-forget, 不阻塞 SDK 回调线程)
-            import asyncio
-
-            def _on_done(fut):
-                try:
-                    fut.result()
-                except Exception as err:
-                    logger.error("飞书消息处理失败: %s", err, exc_info=True)
-
-            future = asyncio.run_coroutine_threadsafe(
-                self._handle_message_event(event_dict),
-                self._event_loop,
-            )
-            future.add_done_callback(_on_done)
-
-        except Exception as e:
-            logger.error("飞书长连接消息处理异常: %s (type=%s)", e, type(e).__name__, exc_info=True)
 
     async def stop(self) -> None:
         """停止飞书适配器."""
         self._running = False
-        # 停止 watchdog
+        if hasattr(self, '_queue_reader_task') and self._queue_reader_task:
+            self._queue_reader_task.cancel()
+            self._queue_reader_task = None
         if hasattr(self, '_ws_watchdog_task') and self._ws_watchdog_task:
             self._ws_watchdog_task.cancel()
             self._ws_watchdog_task = None
-        # 停止官方 SDK 长连接
-        if hasattr(self, '_ws_client') and self._ws_client:
-            try:
-                self._ws_client._conn = None  # 触发断开
-            except Exception:
-                pass
-            self._ws_client = None
-        # 等待 WS 线程退出 (最多 2 秒)
-        if hasattr(self, '_ws_thread') and self._ws_thread and self._ws_thread.is_alive():
-            self._ws_thread.join(timeout=2)
-            if self._ws_thread.is_alive():
-                logger.debug("飞书 WS 线程未在 2 秒内退出, 跳过 (daemon 线程会随进程退出)")
-        if self._ws_task:
-            self._ws_task.cancel()
-            self._ws_task = None
+        if hasattr(self, '_feishu_proc') and self._feishu_proc and self._feishu_proc.is_alive():
+            self._feishu_proc.terminate()
+            self._feishu_proc.join(timeout=3)
+            if self._feishu_proc.is_alive():
+                self._feishu_proc.kill()
+            self._feishu_proc = None
         if self._server:
             await self._server.cleanup()
             self._server = None

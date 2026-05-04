@@ -697,20 +697,22 @@ class Company:
                         if self._is_review_approved(result_msg.content):
                             stages_done["Review"] = True
                     elif result_msg.cause_by in ("WriteTest", "RunTest"):
-                        if result_msg.cause_by == "RunTest" and self._is_test_passed(result_msg.content):
-                            stages_done["Test"] = True
+                        if result_msg.cause_by == "RunTest":
+                            if self._is_test_passed(result_msg.content):
+                                stages_done["Test"] = True
                     elif result_msg.cause_by in ("DeployPlan", "ExecuteDeploy"):
                         if result_msg.cause_by == "ExecuteDeploy":
-                            has_curl = "curl" in result_msg.content.lower()
                             url_m = _re.search(r'http://[\w.\-]+:\d+', result_msg.content)
-                            has_url = bool(url_m)
-                            no_deploy = "无需部署" in result_msg.content or "无需操作" in result_msg.content
-                            if (has_curl and has_url) or no_deploy:
-                                stages_done["Deploy"] = True
                             if url_m:
                                 stage_outputs["Deploy"] = url_m.group(0)
+                            stages_done["Deploy"] = True
 
-                    rework_target = self._check_rework(role.name, result_msg.content)
+                    stage_just_completed = (
+                        (result_msg.cause_by == "CodeReview" and stages_done.get("Review"))
+                        or (result_msg.cause_by == "RunTest" and stages_done.get("Test"))
+                        or (result_msg.cause_by == "ExecuteDeploy" and stages_done.get("Deploy"))
+                    )
+                    rework_target = self._check_rework(role.name, result_msg.content) if not stage_just_completed else None
                     role_rework = rework_counts.get(role.name, 0)
                     if rework_target and role_rework < max_rework:
                         rework_counts[role.name] = role_rework + 1
@@ -1528,9 +1530,10 @@ class Company:
             if "REJECTED" in upper or "拒收" in content or "打回" in content:
                 return rework_target
         if role_name == "QA":
-            indicators = ["失败", "FAIL", "fail", "不通过", "未通过", "error", "Error"]
-            if any(ind in content for ind in indicators):
-                return rework_target
+            if not self._is_test_passed(content):
+                fail_indicators = ["失败", "FAIL", "fail", "不通过", "未通过"]
+                if any(ind in content for ind in fail_indicators):
+                    return rework_target
         return None
 
     def _clear_downstream_inboxes(self, role_name: str) -> None:
