@@ -1191,7 +1191,7 @@ class Company:
                     intent = self._detect_task_intent(m.content)
                     text = m.content.strip()
                     is_confirm = len(text) <= 15 and text.startswith(_confirm_only_prefixes)
-                    if intent and not is_confirm:
+                    if intent is True and not is_confirm:
                         req_msgs.append(m)
                 chat_msgs = [m for m in collected if m not in req_msgs]
 
