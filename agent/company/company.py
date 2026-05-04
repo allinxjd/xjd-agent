@@ -1607,26 +1607,44 @@ class Company:
                     f"进度: 模块 {i+1}/{len(modules)}\n\n"
                     f"{requirement}"
                 )
-                try:
-                    result = await asyncio.wait_for(
-                        WRITE_CODE.run(module_context, dev_role),
-                        timeout=STAGE_TIMEOUTS.get("WriteCode", 600),
-                    )
+                write_ok = False
+                for attempt in range(1, max_rework + 2):
+                    try:
+                        result = await asyncio.wait_for(
+                            WRITE_CODE.run(module_context, dev_role),
+                            timeout=STAGE_TIMEOUTS.get("WriteCode", 600),
+                        )
+                        if "write_file 未被调用" in result and attempt <= max_rework:
+                            logger.warning("模块 %s WriteCode 未写入文件 (第%d次)，重试", mod_name, attempt)
+                            module_context = (
+                                "## 重要提醒：你必须使用 write_file 工具写入文件！\n"
+                                "上一次你没有调用 write_file，代码没有落盘。\n"
+                                "请立即使用 write_file 将每个文件写入项目工作目录。\n\n"
+                                + module_context
+                            )
+                            continue
+                        write_ok = True
+                        stages_done[code_key] = True
+                        code_msg = CompanyMessage(
+                            content=result,
+                            cause_by="WriteCode",
+                            sent_from="Developer",
+                            task_id=task.task_id,
+                        )
+                        await self._env.publish(code_msg)
+                        self._store.save_message(code_msg)
+                        break
+                    except asyncio.TimeoutError:
+                        logger.warning("模块 %s WriteCode 超时 (%ds)，标记完成继续", mod_name, STAGE_TIMEOUTS.get("WriteCode", 600))
+                        stages_done[code_key] = True
+                        write_ok = True
+                        break
+                    except Exception as e:
+                        logger.error("模块 %s WriteCode 失败: %s", mod_name, e)
+                        break
+                if not write_ok:
+                    logger.error("模块 %s WriteCode 重试 %d 次仍未写入文件，跳过", mod_name, max_rework)
                     stages_done[code_key] = True
-                    code_msg = CompanyMessage(
-                        content=result,
-                        cause_by="WriteCode",
-                        sent_from="Developer",
-                        task_id=task.task_id,
-                    )
-                    await self._env.publish(code_msg)
-                    self._store.save_message(code_msg)
-                except asyncio.TimeoutError:
-                    logger.warning("模块 %s WriteCode 超时 (%ds)，标记完成继续", mod_name, STAGE_TIMEOUTS.get("WriteCode", 600))
-                    stages_done[code_key] = True
-                except Exception as e:
-                    logger.error("模块 %s WriteCode 失败: %s", mod_name, e)
-                    continue
 
             # VerifyRun for this module
             if not stages_done.get(verify_key, False):
