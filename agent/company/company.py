@@ -902,6 +902,23 @@ class Company:
 
         self._standby_stop = asyncio.Event()
         self._standby_history: list[tuple[str, str]] = self._restore_standby_history()
+
+        interrupted = self._detect_interrupted_projects()
+        if interrupted:
+            for proj_name, proj_dir, done, pending in interrupted:
+                done_str = "/".join(done) if done else "无"
+                pending_str = "/".join(pending)
+                notify = CompanyMessage(
+                    content=(
+                        f"老板，上次「{proj_name}」项目的流水线被中断了"
+                        f"（已完成：{done_str}，未完成：{pending_str}）。\n"
+                        f"回复「继续」即可从断点恢复，不会重复已完成的阶段。"
+                    ),
+                    cause_by="ChatReply",
+                    sent_from="PM",
+                )
+                await self._env.publish(notify)
+
         try:
             while not self._standby_stop.is_set():
                 await self._process_standby_messages()
@@ -1002,6 +1019,38 @@ class Company:
                         return m.send_to
 
         return None
+
+    def _detect_interrupted_projects(self) -> list[tuple[str, Path, list[str], list[str]]]:
+        """扫描项目目录，找到被中断的 pipeline（status=in_progress 且有未完成阶段）."""
+        import json as _dj
+        results = []
+        projects_root = Path.home() / "xjd-projects"
+        if not projects_root.exists():
+            return results
+        core_stages = ["PRD", "Design", "Env", "Code", "Verify", "Review", "Test", "Deploy"]
+        for d in sorted(projects_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if not d.is_dir():
+                continue
+            meta_file = d / ".project.json"
+            if not meta_file.exists():
+                continue
+            try:
+                meta = _dj.loads(meta_file.read_text())
+            except Exception:
+                continue
+            if meta.get("status") != "in_progress":
+                continue
+            sd = meta.get("stages_done", {})
+            if not any(sd.values()):
+                continue
+            done = [s for s in core_stages if sd.get(s)]
+            pending = [s for s in core_stages if not sd.get(s)]
+            if not pending:
+                continue
+            name_parts = d.name.split("-", 1)
+            display_name = name_parts[1] if len(name_parts) > 1 else d.name
+            results.append((display_name, d, done, pending))
+        return results[:3]
 
     def _find_latest_project_dir(self) -> Optional[Path]:
         """找到最近的项目工作目录."""
@@ -1370,20 +1419,27 @@ class Company:
         has_task_intent = has_strong or has_weak
 
         if not has_task_intent:
-            resume_keywords = ["继续", "接着来", "断点恢复", "继续开发"]
+            resume_keywords = ["继续", "接着来", "断点恢复", "继续开发", "接着开发", "恢复", "接着做", "继续做"]
             has_resume = any(kw in m.content for m in user_messages for kw in resume_keywords)
             if has_resume:
                 import json as _rjson
-                latest = self._find_latest_project_dir()
-                if latest:
-                    _rmeta_file = latest / ".project.json"
+                resume_project = None
+                for m in user_messages:
+                    resume_project = self._find_project_by_name(m.content)
+                    if resume_project:
+                        break
+                if not resume_project:
+                    resume_project = self._find_latest_project_dir()
+                if resume_project:
+                    _rmeta_file = resume_project / ".project.json"
                     if _rmeta_file.exists():
                         try:
                             _rmeta = _rjson.loads(_rmeta_file.read_text())
-                            if _rmeta.get("status") == "timeout" and _rmeta.get("stages_done"):
+                            if _rmeta.get("status") in ("timeout", "in_progress") and _rmeta.get("stages_done"):
                                 has_task_intent = True
                                 has_strong = True
-                                logger.info("检测到断点恢复意图，项目: %s", latest.name)
+                                self._resume_project_dir = resume_project
+                                logger.info("检测到断点恢复意图，项目: %s", resume_project.name)
                         except Exception:
                             pass
 
@@ -1391,6 +1447,46 @@ class Company:
             if len(self._standby_history) > self._config.standby_history_max:
                 self._standby_history = self._standby_history[-self._config.standby_history_trim:]
             task_context = "\n\n".join(m.content for m in user_messages)
+
+            resume_dir = getattr(self, "_resume_project_dir", None)
+            if resume_dir:
+                self._resume_project_dir = None
+                import json as _rj2
+                _rm = _rj2.loads((resume_dir / ".project.json").read_text())
+                _sd = _rm.get("stages_done", {})
+                core = ["PRD", "Design", "Env", "Code", "Verify", "Review", "Test", "Deploy"]
+                done_list = [s for s in core if _sd.get(s)]
+                pending_list = [s for s in core if not _sd.get(s)]
+                name_parts = resume_dir.name.split("-", 1)
+                display = name_parts[1] if len(name_parts) > 1 else resume_dir.name
+
+                confirm_msg = CompanyMessage(
+                    content=f"收到老板 👌 从断点恢复「{display}」，跳过已完成的 {'/'.join(done_list)}，继续执行 {'/'.join(pending_list)}",
+                    cause_by="ChatReply",
+                    sent_from=pm_role.name,
+                )
+                await self._env.publish(confirm_msg)
+                self._standby_history.append((pm_role.name, confirm_msg.content))
+
+                from agent.company.local_env import detect_local_env, format_env_for_context
+                env_context = format_env_for_context(detect_local_env())
+                existing_code = self._collect_project_files(
+                    resume_dir,
+                    max_chars=self._config.max_project_chars,
+                    max_files=self._config.max_project_files,
+                )
+                enriched = (
+                    f"## 项目工作目录\n{resume_dir}\n"
+                    f"这是一个已有项目，断点恢复模式。\n\n"
+                    f"## 现有代码\n{existing_code}\n\n"
+                    f"{env_context}\n\n"
+                    f"## 用户需求\n{task_context}"
+                )
+                self._pipeline_running = True
+                self._env._pipeline_user_queue = []
+                asyncio.create_task(self._run_pipeline_task(enriched, resume_dir))
+                return
+
             history_context = "\n".join(
                 f"[{s}]: {c}" for s, c in self._standby_history[-10:]
             )
