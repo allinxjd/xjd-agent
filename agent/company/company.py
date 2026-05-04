@@ -391,6 +391,7 @@ class Company:
         """主循环：发布需求 → 角色轮转 → 直到空闲或达到上限."""
         import uuid
         import time as _time
+        import re as _re
         run_id = uuid.uuid4().hex[:8]
         if not max_rounds:
             max_rounds = self._config.max_rounds
@@ -677,7 +678,6 @@ class Company:
                             stages_done["Test"] = True
                     elif result_msg.cause_by in ("DeployPlan", "ExecuteDeploy"):
                         if result_msg.cause_by == "ExecuteDeploy":
-                            import re as _re
                             has_curl = "curl" in result_msg.content.lower()
                             url_m = _re.search(r'http://[\w.\-]+:\d+', result_msg.content)
                             has_url = bool(url_m)
