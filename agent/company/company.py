@@ -501,12 +501,14 @@ class Company:
                 self._pipeline_user_msgs.clear()
 
             if self._env.is_idle():
-                logger.info("所有角色空闲，结束 (round %d)", round_num)
-                break
-
-            if all(stages_done.values()):
-                logger.info("所有阶段已完成，pipeline 结束 (round %d)", round_num)
-                break
+                if all(stages_done.values()):
+                    logger.info("所有角色空闲且所有阶段完成，结束 (round %d)", round_num)
+                    break
+                kicked = self._kick_next_stage(stages_done, stage_outputs, requirement, task)
+                if not kicked:
+                    logger.info("所有角色空闲，无法继续，结束 (round %d)", round_num)
+                    break
+                logger.info("返工后主动触发下一阶段")
 
             logger.info("=== Round %d === stages=%s", round_num, stages_done)
             round_had_work = False
@@ -1597,6 +1599,39 @@ class Company:
                     self._standby_history.append(("User", raw_msg))
 
     _PIPELINE_ORDER = ["PM", "Developer", "Reviewer", "QA", "DevOps"]
+
+    def _kick_next_stage(self, stages_done: dict, stage_outputs: dict,
+                         requirement: str, task) -> bool:
+        """返工后角色空闲，主动触发下一个未完成阶段."""
+        import re as _re
+        stage_role_map = [
+            ("Verify", "Developer"),
+            ("Review", "Reviewer"),
+            ("Test", "QA"),
+            ("Deploy", "DevOps"),
+        ]
+        for stage_key, role_name in stage_role_map:
+            if not stages_done.get(stage_key, True):
+                role = self._env.roles.get(role_name)
+                if not role:
+                    continue
+                kick_content = f"## 继续执行 {stage_key} 阶段\n"
+                if "Design" in stage_outputs:
+                    kick_content += stage_outputs["Design"][:1500]
+                pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
+                if pdir_match:
+                    kick_content += f"\n\n## 项目工作目录\n{pdir_match.group(1)}\n"
+                kick_msg = CompanyMessage(
+                    content=kick_content,
+                    cause_by="FixComplete",
+                    sent_from="PM",
+                    send_to=role_name,
+                    task_id=task.task_id,
+                )
+                role.put_message(kick_msg)
+                logger.info("主动触发 %s 执行 %s 阶段", role_name, stage_key)
+                return True
+        return False
 
     def _check_rework(self, role_name: str, content: str) -> Optional[str]:
         """检查角色输出是否需要返工。返回需要返工的目标角色名，或 None."""
