@@ -586,6 +586,29 @@ class Company:
                             )
                             await self._env.publish(escalate)
                             break
+                        if "write_file 未被调用" in result_msg.content:
+                            wf_rework = rework_counts.get("Developer_writefile", 0)
+                            if wf_rework < max_rework:
+                                rework_counts["Developer_writefile"] = wf_rework + 1
+                                logger.warning("WriteCode 未调用 write_file，要求重试 (第%d次)", wf_rework + 1)
+                                stages_done["Code"] = False
+                                rework_msg = CompanyMessage(
+                                    content=(
+                                        "## 重要提醒：你必须使用 write_file 工具写入文件！\n"
+                                        "上一次你没有调用 write_file，代码没有落盘。\n"
+                                        "请立即使用 write_file 将每个文件写入项目工作目录。\n"
+                                        "绝对不要只在回复文本中输出代码。\n\n"
+                                        f"## 原始设计方案\n{stage_outputs.get('Design', '')[:2000]}"
+                                    ),
+                                    cause_by="WriteDesign",
+                                    sent_from="Reviewer",
+                                    send_to="Developer",
+                                    task_id=task.task_id,
+                                )
+                                await self._env.publish(rework_msg)
+                                break
+                            else:
+                                logger.warning("WriteCode 未调用 write_file 重试已达上限，强制继续")
                         stages_done["Code"] = True
                         workspace = self._extract_workspace_from_requirement(requirement)
                         if workspace:
