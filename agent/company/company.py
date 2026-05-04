@@ -979,7 +979,7 @@ class Company:
         """检测操作类意图，返回目标角色名或 None."""
         qt_keywords = self._locale.get("keywords.quick_task") or {
             "Developer": ["调试", "查日志", "看日志", "查看日志", "修个bug", "修一下bug", "改个bug", "热修复"],
-            "DevOps": ["跑起来", "启动项目", "启动服务", "运行项目", "运行服务", "启动", "执行一下", "部署", "上线", "发布", "重启服务", "重启一下", "回滚", "检查服务", "健康检查", "看看服务"],
+            "DevOps": ["跑起来", "启动项目", "启动服务", "运行项目", "运行服务", "执行一下", "部署", "上线", "发布上线", "发布到线上", "重启服务", "重启一下", "回滚", "检查服务", "健康检查", "看看服务"],
             "QA": ["跑测试", "跑一下测试", "测试一下", "回归测试", "运行测试"],
         }
         qt_context = self._locale.get("keywords.quick_task_context") or [
@@ -1192,7 +1192,16 @@ class Company:
                     "可以，开干", "好，开干", "行，开干",
                 )
 
-                quick_target = self._detect_quick_task(collected)
+                _new_project_signals = (
+                    "新项目", "新产品", "做一个新", "另一个项目", "探讨一下一个新",
+                    "探讨一个新", "讨论一个新",
+                )
+                has_new_project = any(
+                    any(sig in m.content for sig in _new_project_signals)
+                    for m in collected
+                )
+
+                quick_target = None if has_new_project else self._detect_quick_task(collected)
                 if quick_target:
                     quick_msgs = collected
                     ack = CompanyMessage(
@@ -1212,6 +1221,19 @@ class Company:
                     if intent is True and not is_confirm:
                         req_msgs.append(m)
                 chat_msgs = [m for m in collected if m not in req_msgs]
+
+                if has_new_project and not req_msgs:
+                    for m in collected:
+                        if any(sig in m.content for sig in _new_project_signals):
+                            self._task_queue.append({"raw_message": m.content})
+                            pos = len(self._task_queue)
+                            queue_ack = CompanyMessage(
+                                content=f"收到老板 🫡 新项目需求已排队（第 {pos} 位），当前任务完成后自动开始",
+                                cause_by="ChatReply",
+                                sent_from="PM",
+                            )
+                            await self._env.publish(queue_ack)
+                    return
 
                 if req_msgs:
                     new_project_keywords = (
