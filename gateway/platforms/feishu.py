@@ -279,6 +279,8 @@ class FeishuAdapter(BasePlatformAdapter):
 
             不依赖 SDK 内置重连 (重连后事件回调可能失效),
             而是每次 start() 退出后创建全新 Client 重试。
+            每轮循环显式关闭旧 event loop 防止 fd 泄漏,
+            指数退避防止重连风暴。
             """
             import os
             for k in ("ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy",
@@ -298,13 +300,31 @@ class FeishuAdapter(BasePlatformAdapter):
             except Exception:
                 pass
 
-            while self._running:
-                try:
-                    new_loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(new_loop)
-                    ws_mod.loop = new_loop
+            consecutive_failures = 0
+            current_loop = None
 
-                    # 每次重连都重新构建 event_handler + Client (全新状态)
+            while self._running:
+                if current_loop is not None:
+                    try:
+                        pending = asyncio.all_tasks(current_loop)
+                        for t in pending:
+                            t.cancel()
+                        if pending:
+                            current_loop.run_until_complete(
+                                asyncio.gather(*pending, return_exceptions=True))
+                    except Exception:
+                        pass
+                    try:
+                        current_loop.close()
+                    except Exception:
+                        pass
+                    current_loop = None
+
+                try:
+                    current_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(current_loop)
+                    ws_mod.loop = current_loop
+
                     handler = lark.EventDispatcherHandler.builder(
                         encrypt_key, verification_token,
                     ).register_p2_im_message_receive_v1(
@@ -318,10 +338,8 @@ class FeishuAdapter(BasePlatformAdapter):
                         auto_reconnect=False,
                     )
 
-                    # Patch _disconnect: swallow cross-loop RuntimeError,
-                    # then stop the event loop so start() returns.
                     _orig_disconnect = ws_client._disconnect
-                    async def _safe_disconnect(_orig=_orig_disconnect, _loop=new_loop):
+                    async def _safe_disconnect(_orig=_orig_disconnect, _loop=current_loop):
                         try:
                             await _orig()
                         except RuntimeError:
@@ -332,14 +350,30 @@ class FeishuAdapter(BasePlatformAdapter):
                     self._ws_client = ws_client
                     self._last_sdk_activity = _time.time()
                     logger.info("飞书长连接启动 (新 Client)")
-                    ws_client.start()  # 阻塞直到连接彻底断开
+                    ws_client.start()
+                    consecutive_failures = 0
                 except Exception as e:
                     logger.error("飞书长连接异常退出: %s", e)
+                    consecutive_failures += 1
 
                 self._ws_client = None
                 if self._running:
-                    logger.info("飞书长连接断开，5秒后重连...")
-                    _time.sleep(5)
+                    backoff = min(5 * (2 ** consecutive_failures), 300)
+                    logger.info("飞书长连接断开，%d秒后重连... (连续失败: %d)",
+                                backoff, consecutive_failures)
+                    _time.sleep(backoff)
+
+            if current_loop is not None:
+                try:
+                    pending = asyncio.all_tasks(current_loop)
+                    for t in pending:
+                        t.cancel()
+                    if pending:
+                        current_loop.run_until_complete(
+                            asyncio.gather(*pending, return_exceptions=True))
+                    current_loop.close()
+                except Exception:
+                    pass
 
             logger.info("飞书长连接线程退出")
 

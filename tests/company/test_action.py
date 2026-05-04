@@ -11,7 +11,8 @@ class TestActionDefinitions:
     def test_all_actions_registered(self):
         expected = {
             "UserRequirement", "EvaluateRequirement", "WritePRD", "WriteDesign",
-            "SetupEnv", "WriteCode", "VerifyRun", "CodeReview", "WriteTest", "RunTest",
+            "SetupEnv", "WriteCode", "VerifyRun", "CodeReview", "FixCode",
+            "WriteTest", "RunTest",
             "DeployPlan", "ExecuteDeploy", "ChatReply", "QuickTask",
         }
         assert set(ALL_ACTIONS.keys()) == expected

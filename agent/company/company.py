@@ -98,9 +98,9 @@ class PipelineConfig:
 class CompanyConfig:
     """Company 可配置参数."""
 
-    max_rework: int = 3
+    max_rework: int = 2
     max_rounds: int = 20
-    max_minutes: int = 30
+    max_minutes: int = 120
     max_project_chars: int = 30000
     max_project_files: int = 100
     standby_history_max: int = 40
@@ -110,6 +110,20 @@ class CompanyConfig:
     locale: str = "zh-CN"
     projects_dir: str = ""
     pipeline: PipelineConfig = field(default_factory=PipelineConfig.default)
+
+STAGE_TIMEOUTS: dict[str, int] = {
+    "WritePRD": 5 * 60,
+    "WriteDesign": 5 * 60,
+    "SetupEnv": 10 * 60,
+    "WriteCode": 10 * 60,
+    "VerifyRun": 10 * 60,
+    "CodeReview": 3 * 60,
+    "FixCode": 5 * 60,
+    "WriteTest": 5 * 60,
+    "RunTest": 10 * 60,
+    "DeployPlan": 3 * 60,
+    "ExecuteDeploy": 10 * 60,
+}
 
 KARPATHY_SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
 KARPATHY_SKILL_NAMES = [
@@ -408,17 +422,51 @@ class Company:
         supplement_injected: set[str] = set()
         stage_outputs: dict[str, str] = {}
 
+        import re as _resume_re
+        pdir_match = _resume_re.search(r'## 项目工作目录\n(.+)\n', requirement)
+        if pdir_match:
+            from pathlib import Path as _Path
+            _pdir = _Path(pdir_match.group(1))
+            _meta_file = _pdir / ".project.json"
+            if _meta_file.exists():
+                try:
+                    import json as _json
+                    _meta = _json.loads(_meta_file.read_text())
+                    if _meta.get("status") == "timeout" and _meta.get("stages_done"):
+                        for k in stages_done:
+                            if _meta["stages_done"].get(k, False):
+                                stages_done[k] = True
+                        stage_outputs.update(_meta.get("stage_outputs", {}))
+                        logger.info("断点恢复: 跳过已完成阶段 %s",
+                                    [k for k, v in stages_done.items() if v])
+                        if stage_outputs.get("PRD"):
+                            await self._env.publish(CompanyMessage(
+                                content=stage_outputs["PRD"],
+                                cause_by="WritePRD", sent_from="PM",
+                                task_id=task.task_id,
+                            ))
+                        if stage_outputs.get("Design"):
+                            await self._env.publish(CompanyMessage(
+                                content=stage_outputs["Design"],
+                                cause_by="WriteDesign", sent_from="PM",
+                                task_id=task.task_id,
+                            ))
+                except Exception as e:
+                    logger.warning("读取断点信息失败: %s", e)
+
         for round_num in range(1, max_rounds + 1):
             if _time.monotonic() > pipeline_deadline:
                 logger.warning("Pipeline 超时 (%d 分钟)，强制结束 (round %d)", max_minutes, round_num)
                 timeout_msg = CompanyMessage(
-                    content=f"老板，流水线已运行超过 {max_minutes} 分钟，自动停止了。可能是 LLM 响应太慢或返工次数过多。",
+                    content=f"老板，流水线已运行超过 {max_minutes} 分钟（安全上限），自动停止了。已完成的模块代码已保存在项目目录中。",
                     cause_by="ChatReply",
                     sent_from="PM",
                     task_id=task.task_id,
                 )
                 await self._env.publish(timeout_msg)
                 task.status = "timeout"
+                self._last_stages_done = dict(stages_done)
+                self._last_stage_outputs = dict(stage_outputs)
                 break
 
             if self._pipeline_user_msgs:
@@ -437,8 +485,8 @@ class Company:
                             break
                     inject_msg = CompanyMessage(
                         content=f"## 老板补充需求\n{supplement}",
-                        cause_by="HumanDirective",
-                        sent_from="System",
+                        cause_by="SupplementRequirement",
+                        sent_from="PM",
                         send_to=next_role or "PM",
                         task_id=task.task_id,
                     )
@@ -500,6 +548,22 @@ class Company:
                         stages_done["PRD"] = True
                         stages_done["Design"] = True
                         stage_outputs["Design"] = result_msg.content
+
+                        modules = self._parse_modules(result_msg.content)
+                        if modules:
+                            logger.info("Design 输出包含 %d 个模块，启动模块 pipeline: %s",
+                                        len(modules), [m["name"] for m in modules])
+                            await self._run_module_pipeline(
+                                modules=modules,
+                                requirement=requirement,
+                                stage_outputs=stage_outputs,
+                                stages_done=stages_done,
+                                rework_counts=rework_counts,
+                                task=task,
+                                pipeline_deadline=pipeline_deadline,
+                            )
+                        else:
+                            logger.info("Design 未包含模块拆分，使用传统单体 pipeline")
                     elif result_msg.cause_by == "SetupEnv":
                         stages_done["Env"] = True
                         if "ENV_FAIL" in result_msg.content:
@@ -561,20 +625,27 @@ class Company:
                             verify_rework = rework_counts.get("Developer_verify", 0)
                             if verify_rework < max_rework:
                                 rework_counts["Developer_verify"] = verify_rework + 1
-                                logger.warning("VerifyRun 失败，回退给 Developer 修复 (第%d次)", verify_rework + 1)
-                                stages_done["Code"] = False
+                                logger.warning("VerifyRun 失败，Developer 修复 (第%d次, patch 模式)", verify_rework + 1)
                                 stages_done["Verify"] = False
-                                rework_parts = [f"## 验证失败，请修复后重新提交\n{result_msg.content}"]
+
+                                fix_parts = [f"## 验证失败，请修复指出的问题\n{result_msg.content}"]
+                                pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
+                                if pdir_match:
+                                    fix_parts.append(f"## 项目工作目录\n{pdir_match.group(1)}")
                                 if "Design" in stage_outputs:
-                                    rework_parts.append(f"## 原始设计方案（必须遵循）\n{stage_outputs['Design'][:2000]}")
-                                rework_msg = CompanyMessage(
-                                    content="\n\n".join(rework_parts),
-                                    cause_by="WriteDesign",
-                                    sent_from="Developer",
-                                    send_to="Developer",
-                                    task_id=task.task_id,
-                                )
-                                await self._env.publish(rework_msg)
+                                    fix_parts.append(f"## 原始设计方案（参考）\n{stage_outputs['Design'][:1500]}")
+
+                                from agent.company.action import FIX_CODE
+                                dev_role = self._env.roles.get("Developer")
+                                if dev_role:
+                                    fix_result = await FIX_CODE.run("\n\n".join(fix_parts), dev_role)
+                                    fix_msg = CompanyMessage(
+                                        content=fix_result,
+                                        cause_by="FixCode",
+                                        sent_from="Developer",
+                                        task_id=task.task_id,
+                                    )
+                                    await self._env.publish(fix_msg)
                                 break
                             else:
                                 logger.warning("VerifyRun 返工次数已达上限，强制通过")
@@ -608,7 +679,7 @@ class Company:
                         if result_msg.cause_by == "ExecuteDeploy":
                             import re as _re
                             has_curl = "curl" in result_msg.content.lower()
-                            url_m = _re.search(r'http://[\d.]+:\d+', result_msg.content)
+                            url_m = _re.search(r'http://[\w.\-]+:\d+', result_msg.content)
                             has_url = bool(url_m)
                             no_deploy = "无需部署" in result_msg.content or "无需操作" in result_msg.content
                             if (has_curl and has_url) or no_deploy:
@@ -620,28 +691,35 @@ class Company:
                     role_rework = rework_counts.get(role.name, 0)
                     if rework_target and role_rework < max_rework:
                         rework_counts[role.name] = role_rework + 1
-                        logger.info("返工 #%d: %s 要求 %s 修改", role_rework + 1, role.name, rework_target)
-                        stages_done["Code"] = False
+                        logger.info("返工 #%d: %s 要求 %s 修改 (patch 模式)", role_rework + 1, role.name, rework_target)
+                        self._clear_downstream_inboxes(role.name)
+
+                        fix_parts = [f"## {role.name} 反馈（请只修改指出的问题）\n{result_msg.content}"]
+                        pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
+                        if pdir_match:
+                            fix_parts.append(f"## 项目工作目录\n{pdir_match.group(1)}")
+                        if "Design" in stage_outputs:
+                            fix_parts.append(f"## 原始设计方案（参考）\n{stage_outputs['Design'][:1500]}")
+
+                        from agent.company.action import FIX_CODE
+                        fix_role = self._env.roles.get(rework_target)
+                        if fix_role:
+                            fix_result = await FIX_CODE.run("\n\n".join(fix_parts), fix_role)
+                            fix_msg = CompanyMessage(
+                                content=fix_result,
+                                cause_by="FixCode",
+                                sent_from=rework_target,
+                                task_id=task.task_id,
+                            )
+                            await self._env.publish(fix_msg)
+                            self._store.save_message(fix_msg)
+
                         stages_done["Verify"] = False
                         stages_done["Review"] = False
                         stages_done["Test"] = False
-                        self._clear_downstream_inboxes(role.name)
-                        rework_parts = [f"## {role.name} 反馈（请修改后重新提交）\n{result_msg.content}"]
-                        if "Design" in stage_outputs:
-                            rework_parts.append(f"## 原始设计方案（必须遵循）\n{stage_outputs['Design'][:2000]}")
-                        if "PRD" in stage_outputs:
-                            rework_parts.append(f"## 原始需求\n{stage_outputs['PRD'][:1000]}")
-                        rework_msg = CompanyMessage(
-                            content="\n\n".join(rework_parts),
-                            cause_by=result_msg.cause_by,
-                            sent_from=role.name,
-                            send_to=rework_target,
-                            task_id=task.task_id,
-                        )
-                        await self._env.publish(rework_msg)
-                        self._store.save_message(rework_msg)
+
                         rework_status = CompanyMessage(
-                            content=f"{role.name} 打回了代码，{rework_target} 正在修改（第 {role_rework + 1} 次返工）",
+                            content=f"{role.name} 发现问题，{rework_target} 正在修复（第 {role_rework + 1} 次，patch 模式）",
                             cause_by="StatusUpdate",
                             sent_from=role.name,
                             task_id=task.task_id,
@@ -713,6 +791,8 @@ class Company:
             task.status = "done"
 
         self._last_deploy_url = stage_outputs.get("Deploy", "")
+        self._last_stages_done = dict(stages_done)
+        self._last_stage_outputs = dict(stage_outputs)
         self._last_task = task
         self._store.save_task(task)
         self._store.finish_run(run_id, task.status, round_num, task.result[:500] if task.result else "")
@@ -720,6 +800,9 @@ class Company:
 
     async def _continue_run(self, task: CompanyTask, requirement: str, remaining_rounds: int) -> str:
         """验证失败后继续执行剩余轮次."""
+        if remaining_rounds <= 0:
+            task.status = "failed"
+            return task.result or ""
         for round_num in range(1, remaining_rounds + 1):
             if self._env.is_idle():
                 break
@@ -908,7 +991,7 @@ class Company:
         if not projects_dir.exists():
             return None
 
-        iterate_keywords = ["接着开发", "继续开发", "接着做", "继续做", "迭代", "升级", "加个功能", "加一个功能", "改一下"]
+        iterate_keywords = ["接着开发", "继续开发", "接着做", "继续做", "继续", "接着来", "断点恢复", "迭代", "升级", "加个功能", "加一个功能", "改一下"]
         is_iterate = any(kw in text for kw in iterate_keywords)
 
         dirs = sorted(projects_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -983,13 +1066,23 @@ class Company:
         await self._env.publish(result_msg)
 
         import re as _re
-        url_m = _re.search(r'http://[\d.]+:\d+', result_msg.content)
+        url_m = _re.search(r'http://[\w.\-]+:\d+', result_msg.content)
         if url_m:
             try:
                 import webbrowser
                 webbrowser.open(url_m.group(0))
             except Exception:
                 pass
+
+    async def _run_quick_task(self, role_name: str, messages: list[CompanyMessage]) -> None:
+        """异步执行 QuickTask，完成后清理 _pipeline_running 状态."""
+        try:
+            await self._handle_quick_task(role_name, messages)
+        except Exception as e:
+            logger.error("QuickTask 执行异常: %s", e)
+        finally:
+            self._pipeline_running = False
+            self._env._pipeline_user_queue = None
 
     _ROLE_NICK_MAP: dict[str, list[str]] = None
     _ROLE_TOPIC_KEYWORDS: dict[str, list[str]] = None
@@ -1148,51 +1241,10 @@ class Company:
                     f"{pending['full_context']}"
                 )
 
-                async def _run_pipeline(req: str, pdir: Path) -> None:
-                    result = None
-                    try:
-                        result = await self.run(req)
-                        last_task = getattr(self, '_last_task', None)
-                        if last_task and getattr(last_task, 'status', '') == 'timeout':
-                            status = "timeout"
-                        else:
-                            status = "done" if result else "failed"
-                    except Exception as e:
-                        logger.error("Pipeline 执行异常: %s", e)
-                        status = "failed"
-                    finally:
-                        self._pipeline_running = False
-                        self._env._pipeline_user_queue = None
-                        self._update_project_status(pdir, status)
-                        import re as _re
-                        access_url = getattr(self, '_last_deploy_url', '')
-                        if not access_url and result:
-                            m = _re.search(r'http://[\d.]+:\d+', result)
-                            access_url = m.group(0) if m else ''
-                        if access_url and status == 'done':
-                            try:
-                                import webbrowser
-                                webbrowser.open(access_url)
-                            except Exception:
-                                pass
-                        url_info = f"\n访问地址: {access_url}" if access_url else ""
-                        if status == "timeout":
-                            msg_text = f"老板，任务超时了，没能全部完成。项目目录: {pdir}{url_info}"
-                        elif status == "done":
-                            msg_text = f"老板，任务完成！项目目录: {pdir}{url_info}"
-                        else:
-                            msg_text = f"老板，任务执行出错了！项目目录: {pdir}{url_info}"
-                        done_msg = CompanyMessage(
-                            content=msg_text,
-                            cause_by="StatusUpdate",
-                            sent_from="PM",
-                        )
-                        await self._env.publish(done_msg)
-
                 import asyncio
                 self._pipeline_running = True
                 self._env._pipeline_user_queue = []
-                asyncio.create_task(_run_pipeline(enriched, project_dir))
+                asyncio.create_task(self._run_pipeline_task(enriched, project_dir))
                 return
             else:
                 retry_msg = CompanyMessage(
@@ -1209,6 +1261,24 @@ class Company:
         has_strong = any(i is True for _, i in intents)
         has_weak = any(i == "weak" for _, i in intents)
         has_task_intent = has_strong or has_weak
+
+        if not has_task_intent:
+            resume_keywords = ["继续", "接着来", "断点恢复", "继续开发"]
+            has_resume = any(kw in m.content for m in user_messages for kw in resume_keywords)
+            if has_resume:
+                import json as _rjson
+                latest = self._find_latest_project_dir()
+                if latest:
+                    _rmeta_file = latest / ".project.json"
+                    if _rmeta_file.exists():
+                        try:
+                            _rmeta = _rjson.loads(_rmeta_file.read_text())
+                            if _rmeta.get("status") == "timeout" and _rmeta.get("stages_done"):
+                                has_task_intent = True
+                                has_strong = True
+                                logger.info("检测到断点恢复意图，项目: %s", latest.name)
+                        except Exception:
+                            pass
 
         if has_task_intent:
             if len(self._standby_history) > self._config.standby_history_max:
@@ -1255,7 +1325,9 @@ class Company:
             import re as _re_name
             name_match = _re_name.search(r'PROJECT_NAME:\s*(.+)', eval_text)
             if name_match:
-                candidate = _re_name.sub(r'[^\w\u4e00-\u9fff-]', '', name_match.group(1).strip())[:10]
+                candidate = name_match.group(1).strip()
+                candidate = _re_name.sub(r'^\d{8}-', '', candidate)
+                candidate = _re_name.sub(r'[^\w\u4e00-\u9fff-]', '', candidate)[:10]
                 if candidate and candidate not in self._PROJECT_NAME_STOPWORDS:
                     project_name = candidate
 
@@ -1318,56 +1390,17 @@ class Company:
                     f"{full_context}"
                 )
 
-            async def _run_pipeline(req: str, pdir: Path) -> None:
-                result = None
-                try:
-                    result = await self.run(req)
-                    last_task = getattr(self, '_last_task', None)
-                    if last_task and getattr(last_task, 'status', '') == 'timeout':
-                        status = "timeout"
-                    else:
-                        status = "done" if result else "failed"
-                except Exception as e:
-                    logger.error("Pipeline 执行异常: %s", e)
-                    status = "failed"
-                finally:
-                    self._pipeline_running = False
-                    self._env._pipeline_user_queue = None
-                    self._update_project_status(pdir, status)
-                    import re as _re
-                    access_url = getattr(self, '_last_deploy_url', '')
-                    if not access_url and result:
-                        m = _re.search(r'http://[\d.]+:\d+', result)
-                        access_url = m.group(0) if m else ''
-                    if access_url and status == 'done':
-                        try:
-                            import webbrowser
-                            webbrowser.open(access_url)
-                        except Exception:
-                            pass
-                    url_info = f"\n访问地址: {access_url}" if access_url else ""
-                    if status == "timeout":
-                        msg_text = f"老板，任务超时了，没能全部完成。项目目录: {pdir}{url_info}"
-                    elif status == "done":
-                        msg_text = f"老板，任务完成！项目目录: {pdir}{url_info}"
-                    else:
-                        msg_text = f"老板，任务执行出错了！项目目录: {pdir}{url_info}"
-                    done_msg = CompanyMessage(
-                        content=msg_text,
-                        cause_by="StatusUpdate",
-                        sent_from="PM",
-                    )
-                    await self._env.publish(done_msg)
-
             import asyncio
             self._pipeline_running = True
             self._env._pipeline_user_queue = []
-            asyncio.create_task(_run_pipeline(enriched, project_dir))
+            asyncio.create_task(self._run_pipeline_task(enriched, project_dir))
             return
 
         quick_target = self._detect_quick_task(user_messages)
         if quick_target:
-            await self._handle_quick_task(quick_target, user_messages)
+            self._pipeline_running = True
+            self._env._pipeline_user_queue = []
+            asyncio.create_task(self._run_quick_task(quick_target, user_messages))
             return
 
         if len(self._standby_history) > 40:
@@ -1383,7 +1416,7 @@ class Company:
             target = self._route_message_to_role(m)
             if target:
                 target_roles.add(target)
-            target_roles.add("PM")
+        target_roles.add("PM")
 
         responded_roles: set[str] = set()
         for role_name in ["PM"] + [r for r in target_roles if r != "PM"]:
@@ -1413,6 +1446,52 @@ class Company:
         """外部调用停止待命模式."""
         if hasattr(self, "_standby_stop"):
             self._standby_stop.set()
+
+    async def _run_pipeline_task(self, req: str, pdir) -> None:
+        """执行 pipeline 并在完成后清理状态、发送通知."""
+        from pathlib import Path
+        result = None
+        status = "failed"
+        try:
+            result = await self.run(req)
+            last_task = getattr(self, '_last_task', None)
+            if last_task and getattr(last_task, 'status', '') == 'timeout':
+                status = "timeout"
+            else:
+                status = "done" if result else "failed"
+        except Exception as e:
+            logger.error("Pipeline 执行异常: %s", e)
+        finally:
+            self._pipeline_running = False
+            self._env._pipeline_user_queue = None
+            self._update_project_status(pdir, status)
+            import re as _re
+            access_url = getattr(self, '_last_deploy_url', '')
+            if not access_url and result:
+                m = _re.search(r'http://[\w.\-]+:\d+', result)
+                access_url = m.group(0) if m else ''
+            if access_url and status == 'done':
+                try:
+                    import webbrowser
+                    webbrowser.open(access_url)
+                except Exception:
+                    pass
+            url_info = f"\n访问地址: {access_url}" if access_url else ""
+            if status == "timeout":
+                stages = getattr(self, '_last_stages_done', {})
+                done_list = [k for k, v in stages.items() if v]
+                progress = f"（已完成: {', '.join(done_list)}）" if done_list else ""
+                msg_text = f"老板，任务超时了{progress}。代码已保存在项目目录，说「继续」可以从断点恢复。\n项目目录: {pdir}{url_info}"
+            elif status == "done":
+                msg_text = f"老板，任务完成！项目目录: {pdir}{url_info}"
+            else:
+                msg_text = f"老板，任务执行出错了！项目目录: {pdir}{url_info}"
+            done_msg = CompanyMessage(
+                content=msg_text,
+                cause_by="StatusUpdate",
+                sent_from="PM",
+            )
+            await self._env.publish(done_msg)
 
     _PIPELINE_ORDER = ["PM", "Developer", "Reviewer", "QA", "DevOps"]
 
@@ -1445,6 +1524,199 @@ class Company:
                 role._inbox.clear()
                 if cleared:
                     logger.info("清空 %s 的 inbox（%d 条），等待返工完成", downstream, cleared)
+
+    @staticmethod
+    def _parse_modules(design_text: str) -> list[dict]:
+        """从 Design 文本中解析 ### MODULES 部分，返回模块列表."""
+        import re
+        modules: list[dict] = []
+        m = re.search(r'### MODULES\s*\n(.*?)(?=\n###|\n## |\Z)', design_text, re.DOTALL)
+        if not m:
+            return modules
+        block = m.group(1)
+        current: dict | None = None
+        for line in block.split('\n'):
+            line = line.strip()
+            if line.startswith('- module:'):
+                if current:
+                    modules.append(current)
+                name = line.split(':', 1)[1].strip()
+                current = {"name": name, "files": [], "depends": [], "description": ""}
+            elif current and line.startswith('files:'):
+                raw = line.split(':', 1)[1].strip().strip('[]')
+                current["files"] = [f.strip().strip("'\"") for f in raw.split(',') if f.strip()]
+            elif current and line.startswith('depends:'):
+                raw = line.split(':', 1)[1].strip().strip('[]')
+                current["depends"] = [d.strip().strip("'\"") for d in raw.split(',') if d.strip()]
+            elif current and line.startswith('description:'):
+                current["description"] = line.split(':', 1)[1].strip()
+        if current:
+            modules.append(current)
+        return modules
+
+    async def _run_module_pipeline(
+        self,
+        modules: list[dict],
+        requirement: str,
+        stage_outputs: dict[str, str],
+        stages_done: dict[str, bool],
+        rework_counts: dict[str, int],
+        task: "CompanyTask",
+        pipeline_deadline: float,
+    ) -> None:
+        """按模块循环执行 Code → Verify → Review，每个模块独立完成."""
+        import asyncio
+        import re as _re
+        import time as _time
+        from agent.company.action import WRITE_CODE, VERIFY_RUN, CODE_REVIEW, FIX_CODE
+        from agent.company.message import CompanyMessage
+
+        max_rework = self._config.max_rework
+        dev_role = self._env.roles.get("Developer")
+        reviewer_role = self._env.roles.get("Reviewer")
+        if not dev_role:
+            logger.error("Developer 角色未注册，无法执行模块 pipeline")
+            return
+
+        for i, module in enumerate(modules):
+            mod_name = module["name"]
+            mod_files = module.get("files", [])
+            mod_desc = module.get("description", "")
+            code_key = f"Code_{mod_name}"
+            verify_key = f"Verify_{mod_name}"
+            review_key = f"Review_{mod_name}"
+
+            if _time.monotonic() > pipeline_deadline:
+                logger.warning("模块 pipeline 超时，已完成 %d/%d 模块", i, len(modules))
+                break
+
+            progress_msg = CompanyMessage(
+                content=f"开始开发模块 {i+1}/{len(modules)}: {mod_name} — {mod_desc}",
+                cause_by="StatusUpdate",
+                sent_from="Developer",
+                task_id=task.task_id,
+            )
+            await self._env.publish(progress_msg)
+
+            # WriteCode for this module
+            if not stages_done.get(code_key, False):
+                module_context = (
+                    f"## 当前任务：只编写模块 [{mod_name}] 的代码\n"
+                    f"文件列表: {', '.join(mod_files)}\n"
+                    f"模块说明: {mod_desc}\n"
+                    f"进度: 模块 {i+1}/{len(modules)}\n\n"
+                    f"{requirement}"
+                )
+                try:
+                    result = await asyncio.wait_for(
+                        WRITE_CODE.run(module_context, dev_role),
+                        timeout=STAGE_TIMEOUTS.get("WriteCode", 600),
+                    )
+                    stages_done[code_key] = True
+                    code_msg = CompanyMessage(
+                        content=result,
+                        cause_by="WriteCode",
+                        sent_from="Developer",
+                        task_id=task.task_id,
+                    )
+                    await self._env.publish(code_msg)
+                    self._store.save_message(code_msg)
+                except asyncio.TimeoutError:
+                    logger.warning("模块 %s WriteCode 超时 (%ds)，标记完成继续", mod_name, STAGE_TIMEOUTS.get("WriteCode", 600))
+                    stages_done[code_key] = True
+                except Exception as e:
+                    logger.error("模块 %s WriteCode 失败: %s", mod_name, e)
+                    continue
+
+            # VerifyRun for this module
+            if not stages_done.get(verify_key, False):
+                workspace = self._extract_workspace_from_requirement(requirement)
+                verify_context = f"## 验证模块: {mod_name}\n文件: {', '.join(mod_files)}\n\n{requirement}"
+                try:
+                    result = await asyncio.wait_for(
+                        VERIFY_RUN.run(verify_context, dev_role),
+                        timeout=STAGE_TIMEOUTS.get("VerifyRun", 600),
+                    )
+                    if "VERIFY_PASS" in result or "VERIFY_PASS_NO_SERVER" in result:
+                        stages_done[verify_key] = True
+                    else:
+                        vr_count = rework_counts.get(f"verify_{mod_name}", 0)
+                        if vr_count < max_rework:
+                            rework_counts[f"verify_{mod_name}"] = vr_count + 1
+                            fix_parts = [f"## 验证失败，请修复\n{result}"]
+                            pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
+                            if pdir_match:
+                                fix_parts.append(f"## 项目工作目录\n{pdir_match.group(1)}")
+                            await asyncio.wait_for(
+                                FIX_CODE.run("\n\n".join(fix_parts), dev_role),
+                                timeout=STAGE_TIMEOUTS.get("FixCode", 300),
+                            )
+                            result2 = await asyncio.wait_for(
+                                VERIFY_RUN.run(verify_context, dev_role),
+                                timeout=STAGE_TIMEOUTS.get("VerifyRun", 600),
+                            )
+                            if "VERIFY_PASS" in result2 or "VERIFY_PASS_NO_SERVER" in result2:
+                                stages_done[verify_key] = True
+                            else:
+                                stages_done[verify_key] = True
+                                logger.warning("模块 %s 验证仍失败，强制通过", mod_name)
+                        else:
+                            stages_done[verify_key] = True
+                except (asyncio.TimeoutError, Exception) as e:
+                    if isinstance(e, asyncio.TimeoutError):
+                        logger.warning("模块 %s VerifyRun 超时，跳过验证继续", mod_name)
+                    else:
+                        logger.error("模块 %s VerifyRun 失败: %s", mod_name, e)
+                    stages_done[verify_key] = True
+
+            # CodeReview for this module
+            if not stages_done.get(review_key, False) and reviewer_role:
+                workspace = self._extract_workspace_from_requirement(requirement)
+                code_listing = ""
+                if workspace:
+                    code_listing = self._collect_project_files(
+                        workspace,
+                        max_chars=self._config.max_project_chars,
+                        max_files=self._config.max_project_files,
+                    )
+                review_context = (
+                    f"## 审查模块: {mod_name}\n文件: {', '.join(mod_files)}\n\n"
+                    f"## 设计方案\n{stage_outputs.get('Design', '')[:2000]}\n\n"
+                    f"## 代码\n{code_listing[:8000]}"
+                )
+                try:
+                    result = await asyncio.wait_for(
+                        CODE_REVIEW.run(review_context, reviewer_role),
+                        timeout=STAGE_TIMEOUTS.get("CodeReview", 180),
+                    )
+                    if self._is_review_approved(result):
+                        stages_done[review_key] = True
+                    else:
+                        rc = rework_counts.get(f"review_{mod_name}", 0)
+                        if rc < max_rework:
+                            rework_counts[f"review_{mod_name}"] = rc + 1
+                            fix_parts = [f"## 审查意见（请只修复指出的问题）\n{result}"]
+                            pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
+                            if pdir_match:
+                                fix_parts.append(f"## 项目工作目录\n{pdir_match.group(1)}")
+                            await asyncio.wait_for(
+                                FIX_CODE.run("\n\n".join(fix_parts), dev_role),
+                                timeout=STAGE_TIMEOUTS.get("FixCode", 300),
+                            )
+                        stages_done[review_key] = True
+                except (asyncio.TimeoutError, Exception) as e:
+                    if isinstance(e, asyncio.TimeoutError):
+                        logger.warning("模块 %s CodeReview 超时，强制通过", mod_name)
+                    else:
+                        logger.error("模块 %s CodeReview 失败: %s", mod_name, e)
+                    stages_done[review_key] = True
+
+            logger.info("模块 %s 完成 (%d/%d)", mod_name, i + 1, len(modules))
+
+        # 标记整体 Code/Verify/Review 完成
+        stages_done["Code"] = True
+        stages_done["Verify"] = True
+        stages_done["Review"] = True
 
     def _restore_standby_history(self) -> list[tuple[str, str]]:
         """从 CompanyStore 恢复最近的对话历史."""
@@ -1536,6 +1808,7 @@ class Company:
                 clean = clean[len(prefix):]
                 break
         clean = re.sub(r'^[，,：:。\s]+', '', clean)
+        clean = re.sub(r'^\d{8}-', '', clean)
         first_line = clean.split('\n')[0].strip()
         first_sentence = re.split(r'[。！？\n，,的]', first_line)[0].strip()
         if not first_sentence or first_sentence in Company._PROJECT_NAME_STOPWORDS or len(first_sentence) < 2:
@@ -1594,6 +1867,12 @@ class Company:
             meta = json.loads(meta_file.read_text())
             meta["status"] = status
             meta["completed_at"] = datetime.now().isoformat()
+            stages_done = getattr(self, '_last_stages_done', None)
+            if stages_done:
+                meta["stages_done"] = stages_done
+            stage_outputs = getattr(self, '_last_stage_outputs', None)
+            if stage_outputs:
+                meta["stage_outputs"] = {k: v[:3000] for k, v in stage_outputs.items()}
             meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
         except Exception as e:
             logger.warning("更新项目状态失败: %s", e)

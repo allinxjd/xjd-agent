@@ -535,3 +535,36 @@ class TestProjectNameParsing:
         eval_text = "READY\n核心需求是做一个计算器"
         match = re.search(r'PROJECT_NAME:\s*(.+)', eval_text)
         assert match is None
+
+
+class TestParseModules:
+    def test_parses_modules(self):
+        design = (
+            "## 技术方案\n...\n"
+            "### MODULES\n"
+            "- module: data_layer\n"
+            "  files: [models.py, db.py]\n"
+            "  depends: []\n"
+            "  description: 数据层\n"
+            "- module: api\n"
+            "  files: [routes.py, auth.py]\n"
+            "  depends: [data_layer]\n"
+            "  description: API 层\n"
+            "## 其他\n"
+        )
+        modules = Company._parse_modules(design)
+        assert len(modules) == 2
+        assert modules[0]["name"] == "data_layer"
+        assert modules[0]["files"] == ["models.py", "db.py"]
+        assert modules[0]["depends"] == []
+        assert modules[1]["name"] == "api"
+        assert modules[1]["depends"] == ["data_layer"]
+
+    def test_no_modules_section(self):
+        assert Company._parse_modules("## 技术方案\n没有模块拆分") == []
+
+    def test_single_module(self):
+        design = "### MODULES\n- module: main\n  files: [app.py]\n  depends: []\n  description: 入口\n"
+        modules = Company._parse_modules(design)
+        assert len(modules) == 1
+        assert modules[0]["name"] == "main"
