@@ -1017,8 +1017,8 @@ class Company:
         except Exception:
             return None
 
-    def _find_project_by_name(self, text: str) -> Optional[Path]:
-        """从需求文本中匹配已有项目目录。"""
+    def _find_project_by_name(self, text: str, project_name: Optional[str] = None) -> Optional[Path]:
+        """从需求文本或提取的项目名匹配已有项目目录。"""
         import json
         import re
 
@@ -1035,6 +1035,21 @@ class Company:
         if not project_dirs:
             return None
 
+        pname_lower = project_name.lower().strip() if project_name else ""
+
+        if pname_lower:
+            for d in project_dirs:
+                dir_name = d.name.split("-", 1)[1] if "-" in d.name else d.name
+                if dir_name and dir_name.lower() == pname_lower:
+                    return d
+                try:
+                    meta = json.loads((d / ".project.json").read_text())
+                    meta_name = meta.get("name", "")
+                    if meta_name and meta_name.lower() == pname_lower:
+                        return d
+                except Exception:
+                    continue
+
         text_lower = text.lower()
         for d in project_dirs:
             dir_name = d.name.split("-", 1)[1] if "-" in d.name else d.name
@@ -1042,7 +1057,6 @@ class Company:
                 return d
             try:
                 meta = json.loads((d / ".project.json").read_text())
-                req = meta.get("requirement", "")
                 name_match = re.search(r'[\u4e00-\u9fff\w]{2,}', dir_name)
                 if name_match and name_match.group() in text:
                     return d
@@ -1402,7 +1416,7 @@ class Company:
                 if candidate and candidate not in self._PROJECT_NAME_STOPWORDS:
                     project_name = candidate
 
-            existing_project = self._find_project_by_name(task_context)
+            existing_project = self._find_project_by_name(task_context, project_name=project_name)
 
             if not project_name and not existing_project:
                 self._pending_project_name = {
