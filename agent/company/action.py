@@ -252,7 +252,7 @@ EVALUATE_REQUIREMENT = Action(
         "## 输出格式（严格遵守）\n"
         "第一行必须是 READY 或 NEED_CLARIFY\n"
         "如果 READY：\n"
-        "- 第二行必须是 PROJECT_NAME: 项目名称（用户确认过的名字，或用户消息中明确提到的名字）\n"
+        "- 第二行必须是 PROJECT_NAME: 英文项目名（简短、kebab-case，如 ai-news-digest、smart-calculator）。如果用户说的是中文名，翻译为英文。\n"
         "- 第三行起简述你理解的核心需求（2-3句话）\n"
         "如果 NEED_CLARIFY：第二行起礼貌地向老板提出具体问题（专业、简洁、尊重，可适当用表情）\n"
         "- 如果用户没有给项目名称，必须追问「老板，这个项目叫什么名字呢？」\n"

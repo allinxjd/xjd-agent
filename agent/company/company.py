@@ -1521,14 +1521,24 @@ class Company:
         if self._pending_project_name and user_messages:
             import re as _re_pn
             raw_name = user_messages[-1].content.strip()
-            clean_name = _re_pn.sub(r'[^\w\u4e00-\u9fff-]', '', raw_name)[:10]
+            clean_name = _re_pn.sub(r'[^\w\u4e00-\u9fff-]', '', raw_name)[:20]
             is_confirm_only = clean_name in self._PROJECT_NAME_STOPWORDS or len(clean_name) < 2
             if clean_name and not is_confirm_only:
                 pending = self._pending_project_name
                 self._pending_project_name = None
 
+                display_name = clean_name
+                if self._has_chinese(clean_name):
+                    clean_name = await self._to_english_name(clean_name)
+                    logger.info("用户项目名中文→英文: %s → %s", display_name, clean_name)
+
+                confirm_content = (
+                    f"收到老板 👌 项目名「{clean_name}」（{display_name}）已确认，这就安排团队开干！"
+                    if display_name != clean_name
+                    else f"收到老板 👌 项目名「{clean_name}」已确认，这就安排团队开干！"
+                )
                 confirm_msg = CompanyMessage(
-                    content=f"收到老板 👌 项目名「{clean_name}」已确认，这就安排团队开干！",
+                    content=confirm_content,
                     cause_by="ChatReply",
                     sent_from=pm_role.name,
                 )
@@ -1700,8 +1710,12 @@ class Company:
             if name_match:
                 candidate = name_match.group(1).strip()
                 candidate = _re_name.sub(r'^\d{8}-', '', candidate)
-                candidate = _re_name.sub(r'[^\w\u4e00-\u9fff-]', '', candidate)[:10]
+                candidate = _re_name.sub(r'[^\w\u4e00-\u9fff-]', '', candidate)[:20]
                 if candidate and candidate not in self._PROJECT_NAME_STOPWORDS:
+                    if self._has_chinese(candidate):
+                        original_cn = candidate
+                        candidate = await self._to_english_name(candidate)
+                        logger.info("\u9879\u76ee\u540d\u4e2d\u6587\u2192\u82f1\u6587: %s \u2192 %s", original_cn, candidate)
                     project_name = candidate
 
             existing_project = self._find_project_by_name(task_context, project_name=project_name)
@@ -2289,6 +2303,32 @@ class Company:
         "开干", "开始", "开始吧", "动手", "动手吧", "可以开干",
         "可以开始", "就这样", "确认", "没问题开干", "好的开干",
     }
+
+    @staticmethod
+    def _has_chinese(text: str) -> bool:
+        """检测文本是否包含中文字符."""
+        import re
+        return bool(re.search(r'[一-鿿]', text))
+
+    async def _to_english_name(self, chinese_name: str) -> str:
+        """将中文项目名翻译为英文 kebab-case（通过 LLM）."""
+        import re as _re_en
+        from agent.core.engine import Message
+        messages = [Message(role="user", content=(
+            f"将以下中文项目名翻译为简短的英文 kebab-case 名称（全小写、用连字符分隔、不超过3个单词）。\n"
+            f"只输出翻译结果，不要解释。\n\n"
+            f"中文名：{chinese_name}"
+        ))]
+        try:
+            resp = await self._router.complete_with_failover(messages, user_message=chinese_name)
+            name = resp.content.strip().lower()
+            name = _re_en.sub(r'[^a-z0-9-]', '', name)
+            name = _re_en.sub(r'-+', '-', name).strip('-')
+            if name and len(name) >= 2:
+                return name[:20]
+        except Exception as e:
+            logger.warning("项目名翻译失败: %s", e)
+        return chinese_name
 
     @staticmethod
     def _extract_project_name(text: str, max_len: int = 20) -> str:
