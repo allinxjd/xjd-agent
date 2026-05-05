@@ -475,9 +475,10 @@ class Company:
                 pm_role._inbox.clear()
             kicked = self._kick_next_stage(stages_done, stage_outputs, requirement, task)
             if not kicked:
-                logger.info("断点恢复：所有阶段已完成，无需继续")
-                task.status = "done"
-                return task.result or ""
+                logger.info("断点恢复：所有阶段已完成，重置为新迭代")
+                for k in stages_done:
+                    stages_done[k] = False
+                stage_outputs.clear()
 
         for round_num in range(1, max_rounds + 1):
             if _time.monotonic() > pipeline_deadline:
