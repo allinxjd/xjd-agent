@@ -75,6 +75,24 @@ def _apply_workspace_guard(engine: Any, prompt: str) -> None:
 
         terminal_tool.handler = _guarded_terminal
 
+    for tool_name in ("read_file", "grep_search", "list_directory"):
+        tool_handler = engine._tools.get(tool_name)
+        if not tool_handler:
+            continue
+        original_fn = tool_handler.handler
+
+        def _read_guarded(orig=original_fn, ws=workspace):
+            async def wrapper(**kwargs):
+                for key in ("path", "file_path"):
+                    if key in kwargs and kwargs[key]:
+                        if not Path(kwargs[key]).is_absolute():
+                            kwargs[key] = str(ws / kwargs[key])
+                        break
+                return await orig(**kwargs)
+            return wrapper
+
+        tool_handler.handler = _read_guarded()
+
 
 @dataclass
 class Action:

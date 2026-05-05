@@ -1208,6 +1208,12 @@ class WebServer:
                 )
                 router.register_provider(new_provider)
                 router.set_primary(provider_name, model_name)
+                # 同步更新 Company router
+                from agent.tools.company_tools import _standby_company
+                if _standby_company and hasattr(_standby_company, '_router'):
+                    _standby_company._router.register_provider(new_provider)
+                    _standby_company._router.set_primary(provider_name, model_name)
+                    logger.info("Company router 已同步切换: %s:%s", provider_name, model_name)
             except Exception as e:
                 return web.json_response({"error": str(e)}, status=500)
 
@@ -1425,6 +1431,27 @@ class WebServer:
                                     pass
                             break
                 router.set_primary(prov, model)
+                # 同步更新 Company router
+                from agent.tools.company_tools import _standby_company
+                if _standby_company and hasattr(_standby_company, '_router'):
+                    c_router = _standby_company._router
+                    if self._global_config:
+                        for cm in self._global_config.model.configured_models:
+                            if cm.provider == prov and cm.model == model and cm.api_key:
+                                if prov not in getattr(c_router, '_providers', {}):
+                                    try:
+                                        from agent.providers.openai_provider import OpenAIProvider as _OP
+                                        from agent.providers.base import ProviderType as _PT
+                                        c_router.register_provider(_OP(
+                                            provider_type=_PT(prov),
+                                            api_key=cm.api_key,
+                                            base_url=cm.base_url or None,
+                                        ))
+                                    except Exception:
+                                        pass
+                                break
+                    c_router.set_primary(prov, model)
+                    logger.info("Company router 已同步切换: %s:%s", prov, model)
                 if self._global_config:
                     self._global_config.model.primary.provider = prov
                     self._global_config.model.primary.model = model
