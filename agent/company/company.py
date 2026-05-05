@@ -785,21 +785,36 @@ class Company:
                         logger.warning("返工次数已达上限 %d，强制通过 %s 阶段", max_rework, role.name)
                         stages_done["Review"] = True
                         stages_done["Test"] = True
-                        escalate = CompanyMessage(
-                            content=f"老板，{role.name} 已经打回 {max_rework} 次了，团队尽力修了但还有问题。先继续推进，后续再优化 🫡",
-                            cause_by="ChatReply",
-                            sent_from="PM",
-                            task_id=task.task_id,
+                        # 判断最终结果是否实际通过（测试全过或 Reviewer 无严重问题）
+                        test_actually_passed = self._is_test_passed(result_msg.content) if role.name == "QA" else False
+                        review_no_reject = (
+                            role.name == "Reviewer"
+                            and "REJECTED" not in result_msg.content.upper()
+                            and "拒收" not in result_msg.content
+                            and "打回" not in result_msg.content
                         )
-                        await self._env.publish(escalate)
+                        if test_actually_passed or review_no_reject:
+                            logger.info("返工达上限但最终结果已通过，正常 APPROVED")
+                        else:
+                            escalate = CompanyMessage(
+                                content=f"老板，{role.name} 已经打回 {max_rework} 次了，团队尽力修了但还有问题。先继续推进，后续再优化 🫡",
+                                cause_by="ChatReply",
+                                sent_from="PM",
+                                task_id=task.task_id,
+                            )
+                            await self._env.publish(escalate)
                         try:
                             role_order = self._pipeline.role_order
                             idx = role_order.index(role.name)
                             next_role = role_order[idx + 1] if idx + 1 < len(role_order) else None
                         except ValueError:
                             next_role = None
+                        if test_actually_passed or review_no_reject:
+                            approve_content = result_msg.content
+                        else:
+                            approve_content = f"APPROVED（已达最大返工次数，强制通过）\n\n原始审查意见：{result_msg.content[:500]}"
                         forced_approve = CompanyMessage(
-                            content=f"APPROVED（已达最大返工次数，强制通过）\n\n原始审查意见：{result_msg.content[:500]}",
+                            content=approve_content,
                             cause_by=result_msg.cause_by,
                             sent_from=role.name,
                             send_to=next_role or "",
