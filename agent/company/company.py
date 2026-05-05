@@ -1498,12 +1498,17 @@ class Company:
                     max_chars=self._config.max_project_chars,
                     max_files=self._config.max_project_files,
                 )
+                original_req = _rm.get("requirement", "")
+                if original_req and original_req not in task_context:
+                    full_requirement = f"{original_req}\n\n（用户补充）{task_context}"
+                else:
+                    full_requirement = task_context
                 enriched = (
                     f"## 项目工作目录\n{resume_dir}\n"
                     f"这是一个已有项目，断点恢复模式。\n\n"
                     f"## 现有代码\n{existing_code}\n\n"
                     f"{env_context}\n\n"
-                    f"## 用户需求\n{task_context}"
+                    f"## 用户需求\n{full_requirement}"
                 )
                 self._pipeline_running = True
                 self._env._pipeline_user_queue = []

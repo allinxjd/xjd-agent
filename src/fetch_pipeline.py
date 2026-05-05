@@ -4,7 +4,6 @@
 所有 API 路由和调度器只通过此模块获取数据，保证 title_cn/summary_cn/source_label 始终存在。
 """
 import logging
-from typing import Optional
 
 from src.ai_news_fetcher import fetch_ai_news, save_news_to_cache, load_news_from_cache
 from src.skill_fetcher import fetch_skill_projects, save_skill_projects, load_skill_projects
