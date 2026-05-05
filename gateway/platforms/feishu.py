@@ -131,8 +131,9 @@ def _feishu_subprocess(app_id: str, app_secret: str, encrypt_key: str,
 
             def _heartbeat_emitter():
                 """定期向主进程发送心跳信号，证明子进程+WebSocket 仍活跃."""
+                import time as _hb_time
                 while True:
-                    time.sleep(60)
+                    _hb_time.sleep(60)
                     try:
                         event_queue.put({"__heartbeat__": True})
                     except Exception:
