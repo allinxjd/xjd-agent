@@ -127,6 +127,20 @@ def _feishu_subprocess(app_id: str, app_secret: str, encrypt_key: str,
                 auto_reconnect=True,
             )
 
+            import threading as _th
+
+            def _heartbeat_emitter():
+                """定期向主进程发送心跳信号，证明子进程+WebSocket 仍活跃."""
+                while True:
+                    time.sleep(60)
+                    try:
+                        event_queue.put({"__heartbeat__": True})
+                    except Exception:
+                        break
+
+            _hb_thread = _th.Thread(target=_heartbeat_emitter, daemon=True)
+            _hb_thread.start()
+
             logging.getLogger(__name__).info("飞书子进程: SDK 启动 (pid=%d)", os.getpid())
             ws_client.start()
             consecutive_failures = 0
@@ -406,6 +420,8 @@ class FeishuAdapter(BasePlatformAdapter):
                 if event_dict is None:
                     continue
                 self._last_sdk_activity = _time.time()
+                if event_dict.get("__heartbeat__"):
+                    continue
                 try:
                     await self._handle_message_event(event_dict)
                 except Exception as e:
@@ -657,8 +673,13 @@ class FeishuAdapter(BasePlatformAdapter):
         """
         missed: list[dict] = []
         try:
-            start_time = str(int(since_ts * 1000))
-            params = f"?container_id_type=chat&container_id={chat_id}&start_time={start_time}&sort_type=ByCreateTimeAsc&page_size={min(limit, 50)}"
+            start_time = str(int(since_ts))
+            end_time = str(int(time.time()))
+            params = (
+                f"?container_id_type=chat&container_id={chat_id}"
+                f"&start_time={start_time}&end_time={end_time}"
+                f"&sort_type=ByCreateTimeAsc&page_size={min(limit, 50)}"
+            )
             result = await self._api_request("GET", f"/im/v1/messages{params}")
             if result.get("code") != 0:
                 logger.warning("飞书历史消息拉取失败: %s", result.get("msg", ""))
