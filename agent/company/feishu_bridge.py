@@ -113,6 +113,9 @@ class FeishuBridge(ChatBridge):
 
         self._watchdog_task = asyncio.create_task(self._bridge_watchdog())
 
+        if self._adapters:
+            asyncio.create_task(self._startup_recovery())
+
     async def stop(self) -> None:
         """停止所有飞书 Bot."""
         self._started = False
@@ -125,6 +128,21 @@ class FeishuBridge(ChatBridge):
             except Exception as e:
                 logger.warning("停止 Bot %s 失败: %s", name, e)
         self._adapters.clear()
+
+    async def _startup_recovery(self) -> None:
+        """启动后延迟拉取历史消息，弥补长连接建立期间的消息空窗."""
+        import asyncio
+        await asyncio.sleep(30)
+        if not self._started:
+            return
+        adapter = next(iter(self._adapters.values()), None)
+        if not adapter:
+            return
+        try:
+            await self._recover_missed_messages(adapter, self._start_ts + 30)
+            logger.info("飞书启动补漏完成")
+        except Exception as e:
+            logger.warning("飞书启动补漏失败: %s", e)
 
     async def _bridge_watchdog(self) -> None:
         """定期检查各 Bot 连接健康状态，重启掉线的 Bot，补启未启动的 Bot.
