@@ -129,6 +129,7 @@ class ModelConfig:
     primary: ProviderConfig = field(default_factory=ProviderConfig)
     cheap: Optional[ProviderConfig] = None
     failover: list[ProviderConfig] = field(default_factory=list)
+    configured_models: list[ProviderConfig] = field(default_factory=list)
     temperature: float = 0.7
     max_tokens: int = 4096
 
@@ -248,6 +249,14 @@ class Config:
                             api_key=fc.get("api_key", ""),
                             api_keys=fc.get("api_keys", []),
                             base_url=fc.get("base_url", ""),
+                        ))
+                if "configured_models" in m:
+                    for cm in m["configured_models"]:
+                        config.model.configured_models.append(ProviderConfig(
+                            provider=cm.get("provider", ""),
+                            model=cm.get("model", ""),
+                            api_key=cm.get("api_key", ""),
+                            base_url=cm.get("base_url", ""),
                         ))
 
             # 解析 gateway 配置
@@ -374,6 +383,17 @@ class Config:
                     fd["base_url"] = fc.base_url
                 failover_list.append(fd)
             data["model"]["failover"] = failover_list
+
+        if self.model.configured_models:
+            cm_list = []
+            for cm in self.model.configured_models:
+                cd: dict[str, Any] = {"provider": cm.provider, "model": cm.model}
+                if cm.api_key:
+                    cd["api_key"] = cm.api_key
+                if cm.base_url:
+                    cd["base_url"] = cm.base_url
+                cm_list.append(cd)
+            data["model"]["configured_models"] = cm_list
 
         if self.model.max_tokens != 4096:
             data["model"]["max_tokens"] = self.model.max_tokens

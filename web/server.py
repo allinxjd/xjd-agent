@@ -1143,6 +1143,11 @@ class WebServer:
                 for fc in cfg.failover:
                     if fc.provider and fc.model:
                         configured.append({"provider": fc.provider, "model": fc.model})
+                for cm in cfg.configured_models:
+                    if cm.provider and cm.model:
+                        entry = {"provider": cm.provider, "model": cm.model}
+                        if entry not in configured:
+                            configured.append(entry)
             return web.json_response({
                 "primary": {
                     "provider": getattr(router, '_primary_provider', '') or '',
@@ -1208,12 +1213,34 @@ class WebServer:
 
         # router 更新成功后再持久化 config
         if self._global_config:
+            from agent.core.config import ProviderConfig
+            existing = [(cm.provider, cm.model) for cm in self._global_config.model.configured_models]
+            # 先把当前 primary 存入 configured_models（防止被覆盖后丢失）
+            old_prov = self._global_config.model.primary.provider
+            old_model = self._global_config.model.primary.model
+            old_key = self._global_config.model.primary.api_key
+            old_url = self._global_config.model.primary.base_url
+            if old_prov and old_model and (old_prov, old_model) not in existing:
+                self._global_config.model.configured_models.append(ProviderConfig(
+                    provider=old_prov, model=old_model,
+                    api_key=old_key, base_url=old_url,
+                ))
+                existing.append((old_prov, old_model))
+            # 更新 primary
             self._global_config.model.primary.provider = provider_name
             self._global_config.model.primary.model = model_name
             if api_key:
                 self._global_config.model.primary.api_key = api_key
             if base_url:
                 self._global_config.model.primary.base_url = base_url
+            # 保存新模型到 configured_models 列表（去重）
+            if (provider_name, model_name) not in existing:
+                self._global_config.model.configured_models.append(ProviderConfig(
+                    provider=provider_name,
+                    model=model_name,
+                    api_key=effective_key,
+                    base_url=base_url,
+                ))
             self._save_config()
 
         admin_name = user.username if user else "anonymous"
@@ -1380,7 +1407,36 @@ class WebServer:
             prov = body.get("primary_provider")
             model = body.get("primary_model")
             if prov and model:
+                # 如果切换到 configured_models 中的模型，先注册其 provider
+                if self._global_config:
+                    for cm in self._global_config.model.configured_models:
+                        if cm.provider == prov and cm.model == model and cm.api_key:
+                            if prov not in (router._providers if hasattr(router, '_providers') else {}):
+                                try:
+                                    from agent.providers.openai_provider import OpenAIProvider
+                                    from agent.providers.base import ProviderType
+                                    new_prov = OpenAIProvider(
+                                        provider_type=ProviderType(prov),
+                                        api_key=cm.api_key,
+                                        base_url=cm.base_url or None,
+                                    )
+                                    router.register_provider(new_prov)
+                                except Exception:
+                                    pass
+                            break
                 router.set_primary(prov, model)
+                if self._global_config:
+                    self._global_config.model.primary.provider = prov
+                    self._global_config.model.primary.model = model
+                    # 从 configured_models 找到对应的 key/url
+                    for cm in self._global_config.model.configured_models:
+                        if cm.provider == prov and cm.model == model:
+                            if cm.api_key:
+                                self._global_config.model.primary.api_key = cm.api_key
+                            if cm.base_url:
+                                self._global_config.model.primary.base_url = cm.base_url
+                            break
+                    self._save_config()
                 updated.extend(["primary_provider", "primary_model"])
                 logger.info("Model switched: primary → %s:%s", prov, model)
 
