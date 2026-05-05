@@ -451,6 +451,7 @@ class Company:
 
         round_num = 0
         rework_counts: dict[str, int] = {}
+        rework_feedbacks: dict[str, list[str]] = {}
         max_rework = self._config.max_rework
         stages_done: dict[str, bool] = {k: False for k in self._pipeline.stage_keys}
         idle_rounds = 0
@@ -834,14 +835,41 @@ class Company:
                         or (result_msg.cause_by == "RunTest" and stages_done.get("Test"))
                         or (result_msg.cause_by == "ExecuteDeploy" and stages_done.get("Deploy"))
                     )
-                    rework_target = self._check_rework(role.name, result_msg.content) if not stage_just_completed else None
+                    rework_target = self._check_rework(role.name, result_msg.content, rework_round=rework_counts.get(role.name, 0)) if not stage_just_completed else None
                     role_rework = rework_counts.get(role.name, 0)
                     if rework_target and role_rework < max_rework:
+                        # --- StuckDetector: 检测连续相似反馈 ---
+                        prev_feedbacks = rework_feedbacks.get(role.name, [])
+                        is_stuck = (
+                            len(prev_feedbacks) > 0
+                            and self._is_feedback_similar(prev_feedbacks[-1], result_msg.content)
+                        )
+                        if is_stuck and role_rework >= 2:
+                            logger.warning("StuckDetector: %s 连续两轮反馈相似，判定卡住，强制通过", role.name)
+                            stages_done["Review"] = True
+                            stages_done["Test"] = True
+                            escalate = CompanyMessage(
+                                content=f"老板，{role.name} 连续两轮指出类似问题但修复无效。先继续推进，这个问题可能需要人工介入 🔧",
+                                cause_by="ChatReply",
+                                sent_from="PM",
+                                task_id=task.task_id,
+                            )
+                            await self._env.publish(escalate)
+                            break
+
+                        rework_feedbacks.setdefault(role.name, []).append(result_msg.content)
                         rework_counts[role.name] = role_rework + 1
                         logger.info("返工 #%d: %s 要求 %s 修改 (patch 模式)", role_rework + 1, role.name, rework_target)
                         self._clear_downstream_inboxes(role.name)
 
                         fix_parts = [f"## {role.name} 反馈（请只修改指出的问题）\n{result_msg.content}"]
+                        if role_rework >= 1:
+                            fix_parts.insert(0, (
+                                "## 重要提示\n"
+                                f"这是第 {role_rework + 1} 次返工。之前的修复方式没有完全解决问题。\n"
+                                "请换一个思路来解决，不要重复之前的修法。\n"
+                                "如果问题是测试环境/依赖导致的而非代码bug，请说明原因并标记为环境问题。"
+                            ))
                         pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
                         if pdir_match:
                             fix_parts.append(f"## 项目工作目录\n{pdir_match.group(1)}")
@@ -1929,8 +1957,8 @@ class Company:
                 return True
         return False
 
-    def _check_rework(self, role_name: str, content: str) -> Optional[str]:
-        """检查角色输出是否需要返工。返回需要返工的目标角色名，或 None."""
+    def _check_rework(self, role_name: str, content: str, rework_round: int = 0) -> Optional[str]:
+        """检查角色输出是否需要返工。rework_round 用于后续轮次降低敏感度."""
         rework_target = self._pipeline.rework_target_for(role_name)
         if not rework_target:
             return None
@@ -1942,8 +1970,29 @@ class Company:
             if not self._is_test_passed(content):
                 fail_indicators = ["失败", "FAIL", "fail", "不通过", "未通过"]
                 if any(ind in content for ind in fail_indicators):
+                    if rework_round >= 2:
+                        critical = ["crash", "崩溃", "无法启动", "ImportError", "SyntaxError",
+                                    "500", "服务器错误", "TypeError", "NameError"]
+                        if not any(c.lower() in content.lower() for c in critical):
+                            logger.info("QA 第%d轮反馈非 critical，降级为建议，不触发返工", rework_round + 1)
+                            return None
                     return rework_target
         return None
+
+    def _is_feedback_similar(self, prev: str, curr: str, threshold: float = 0.6) -> bool:
+        """检测两次反馈是否高度相似（同类问题反复出现 = 卡住了）."""
+        def extract_issues(text: str) -> set[str]:
+            patterns = _re.findall(r'[\w/]+\.(?:py|js|ts|jsx|tsx)', text)
+            patterns += _re.findall(r'(?:Error|Exception|失败|错误|问题|bug|fix)[\w]*', text, _re.IGNORECASE)
+            patterns += _re.findall(r'`([^`]+)`', text)
+            return set(p.lower() for p in patterns)
+
+        prev_issues = extract_issues(prev)
+        curr_issues = extract_issues(curr)
+        if not prev_issues or not curr_issues:
+            return False
+        overlap = len(prev_issues & curr_issues) / max(len(prev_issues), len(curr_issues))
+        return overlap >= threshold
 
     def _clear_downstream_inboxes(self, role_name: str) -> None:
         """清空当前角色下游所有角色的 inbox，防止基于被拒代码继续工作."""
