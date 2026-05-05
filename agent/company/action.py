@@ -154,6 +154,21 @@ class Action:
 
         _apply_workspace_guard(engine, prompt)
 
+        read_total = 0
+        read_fail = 0
+        if self.name in ("CodeReview", "QATest"):
+            read_tool = engine._tools.get("read_file")
+            if read_tool and read_tool.handler:
+                _orig_read = read_tool.handler
+                async def _read_monitor_fn(orig=_orig_read, **kwargs):
+                    nonlocal read_total, read_fail
+                    read_total += 1
+                    result = await orig(**kwargs)
+                    if isinstance(result, str) and ("不存在" in result or "No such file" in result or "FileNotFoundError" in result):
+                        read_fail += 1
+                    return result
+                read_tool.handler = _read_monitor_fn
+
         write_count = 0
         terminal_count = 0
         if self.name == "WriteCode":
@@ -200,6 +215,16 @@ class Action:
                 "请重新执行，确保用 write_file 写入所有代码文件。"
             )
             logger.warning("WriteCode 完成但 write_file 未被调用 (terminal_count=%d)", terminal_count)
+
+        if self.name in ("CodeReview", "QATest") and read_total > 0 and read_fail == read_total:
+            logger.warning(
+                "[%s] read_file 全部失败 (%d/%d)，文件可能不存在或 workspace 路径错误",
+                self.name, read_fail, read_total,
+            )
+            content += (
+                f"\n\n⚠️ 警告：read_file 调用全部失败（{read_fail}/{read_total} 次返回文件不存在）。"
+                "可能原因：workspace 路径配置错误或项目文件未生成。"
+            )
 
         return content
 

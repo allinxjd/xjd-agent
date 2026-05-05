@@ -322,6 +322,36 @@ class Company:
         return None
 
     @staticmethod
+    def _extract_project_description(project_dir: Path) -> str:
+        """Extract project description from entry file docstrings or pyproject.toml."""
+        candidates = ["app.py", "main.py", "src/app.py", "src/main.py"]
+        for name in candidates:
+            entry = project_dir / name
+            if entry.exists():
+                try:
+                    content = entry.read_text(encoding="utf-8")
+                    # Extract module docstring
+                    import ast
+                    tree = ast.parse(content)
+                    docstring = ast.get_docstring(tree)
+                    if docstring and len(docstring) > 10:
+                        return docstring.strip()
+                except Exception:
+                    pass
+        # Fallback: pyproject.toml description
+        pyproject = project_dir / "pyproject.toml"
+        if pyproject.exists():
+            try:
+                text = pyproject.read_text(encoding="utf-8")
+                import re
+                m = re.search(r'description\s*=\s*"([^"]+)"', text)
+                if m:
+                    return m.group(1)
+            except Exception:
+                pass
+        return ""
+
+    @staticmethod
     def _collect_project_files(project_dir: Path, max_chars: int = 30000, max_files: int = 100) -> str:
         """收集项目 src/ 目录下的所有代码文件内容，用于 Reviewer 审查."""
         src_dir = project_dir / "src"
@@ -456,18 +486,29 @@ class Company:
                                 _port_file.write_text(str(_port))
                         logger.info("断点恢复: 跳过已完成阶段 %s",
                                     [k for k, v in stages_done.items() if v])
+                        _clarify_signals = ["澄清", "不清楚", "不知道", "需要先", "麻烦补充", "麻烦先告诉", "NEED_CLARIFY"]
                         if stage_outputs.get("PRD"):
-                            await self._env.publish(CompanyMessage(
-                                content=stage_outputs["PRD"],
-                                cause_by="WritePRD", sent_from="PM",
-                                task_id=task.task_id,
-                            ))
+                            _is_clarify = any(s in stage_outputs["PRD"] for s in _clarify_signals)
+                            if not _is_clarify:
+                                await self._env.publish(CompanyMessage(
+                                    content=stage_outputs["PRD"],
+                                    cause_by="WritePRD", sent_from="PM",
+                                    task_id=task.task_id,
+                                ))
+                            else:
+                                logger.info("断点恢复: PRD 内容为澄清提问，跳过发布")
+                                stage_outputs.pop("PRD", None)
                         if stage_outputs.get("Design"):
-                            await self._env.publish(CompanyMessage(
-                                content=stage_outputs["Design"],
-                                cause_by="WriteDesign", sent_from="PM",
-                                task_id=task.task_id,
-                            ))
+                            _is_clarify = any(s in stage_outputs["Design"] for s in _clarify_signals)
+                            if not _is_clarify:
+                                await self._env.publish(CompanyMessage(
+                                    content=stage_outputs["Design"],
+                                    cause_by="WriteDesign", sent_from="PM",
+                                    task_id=task.task_id,
+                                ))
+                            else:
+                                logger.info("断点恢复: Design 内容为澄清提问，跳过发布")
+                                stage_outputs.pop("Design", None)
                 except Exception as e:
                     logger.warning("读取断点信息失败: %s", e)
 
@@ -617,28 +658,51 @@ class Company:
                             await self._env.publish(escalate)
                             break
                         if "write_file 未被调用" in result_msg.content:
-                            wf_rework = rework_counts.get("Developer_writefile", 0)
-                            if wf_rework < max_rework:
-                                rework_counts["Developer_writefile"] = wf_rework + 1
-                                logger.warning("WriteCode 未调用 write_file，要求重试 (第%d次)", wf_rework + 1)
-                                stages_done["Code"] = False
-                                rework_msg = CompanyMessage(
-                                    content=(
-                                        "## 重要提醒：你必须使用 write_file 工具写入文件！\n"
-                                        "上一次你没有调用 write_file，代码没有落盘。\n"
-                                        "请立即使用 write_file 将每个文件写入项目工作目录。\n"
-                                        "绝对不要只在回复文本中输出代码。\n\n"
-                                        f"## 原始设计方案\n{stage_outputs.get('Design', '')[:2000]}"
-                                    ),
-                                    cause_by="WriteDesign",
-                                    sent_from="Reviewer",
-                                    send_to="Developer",
-                                    task_id=task.task_id,
+                            # Check if project already has code — if so, Developer was doing
+                            # maintenance (pip install, restart, etc.), not a fresh write
+                            _ws_check = self._extract_workspace_from_requirement(requirement)
+                            _has_existing_code = False
+                            if _ws_check:
+                                _src = _ws_check / "src"
+                                _scan = _src if _src.exists() else _ws_check
+                                _has_existing_code = (
+                                    any(_scan.rglob("*.py"))
+                                    or any(_scan.rglob("*.js"))
+                                    or any(_scan.rglob("*.ts"))
                                 )
-                                await self._env.publish(rework_msg)
-                                break
+                            if _has_existing_code:
+                                logger.info("WriteCode 未调用 write_file，但项目已有代码文件，视为维护操作，继续")
                             else:
-                                logger.warning("WriteCode 未调用 write_file 重试已达上限，强制继续")
+                                wf_rework = rework_counts.get("Developer_writefile", 0)
+                                if wf_rework < max_rework:
+                                    rework_counts["Developer_writefile"] = wf_rework + 1
+                                    logger.warning("WriteCode 未调用 write_file，要求重试 (第%d次)", wf_rework + 1)
+                                    stages_done["Code"] = False
+                                    _design_ctx = stage_outputs.get('Design', '')[:2000]
+                                    _clarify_signals = ["澄清", "不清楚", "不知道", "需要先", "麻烦补充", "麻烦先告诉"]
+                                    if not _design_ctx or any(s in _design_ctx for s in _clarify_signals):
+                                        _ws = self._extract_workspace_from_requirement(requirement)
+                                        if _ws:
+                                            _desc = self._extract_project_description(_ws)
+                                            _code = self._collect_project_files(_ws, max_chars=3000, max_files=10)
+                                            _design_ctx = f"项目描述：{_desc}\n\n现有代码：\n{_code}" if _desc else _code
+                                    rework_msg = CompanyMessage(
+                                        content=(
+                                            "## 重要提醒：你必须使用 write_file 工具写入文件！\n"
+                                            "上一次你没有调用 write_file，代码没有落盘。\n"
+                                            "请立即使用 write_file 将每个文件写入项目工作目录。\n"
+                                            "绝对不要只在回复文本中输出代码。\n\n"
+                                            f"## 原始设计方案\n{_design_ctx}"
+                                        ),
+                                        cause_by="WriteDesign",
+                                        sent_from="Reviewer",
+                                        send_to="Developer",
+                                        task_id=task.task_id,
+                                    )
+                                    await self._env.publish(rework_msg)
+                                    break
+                                else:
+                                    logger.warning("WriteCode 未调用 write_file 重试已达上限，强制继续")
                         stages_done["Code"] = True
                         workspace = self._extract_workspace_from_requirement(requirement)
                         if workspace:
@@ -706,24 +770,49 @@ class Company:
                                 stages_done["Verify"] = True
                     elif result_msg.cause_by == "CodeReview":
                         if self._has_code_incomplete(result_msg.content) or self._has_requirement_issue(result_msg.content):
-                            logger.warning("[Reviewer] 输出表示代码不完整，回退给 Developer 重写")
-                            self._clear_downstream_inboxes(role.name)
-                            stages_done["Code"] = False
-                            stages_done["Verify"] = False
-                            stages_done["Review"] = False
-                            rework_msg = CompanyMessage(
-                                content=(
-                                    "Reviewer 反馈：收到的代码不完整，无法审查。\n"
-                                    "请确保所有代码文件都通过 write_file 写入了 src/ 目录。\n"
-                                    "重新执行 WriteCode，确保每个文件都落盘。"
-                                ),
-                                cause_by="WriteDesign",
-                                sent_from="Reviewer",
-                                send_to="Developer",
-                                task_id=task.task_id,
-                            )
-                            await self._env.publish(rework_msg)
-                            break
+                            _ws_review = self._extract_workspace_from_requirement(requirement)
+                            _review_has_code = False
+                            if _ws_review:
+                                _src_r = _ws_review / "src"
+                                _scan_r = _src_r if _src_r.exists() else _ws_review
+                                _review_has_code = any(_scan_r.rglob("*.py")) or any(_scan_r.rglob("*.js"))
+                            if _review_has_code:
+                                logger.info("[Reviewer] 代码不完整但项目已有代码，使用 patch 模式修复")
+                                fix_parts = [f"## Reviewer 反馈（请只修改指出的问题）\n{result_msg.content}"]
+                                fix_parts.append(f"## 项目工作目录\n{_ws_review}")
+                                from agent.company.action import FIX_CODE
+                                fix_role = self._env.roles.get("Developer")
+                                if fix_role:
+                                    fix_result = await FIX_CODE.run("\n\n".join(fix_parts), fix_role)
+                                    fix_msg = CompanyMessage(
+                                        content=fix_result,
+                                        cause_by="FixCode",
+                                        sent_from="Developer",
+                                        task_id=task.task_id,
+                                    )
+                                    await self._env.publish(fix_msg)
+                                stages_done["Verify"] = False
+                                stages_done["Review"] = False
+                                break
+                            else:
+                                logger.warning("[Reviewer] 输出表示代码不完整，回退给 Developer 重写")
+                                self._clear_downstream_inboxes(role.name)
+                                stages_done["Code"] = False
+                                stages_done["Verify"] = False
+                                stages_done["Review"] = False
+                                rework_msg = CompanyMessage(
+                                    content=(
+                                        "Reviewer 反馈：收到的代码不完整，无法审查。\n"
+                                        "请确保所有代码文件都通过 write_file 写入了 src/ 目录。\n"
+                                        "重新执行 WriteCode，确保每个文件都落盘。"
+                                    ),
+                                    cause_by="WriteDesign",
+                                    sent_from="Reviewer",
+                                    send_to="Developer",
+                                    task_id=task.task_id,
+                                )
+                                await self._env.publish(rework_msg)
+                                break
                         if self._is_review_approved(result_msg.content):
                             stages_done["Review"] = True
                     elif result_msg.cause_by in ("WriteTest", "RunTest"):
@@ -1517,6 +1606,13 @@ class Company:
                     max_files=self._config.max_project_files,
                 )
                 original_req = _rm.get("requirement", "")
+                # If saved requirement is just a resume command, try to extract
+                # project description from source code docstrings
+                _resume_cmds = ["继续", "接着", "恢复", "断点", "推进", "开发"]
+                if not original_req or len(original_req) < 20 or any(k in original_req for k in _resume_cmds):
+                    _desc = self._extract_project_description(resume_dir)
+                    if _desc:
+                        original_req = _desc
                 if original_req and original_req not in task_context:
                     full_requirement = f"{original_req}\n\n（用户补充）{task_context}"
                 else:
@@ -1802,6 +1898,12 @@ class Company:
                     kick_content += stage_outputs["Design"][:1500]
                 elif "PRD" in stage_outputs and stage_key in ("Design", "Env", "Code"):
                     kick_content += stage_outputs["PRD"][:1500]
+                else:
+                    pdir = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
+                    if pdir:
+                        _desc = self._extract_project_description(Path(pdir.group(1)))
+                        if _desc:
+                            kick_content += f"## 项目描述\n{_desc}\n"
                 pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
                 if pdir_match:
                     kick_content += f"\n\n## 项目工作目录\n{pdir_match.group(1)}\n"
