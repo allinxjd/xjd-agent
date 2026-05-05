@@ -140,7 +140,7 @@ class TestApiNews:
         assert len(data["data"]) == 1
 
     def test_news_enriched_fields_present(self, client, tmp_path, monkeypatch):
-        """缓存条目经过 enrich 后包含 title_cn / summary_cn / source_label。"""
+        """缓存条目由 refresh_all 预增强后，API 直接返回（含 title_cn / summary_cn / source_label）。"""
         cache_file = tmp_path / "ai_news.json"
         cache_data = [
             {
@@ -149,6 +149,9 @@ class TestApiNews:
                 "summary": "OpenAI announces GPT-5.",
                 "source": "https://openai.com/blog",
                 "published": "Tue, 04 May 2026 10:00:00 +0000",
+                "title_cn": "GPT-5 发布",
+                "summary_cn": "OpenAI 宣布 GPT-5。",
+                "source_label": "OpenAI 官方",
             },
         ]
         cache_file.write_text(json.dumps(cache_data))
@@ -165,15 +168,15 @@ class TestApiNews:
         assert entry["source_label"] == "OpenAI 官方"
 
     def test_news_multiple_entries(self, client, tmp_path, monkeypatch):
-        """多条缓存条目全部返回。"""
+        """多条预增强缓存条目全部返回且字段完整。"""
         cache_file = tmp_path / "ai_news.json"
         cache_data = [
             {"title": "N1", "link": "a", "summary": "S1", "source": "openai.com",
-             "published": "2026-05-04"},
+             "published": "2026-05-04", "title_cn": "N1", "summary_cn": "S1", "source_label": "OpenAI 官方"},
             {"title": "N2", "link": "b", "summary": "S2", "source": "huggingface.co",
-             "published": "2026-05-03"},
+             "published": "2026-05-03", "title_cn": "N2", "summary_cn": "S2", "source_label": "HuggingFace"},
             {"title": "N3", "link": "c", "summary": "S3", "source": "arxiv.org",
-             "published": "2026-05-02"},
+             "published": "2026-05-02", "title_cn": "N3", "summary_cn": "S3", "source_label": "arXiv"},
         ]
         cache_file.write_text(json.dumps(cache_data))
         monkeypatch.setattr("src.ai_news_fetcher.NEWS_FILE", cache_file)
@@ -231,7 +234,7 @@ class TestApiSkills:
         assert data["data"] == []
 
     def test_skills_enriched_fields_present(self, client, tmp_path, monkeypatch):
-        """缓存条目经 enrich 后包含 title_cn / source_label / skill_interpretation。"""
+        """缓存条目由 refresh_all 预增强后，API 直接返回（含 title_cn / source_label / skill_interpretation）。"""
         cache_file = tmp_path / "skill_projects.json"
         cache_data = [
             {
@@ -241,6 +244,10 @@ class TestApiSkills:
                 "language": "TypeScript",
                 "forks": 25000,
                 "url": "https://github.com/microsoft/vscode",
+                "title_cn": "microsoft/vscode",
+                "summary_cn": "VS Code editor",
+                "source_label": "GitHub",
+                "skill_interpretation": "",
             },
         ]
         cache_file.write_text(json.dumps(cache_data))
@@ -302,7 +309,7 @@ class TestApiDesigns:
         assert data["data"] == []
 
     def test_designs_enriched_fields_present(self, client, tmp_path, monkeypatch):
-        """缓存条目经 enrich 后包含 title_cn / source_label / design_interpretation。"""
+        """缓存条目由 refresh_all 预增强后，API 直接返回（含 title_cn / source_label / design_interpretation）。"""
         cache_file = tmp_path / "design_projects.json"
         cache_data = [
             {
@@ -312,6 +319,10 @@ class TestApiDesigns:
                 "language": "TypeScript",
                 "forks": 5200,
                 "url": "https://github.com/shadcn-ui/ui",
+                "title_cn": "shadcn-ui/ui",
+                "summary_cn": "Beautifully designed components",
+                "source_label": "GitHub",
+                "design_interpretation": "",
             },
         ]
         cache_file.write_text(json.dumps(cache_data))

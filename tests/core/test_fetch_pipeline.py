@@ -373,16 +373,19 @@ class TestGetFromCache:
     """验证从缓存读取并增强的 get_* 函数。"""
 
     def test_get_ai_news_from_cache(self, tmp_path, monkeypatch):
-        """缓存有数据时返回增强后的条目。"""
+        """缓存有预增强数据时直接返回（get_* 是纯缓存读取，不二次增强）。"""
         cache_file = tmp_path / "ai_news.json"
-        data = [{"title": "T", "link": "L", "summary": "S", "source": "openai.com", "published": "2026-05-01"}]
+        # 生产环境中 refresh_all() 先增强再写缓存，所以缓存中已有 title_cn 等字段
+        data = [{"title": "T", "link": "L", "summary": "S", "source": "openai.com",
+                 "published": "2026-05-01", "title_cn": "已翻译", "summary_cn": "已翻译摘要",
+                 "source_label": "OpenAI 官方"}]
         cache_file.write_text(json.dumps(data))
 
         monkeypatch.setattr("src.ai_news_fetcher.NEWS_FILE", cache_file)
 
         result = get_ai_news()
         assert len(result) == 1
-        assert result[0]["title_cn"] == "T"
+        assert result[0]["title_cn"] == "已翻译"
         assert result[0]["source_label"] == "OpenAI 官方"
 
     def test_get_ai_news_empty_cache(self, tmp_path, monkeypatch):
@@ -394,9 +397,11 @@ class TestGetFromCache:
         assert result == []
 
     def test_get_skill_projects_from_cache(self, tmp_path, monkeypatch):
-        """缓存有数据时返回增强后的条目。"""
+        """缓存有预增强数据时直接返回（get_* 是纯缓存读取，不二次增强）。"""
         cache_file = tmp_path / "skill_projects.json"
-        data = [{"name": "x/y", "description": "A test repo"}]
+        # 生产环境中 refresh_all() 先增强再写缓存
+        data = [{"name": "x/y", "description": "A test repo",
+                 "title_cn": "x/y", "source_label": "GitHub", "skill_interpretation": ""}]
         cache_file.write_text(json.dumps(data))
 
         monkeypatch.setattr("src.skill_fetcher.SKILL_FILE", cache_file)
@@ -416,9 +421,11 @@ class TestGetFromCache:
         assert result == []
 
     def test_get_design_projects_from_cache(self, tmp_path, monkeypatch):
-        """缓存有数据时返回增强后的条目。"""
+        """缓存有预增强数据时直接返回（get_* 是纯缓存读取，不二次增强）。"""
         cache_file = tmp_path / "design_projects.json"
-        data = [{"name": "a/b", "description": "Design tool"}]
+        # 生产环境中 refresh_all() 先增强再写缓存
+        data = [{"name": "a/b", "description": "Design tool",
+                 "title_cn": "a/b", "source_label": "GitHub", "design_interpretation": ""}]
         cache_file.write_text(json.dumps(data))
 
         monkeypatch.setattr("src.design_fetcher.DESIGN_FILE", cache_file)

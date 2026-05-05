@@ -117,24 +117,15 @@ def refresh_all() -> dict[str, int]:
 
 
 def get_ai_news() -> list[dict]:
-    """获取 AI 资讯（从缓存读取，保证字段完整）。"""
-    entries = load_news_from_cache()
-    if not entries:
-        return []
-    return _enrich_news(entries)
+    """获取 AI 资讯（纯缓存读取，数据已在 refresh_all 中完成翻译+增强）。"""
+    return load_news_from_cache() or []
 
 
 def get_skill_projects() -> list[dict]:
-    """获取 Skill 项目（从缓存读取，保证字段完整）。"""
-    projects = load_skill_projects()
-    if not projects:
-        return []
-    return _enhance_and_translate_projects(projects, "skill")
+    """获取 Skill 项目（纯缓存读取，数据已在 refresh_all 中完成翻译+增强）。"""
+    return load_skill_projects() or []
 
 
 def get_design_projects() -> list[dict]:
-    """获取设计项目（从缓存读取，保证字段完整）。"""
-    projects = load_design_projects()
-    if not projects:
-        return []
-    return _enhance_and_translate_projects(projects, "design")
+    """获取设计项目（纯缓存读取，数据已在 refresh_all 中完成翻译+增强）。"""
+    return load_design_projects() or []
