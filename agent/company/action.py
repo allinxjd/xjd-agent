@@ -109,6 +109,10 @@ class Action:
         from agent.core.engine import AgentEngine
 
         prompt = self.prompt_template.format(context=context) if self.prompt_template else context
+
+        # 确保 prompt 包含项目工作目录（Reviewer/QA 的 context 可能不含此信息）
+        if "## 项目工作目录\n" not in prompt and getattr(role, '_workspace', None):
+            prompt = f"## 项目工作目录\n{role._workspace}\n\n{prompt}"
         system_prompt = role.build_system_prompt()
 
         router = role._runtime_router

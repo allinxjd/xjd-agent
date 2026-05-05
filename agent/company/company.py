@@ -434,6 +434,9 @@ class Company:
             from pathlib import Path as _Path
             _pdir = _Path(pdir_match.group(1))
             _project_dir = _pdir
+            # 设置所有角色的 workspace，确保 read_file 路径解析正确
+            for _r in self._env.roles.values():
+                _r._workspace = str(_pdir)
             _meta_file = _pdir / ".project.json"
             if _meta_file.exists():
                 try:

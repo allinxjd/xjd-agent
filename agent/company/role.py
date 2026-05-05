@@ -47,6 +47,7 @@ class CompanyRole(AgentRole):
     _runtime_router: Any = field(default=None, repr=False)
     _runtime_registry: Any = field(default=None, repr=False)
     _processed_msg_ids: set = field(default_factory=set, repr=False)
+    _workspace: Optional[str] = field(default=None, repr=False)
 
     def put_message(self, msg: CompanyMessage) -> None:
         self._inbox.append(msg)
