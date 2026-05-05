@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -17,6 +19,9 @@ from agent.company.port_manager import PortManager
 logger = logging.getLogger(__name__)
 
 _PROJECTS_ROOT = Path.home() / "xjd-projects"
+
+MAX_ACTIVE_PROJECTS = 10
+ARCHIVE_AFTER_DAYS = 7
 
 
 @dataclass
@@ -43,13 +48,13 @@ class ProjectManager:
         self._projects_root = _PROJECTS_ROOT
 
     def list_projects(self) -> list[ProjectInfo]:
-        """列出所有项目。"""
+        """列出所有活跃项目（不含归档）。"""
         projects: list[ProjectInfo] = []
         if not self._projects_root.exists():
             return projects
 
         for entry in sorted(self._projects_root.iterdir()):
-            if not entry.is_dir():
+            if not entry.is_dir() or entry.name == "archive":
                 continue
             info = self._get_project_info(entry)
             if info:
@@ -167,6 +172,83 @@ class ProjectManager:
         if not backup_dir.exists():
             return []
         return [b.name for b in sorted(backup_dir.glob("*.tar.gz"), reverse=True)]
+
+    def auto_cleanup(self, max_active: int = MAX_ACTIVE_PROJECTS,
+                     archive_days: int = ARCHIVE_AFTER_DAYS) -> list[str]:
+        """自动归档旧项目，保持活跃项目数在限制内。返回已归档项目名列表。"""
+        projects = self.list_projects()
+        archived: list[str] = []
+        now = datetime.now()
+
+        for p in projects:
+            meta = self._read_meta(Path(p.path))
+            if meta.get("status") in ("done", "timeout", "failed"):
+                completed_at = meta.get("completed_at", meta.get("created_at", ""))
+                if completed_at:
+                    try:
+                        age = (now - datetime.fromisoformat(completed_at)).days
+                    except (ValueError, TypeError):
+                        continue
+                    if age > archive_days:
+                        self._archive_project(Path(p.path))
+                        archived.append(p.name)
+
+        active = [p for p in self.list_projects() if p.name not in archived]
+        while len(active) > max_active:
+            oldest_done = next(
+                (p for p in active if p.status == "stopped"), None
+            )
+            if not oldest_done:
+                break
+            self._archive_project(Path(oldest_done.path))
+            archived.append(oldest_done.name)
+            active = [p for p in active if p.name != oldest_done.name]
+
+        if archived:
+            logger.info("自动归档 %d 个项目: %s", len(archived), archived)
+        return archived
+
+    def list_archived(self) -> list[ProjectInfo]:
+        """列出已归档的项目。"""
+        archive_dir = self._projects_root / "archive"
+        if not archive_dir.exists():
+            return []
+        projects: list[ProjectInfo] = []
+        for entry in sorted(archive_dir.iterdir()):
+            if entry.is_dir():
+                info = self._get_project_info(entry)
+                if info:
+                    info.status = "archived"
+                    projects.append(info)
+        return projects
+
+    def _archive_project(self, project_dir: Path) -> None:
+        """归档项目：停止进程 → 释放端口 → 移动到 archive/ 目录。"""
+        name = project_dir.name
+        self.stop_project(name)
+        self._port_manager.release(name)
+
+        archive_dir = self._projects_root / "archive"
+        archive_dir.mkdir(exist_ok=True)
+
+        dest = archive_dir / name
+        if dest.exists():
+            shutil.rmtree(dest)
+        try:
+            project_dir.rename(dest)
+            logger.info("项目已归档: %s → archive/", name)
+        except OSError as e:
+            logger.warning("归档项目 %s 失败: %s", name, e)
+
+    def _read_meta(self, project_dir: Path) -> dict:
+        """读取项目 .project.json 元数据。"""
+        meta_file = project_dir / ".project.json"
+        if not meta_file.exists():
+            return {}
+        try:
+            return json.loads(meta_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            return {}
 
     # ── 私有方法 ──
 

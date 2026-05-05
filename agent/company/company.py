@@ -103,6 +103,9 @@ class CompanyConfig:
     max_minutes: int = 180
     max_project_chars: int = 30000
     max_project_files: int = 100
+    max_active_projects: int = 10
+    archive_after_days: int = 7
+    project_name_max_len: int = 20
     standby_history_max: int = 40
     standby_history_trim: int = 30
     standby_history_context: int = 10
@@ -2113,7 +2116,7 @@ class Company:
     }
 
     @staticmethod
-    def _extract_project_name(text: str) -> str:
+    def _extract_project_name(text: str, max_len: int = 20) -> str:
         """从 PM 评估文本中提取简短项目名（去掉寒暄/口语前缀）."""
         import re
         clean = text.strip()
@@ -2146,8 +2149,8 @@ class Company:
                     first_sentence = part
                     break
             else:
-                first_sentence = first_line[:10] if first_line and len(first_line) >= 2 and first_line not in Company._PROJECT_NAME_STOPWORDS else "project"
-        return first_sentence[:10] if first_sentence else "project"
+                first_sentence = first_line[:max_len] if first_line and len(first_line) >= 2 and first_line not in Company._PROJECT_NAME_STOPWORDS else "project"
+        return first_sentence[:max_len] if first_sentence else "project"
 
     def _create_project_workspace(self, requirement: str, project_name: Optional[str] = None) -> Path:
         """根据需求创建项目工作目录，返回项目路径."""
@@ -2155,12 +2158,26 @@ class Company:
         import re
         from datetime import datetime
 
+        # 创建前自动归档旧项目
+        try:
+            from agent.company.project_manager import ProjectManager
+            pm = ProjectManager()
+            archived = pm.auto_cleanup(
+                max_active=self._config.max_active_projects,
+                archive_days=self._config.archive_after_days,
+            )
+            if archived:
+                logger.info("自动归档了 %d 个旧项目: %s", len(archived), archived)
+        except Exception as e:
+            logger.warning("自动归档失败: %s", e)
+
+        max_len = self._config.project_name_max_len
         date_str = datetime.now().strftime("%Y%m%d")
         if project_name:
-            slug = project_name[:10].strip()
+            slug = project_name[:max_len].strip()
         else:
-            short_name = self._extract_project_name(requirement)
-            slug = short_name[:10].strip()
+            short_name = self._extract_project_name(requirement, max_len)
+            slug = short_name[:max_len].strip()
         slug = re.sub(r'[^\w\u4e00-\u9fff-]', '_', slug)
         slug = re.sub(r'_+', '_', slug).strip('_') or "project"
         project_name = f"{date_str}-{slug}"
@@ -2179,14 +2196,18 @@ class Company:
             }
             try:
                 from agent.company.port_manager import PortManager
-                pm = PortManager()
-                port = pm.allocate(project_name)
+                pm_port = PortManager()
+                port = pm_port.allocate(project_name)
                 meta["port"] = port
                 (project_dir / ".port").write_text(str(port))
                 logger.info("为项目 %s 分配端口 %d", project_name, port)
             except Exception as e:
                 logger.warning("端口分配失败: %s", e)
             meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+
+            readme = project_dir / "README.md"
+            if not readme.exists():
+                readme.write_text(f"# {slug}\n\n> {requirement[:200]}\n\nCreated: {date_str}\n")
 
         logger.info("项目工作目录已创建: %s", project_dir)
         return project_dir

@@ -355,11 +355,11 @@ class TestExtractProjectName:
 
     def test_strips_pm_preamble(self):
         result = Company._extract_project_name("老板，核心需求是：做一个聊天工具")
-        assert len(result) <= 10
+        assert len(result) <= 20
 
     def test_max_length(self):
         result = Company._extract_project_name("一个非常非常非常非常非常长的项目名称描述")
-        assert len(result) <= 10
+        assert len(result) <= 20
 
     def test_stopword_filtered(self):
         result = Company._extract_project_name("是的，你接着开发Holu项目")
