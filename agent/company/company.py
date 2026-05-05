@@ -98,9 +98,9 @@ class PipelineConfig:
 class CompanyConfig:
     """Company 可配置参数."""
 
-    max_rework: int = 2
+    max_rework: int = 3
     max_rounds: int = 20
-    max_minutes: int = 120
+    max_minutes: int = 180
     max_project_chars: int = 30000
     max_project_files: int = 100
     standby_history_max: int = 40
@@ -443,6 +443,11 @@ class Company:
                             if _saved_stages.get(k, False):
                                 stages_done[k] = True
                         stage_outputs.update(_meta.get("stage_outputs", {}))
+                        _port = _meta.get("port")
+                        if _port:
+                            _port_file = _pdir / ".port"
+                            if not _port_file.exists():
+                                _port_file.write_text(str(_port))
                         logger.info("断点恢复: 跳过已完成阶段 %s",
                                     [k for k, v in stages_done.items() if v])
                         if stage_outputs.get("PRD"):
@@ -459,6 +464,17 @@ class Company:
                             ))
                 except Exception as e:
                     logger.warning("读取断点信息失败: %s", e)
+
+        _has_checkpoint = any(stages_done.values())
+        if _has_checkpoint:
+            pm_role = self._env.roles.get("PM")
+            if pm_role:
+                pm_role._inbox.clear()
+            kicked = self._kick_next_stage(stages_done, stage_outputs, requirement, task)
+            if not kicked:
+                logger.info("断点恢复：所有阶段已完成，无需继续")
+                task.status = "done"
+                return task.result or ""
 
         for round_num in range(1, max_rounds + 1):
             if _time.monotonic() > pipeline_deadline:
@@ -1685,7 +1701,7 @@ class Company:
             if not access_url and result:
                 m = _re.search(r'http://[\w.\-]+:\d+[/\w.\-]*', result)
                 access_url = m.group(0) if m else ''
-            if access_url and status == 'done':
+            if access_url and status in ('done', 'timeout'):
                 try:
                     import webbrowser
                     webbrowser.open(access_url)
@@ -1740,6 +1756,10 @@ class Company:
         """返工后角色空闲，主动触发下一个未完成阶段."""
         import re as _re
         stage_role_map = [
+            ("PRD", "PM"),
+            ("Design", "PM"),
+            ("Env", "Developer"),
+            ("Code", "Developer"),
             ("Verify", "Developer"),
             ("Review", "Reviewer"),
             ("Test", "QA"),
@@ -1753,12 +1773,24 @@ class Company:
                 kick_content = f"## 继续执行 {stage_key} 阶段\n"
                 if "Design" in stage_outputs:
                     kick_content += stage_outputs["Design"][:1500]
+                elif "PRD" in stage_outputs and stage_key in ("Design", "Env", "Code"):
+                    kick_content += stage_outputs["PRD"][:1500]
                 pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
                 if pdir_match:
                     kick_content += f"\n\n## 项目工作目录\n{pdir_match.group(1)}\n"
+                cause_map = {
+                    "PRD": "EvaluateRequirement",
+                    "Design": "WritePRD",
+                    "Env": "WriteDesign",
+                    "Code": "WriteDesign",
+                    "Verify": "FixComplete",
+                    "Review": "FixComplete",
+                    "Test": "FixComplete",
+                    "Deploy": "FixComplete",
+                }
                 kick_msg = CompanyMessage(
                     content=kick_content,
-                    cause_by="FixComplete",
+                    cause_by=cause_map.get(stage_key, "FixComplete"),
                     sent_from="PM",
                     send_to=role_name,
                     task_id=task.task_id,
@@ -2148,10 +2180,10 @@ class Company:
             try:
                 from agent.company.port_manager import PortManager
                 pm = PortManager()
-                port = pm.allocate(slug)
+                port = pm.allocate(project_name)
                 meta["port"] = port
                 (project_dir / ".port").write_text(str(port))
-                logger.info("为项目 %s 分配端口 %d", slug, port)
+                logger.info("为项目 %s 分配端口 %d", project_name, port)
             except Exception as e:
                 logger.warning("端口分配失败: %s", e)
             meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=2))

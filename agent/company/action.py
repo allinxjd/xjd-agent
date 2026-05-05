@@ -153,11 +153,12 @@ class Action:
                     nonlocal terminal_count, write_count
                     result = await orig(**kwargs)
                     terminal_count += 1
-                    if terminal_count >= 10 and write_count == 0:
-                        result = str(result) + (
-                            "\n\n⚠️ 警告：你已执行 %d 次 run_terminal 但尚未调用 write_file。"
-                            "请立即使用 write_file 将代码写入磁盘，否则本次任务将判定失败。" % terminal_count
-                        )
+                    cmd = kwargs.get("command", "")
+                    _write_indicators = ("cat >", "cat <<", "echo ", "tee ", "printf ",
+                                         "> ", ">> ", "sed -i", "cp ", "mv ", "heredoc",
+                                         "write_text", "open(", "with open")
+                    if any(p in cmd for p in _write_indicators):
+                        write_count += 1
                     return result
                 term_tool.handler = _term_counting_fn
 
@@ -320,6 +321,7 @@ WRITE_CODE = Action(
         "- write_file 的 file_path 必须是完整绝对路径，以项目工作目录开头\n"
         "- 如果上下文包含「项目工作目录」，所有文件操作必须在该目录下\n"
         "- 代码写入 src/，配置文件放项目根目录\n"
+        "- 如果项目目录下有 .port 文件，必须读取其中的端口号作为服务监听端口，不要自己选端口\n"
         "- 如果项目目录下有 .env 文件，用 os.environ 或 dotenv 读取配置\n"
         "- 绝对不要写入隐藏目录（如 .xjd-agent/）\n\n"
         "## 设计与需求\n{context}"
@@ -432,6 +434,7 @@ VERIFY_RUN = Action(
         "- 如果有语法错误，用 edit_file 修复后重新检查\n\n"
         "## 第四步：尝试启动\n"
         "- 找到入口文件（main.py / app.py / index.js）\n"
+        "- 如果项目目录下有 .port 文件，读取其中的端口号作为服务端口，不要自己选端口\n"
         "- 用 nohup 后台启动，绑定 0.0.0.0\n"
         "- sleep 3 后 curl localhost:端口 验证\n"
         "- 如果启动失败，查看日志修复后重试（最多重试 3 次）\n"

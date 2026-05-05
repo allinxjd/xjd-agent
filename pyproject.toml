@@ -136,7 +136,7 @@ xjd-agent = "cli.main:main"
 xjdagent = "cli.main:main"
 
 [tool.setuptools.packages.find]
-include = ["agent*", "gateway*", "cli*", "sdk*", "web*"]
+include = ["agent*", "gateway*", "cli*", "sdk*", "web*", "src*"]
 
 [tool.setuptools.package-data]
 web = ["static/*.html", "static/*.css", "static/*.js", "static/*.png"]

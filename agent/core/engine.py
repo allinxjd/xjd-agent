@@ -324,11 +324,13 @@ class AgentEngine:
         try:
             result = tool.handler(**args)
             if hasattr(result, "__await__"):
-                result = await asyncio.wait_for(result, timeout=60.0)
+                _timeout = 180.0 if name == "run_terminal" else 60.0
+                result = await asyncio.wait_for(result, timeout=_timeout)
             return str(result) if result is not None else "OK"
         except asyncio.TimeoutError:
-            logger.warning("Tool %s timed out after 60s", name)
-            return f"Error: Tool '{name}' timed out"
+            _timeout = 180.0 if name == "run_terminal" else 60.0
+            logger.warning("Tool %s timed out after %.0fs", name, _timeout)
+            return f"Error: Tool '{name}' timed out after {int(_timeout)}s"
         except Exception as e:
             logger.error("Tool %s failed: %s", name, e, exc_info=True)
             return f"Error executing {name}: {e}"
