@@ -51,7 +51,6 @@ _CIRCUIT_BREAKER_COOLDOWN = 300.0
 # 每个 provider 的默认模型 — 用于自动构建 failover chain
 _DEFAULT_MODELS: dict[str, str] = {
     "deepseek": "deepseek-chat",
-    "openai": "gpt-4o-mini",
     "anthropic": "claude-3-5-haiku-20241022",
     "google": "gemini-2.0-flash",
     "zhipu": "glm-4-flash",
