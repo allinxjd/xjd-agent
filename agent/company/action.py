@@ -150,9 +150,14 @@ class Action:
             if term_tool and term_tool.handler:
                 _orig_term = term_tool.handler
                 async def _term_counting_fn(orig=_orig_term, **kwargs):
-                    nonlocal terminal_count
+                    nonlocal terminal_count, write_count
                     result = await orig(**kwargs)
                     terminal_count += 1
+                    if terminal_count >= 10 and write_count == 0:
+                        result = str(result) + (
+                            "\n\n⚠️ 警告：你已执行 %d 次 run_terminal 但尚未调用 write_file。"
+                            "请立即使用 write_file 将代码写入磁盘，否则本次任务将判定失败。" % terminal_count
+                        )
                     return result
                 term_tool.handler = _term_counting_fn
 
@@ -163,15 +168,15 @@ class Action:
             logger.error("[Action:%s] 执行失败: %s", self.name, e)
             return f"[错误] {self.name} 执行失败: {e}"
 
-        if self.name == "WriteCode" and write_count == 0 and terminal_count == 0:
+        if self.name == "WriteCode" and write_count == 0:
             content = (
                 "[错误] write_file 未被调用，代码没有写入磁盘。\n"
                 "你必须通过 write_file 工具将每个文件写入项目工作目录。\n"
-                "只在回复文本中输出代码是无效的。"
+                "只在回复文本中输出代码是无效的。\n"
+                f"本次执行了 {terminal_count} 次 run_terminal，但没有任何文件被写入。\n"
+                "请重新执行，确保用 write_file 写入所有代码文件。"
             )
             logger.warning("WriteCode 完成但 write_file 未被调用 (terminal_count=%d)", terminal_count)
-        elif self.name == "WriteCode" and write_count == 0 and terminal_count > 0:
-            logger.info("WriteCode 未写入新文件，但执行了 %d 次 run_terminal 验证，视为有效工作", terminal_count)
 
         return content
 
@@ -466,8 +471,8 @@ EXECUTE_DEPLOY = Action(
         "否则每一步执行后验证，失败则回滚。\n\n"
         "## 部署规范\n"
         "- 如果项目目录下有 .port 文件，读取其中的端口号作为服务端口\n"
-        "- 启动命令格式：nohup ... > {项目目录}/app.log 2>&1 & echo $! > {项目目录}/.pid\n"
-        "- 启动后 sleep 3 && curl -s http://localhost:{端口} 验证\n"
+        "- 启动命令格式：nohup ... > {{项目目录}}/app.log 2>&1 & echo $! > {{项目目录}}/.pid\n"
+        "- 启动后 sleep 3 && curl -s http://localhost:{{端口}} 验证\n"
         "- 如果验证失败，cat app.log 查看错误，修复后重试（最多 3 次）\n\n"
         "## 部署完成后必须汇报\n"
         "- 用 `ifconfig | grep inet` 获取本机局域网 IP\n"

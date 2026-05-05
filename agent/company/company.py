@@ -707,6 +707,9 @@ class Company:
                         if result_msg.cause_by == "RunTest":
                             if self._is_test_passed(result_msg.content):
                                 stages_done["Test"] = True
+                                pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
+                                if pdir_match:
+                                    result_msg.content += f"\n\n## 项目工作目录\n{pdir_match.group(1)}\n"
                     elif result_msg.cause_by in ("DeployPlan", "ExecuteDeploy"):
                         if result_msg.cause_by == "ExecuteDeploy":
                             url_m = _re.search(r'http://[\w.\-]+:\d+[/\w.\-]*', result_msg.content)
