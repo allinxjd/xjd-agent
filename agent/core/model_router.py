@@ -149,29 +149,13 @@ class ModelRouter:
         return self._providers.get(name)
 
     def set_primary(self, provider_name: str, model: str) -> None:
-        """设置主模型，并自动从已注册 provider 构建 failover chain.
+        """设置主模型.
 
-        保留已有的手动 failover 条目 (add_failover / add_failover_from_config)，
-        只追加尚未存在的自动 failover。
+        不再自动从 _DEFAULT_MODELS 构建 failover chain。
+        Failover 只来自用户显式配置的 configured_models（通过 add_failover 注册）。
         """
         self._primary_provider = provider_name
         self._primary_model = model
-        existing = {(p, m) for p, m in self._failover_chain}
-        # 优先把 deepseek 排在 failover 前面
-        sorted_providers = sorted(
-            self._providers.items(),
-            key=lambda x: (0 if x[0] == "deepseek" else 1),
-        )
-        for prov_name, prov in sorted_providers:
-            if prov_name == provider_name:
-                continue
-            fallback_model = _DEFAULT_MODELS.get(prov_name)
-            if fallback_model and (prov_name, fallback_model) not in existing:
-                self._failover_chain.append((prov_name, fallback_model))
-        # 同 provider 的默认模型也加入 failover（如 primary=glm-5.1 → failover glm-4-flash）
-        default_for_primary = _DEFAULT_MODELS.get(provider_name)
-        if default_for_primary and default_for_primary != model and (provider_name, default_for_primary) not in existing:
-            self._failover_chain.append((provider_name, default_for_primary))
         if self._failover_chain:
             logger.info("Failover chain: %s", [(p, m) for p, m in self._failover_chain])
 

@@ -46,6 +46,23 @@ def _build_router():
             router.register_provider(cheap_prov)
             router.set_cheap(cheap.provider, cheap.model)
 
+    # 注册 configured_models 作为 failover
+    for cm in getattr(config.model, 'configured_models', []):
+        if cm.provider == primary.provider and cm.model == primary.model:
+            continue
+        if not cm.api_key:
+            continue
+        try:
+            fo_prov = OpenAIProvider(
+                provider_type=ProviderType(cm.provider),
+                api_key=cm.api_key,
+                base_url=cm.base_url or None,
+            )
+            router.register_provider(fo_prov)
+            router.add_failover(cm.provider, cm.model)
+        except Exception:
+            pass
+
     return router, config
 
 
