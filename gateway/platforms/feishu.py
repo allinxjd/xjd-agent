@@ -420,9 +420,9 @@ class FeishuAdapter(BasePlatformAdapter):
                     continue
                 if event_dict is None:
                     continue
-                self._last_sdk_activity = _time.time()
                 if event_dict.get("__heartbeat__"):
                     continue
+                self._last_sdk_activity = _time.time()
                 try:
                     await self._handle_message_event(event_dict)
                 except Exception as e:

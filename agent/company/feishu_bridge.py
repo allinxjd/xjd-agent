@@ -138,7 +138,7 @@ class FeishuBridge(ChatBridge):
         _ACTIVITY_TIMEOUT = 300  # 5 min
 
         while self._started:
-            await asyncio.sleep(120)
+            await asyncio.sleep(60)
             if not self._started:
                 break
 
