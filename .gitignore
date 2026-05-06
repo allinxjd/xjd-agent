@@ -72,3 +72,22 @@ config/pdd_shops.json
 
 # Local test scripts
 scripts/test_pdd_login.py
+
+# Pipeline-generated project artifacts (not part of xjd-agent)
+/src/
+/static/
+/templates/
+/requirements-src.txt
+*.pid
+/cron.db
+/start_ecommerce_bot.sh
+/deploy_feishu_bot.sh
+tests/core/
+tests/test_api_endpoints.py
+tests/test_app_integration.py
+tests/test_config_host.py
+tests/test_design_deployer*.py
+tests/test_news_*.py
+tests/test_routes_deploy.py
+tests/test_src_modules.py
+/.claude/
