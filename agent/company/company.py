@@ -30,6 +30,7 @@ class PipelineStage:
     action: str
     stage_key: str = ""
     rework_target: str = ""
+    requires_approval: bool = False
 
     def __post_init__(self):
         if not self.stage_key:
@@ -59,11 +60,19 @@ class PipelineConfig:
                 return s.rework_target
         return ""
 
+    def stage_for_action(self, action: str) -> Optional["PipelineStage"]:
+        for s in self.stages:
+            if s.action == action:
+                return s
+        return None
+
     @classmethod
     def default(cls) -> "PipelineConfig":
         return cls(stages=[
-            PipelineStage(role="PM", action="WritePRD", stage_key="PRD"),
-            PipelineStage(role="PM", action="WriteDesign", stage_key="Design"),
+            PipelineStage(role="PM", action="WritePRD", stage_key="PRD", requires_approval=True),
+            PipelineStage(role="PM", action="WritePrototype", stage_key="Prototype", requires_approval=True),
+            PipelineStage(role="PM", action="WriteUIDesign", stage_key="UIDesign", requires_approval=True),
+            PipelineStage(role="PM", action="WriteDesign", stage_key="Design", requires_approval=True),
             PipelineStage(role="Developer", action="SetupEnv", stage_key="Env"),
             PipelineStage(role="Developer", action="WriteCode", stage_key="Code"),
             PipelineStage(role="Developer", action="VerifyRun", stage_key="Verify"),
@@ -116,6 +125,8 @@ class CompanyConfig:
 
 STAGE_TIMEOUTS: dict[str, int] = {
     "WritePRD": 5 * 60,
+    "WritePrototype": 8 * 60,
+    "WriteUIDesign": 8 * 60,
     "WriteDesign": 5 * 60,
     "SetupEnv": 10 * 60,
     "WriteCode": 10 * 60,
@@ -184,6 +195,8 @@ class Company:
         self._shared_memory = CompanyMemory(memory_manager)
         self._pipeline_running = False
         self._pipeline_user_msgs: list[CompanyMessage] = []
+        self._waiting_approval: Optional[str] = None
+        self._needs_prototype: bool = True
         self._pending_project_name: Optional[dict] = None
         self._task_queue: list[dict] = []
 
@@ -309,6 +322,78 @@ class Company:
         if has_fail and re.search(r'(?:no|0)\s*error', content, re.IGNORECASE):
             has_fail = False
         return has_pass and not has_fail
+
+    def _is_approval(self, text: str) -> bool:
+        """判断用户回复是否为审批通过。"""
+        text_clean = text.strip().lower()
+        approve_keywords = [
+            "通过", "ok", "确认", "可以", "没问题", "行",
+            "好的", "approved", "lgtm", "yes", "好", "过",
+        ]
+        if len(text_clean) < 20:
+            return any(kw in text_clean for kw in approve_keywords)
+        return False
+
+    async def _wait_for_approval(
+        self, stage_key: str, task: "CompanyTask", project_dir: Optional[Path] = None
+    ) -> tuple[bool, str]:
+        """等待用户审批。返回 (approved, feedback)."""
+        import asyncio as _aio
+        import time as _t
+
+        if stage_key in ("Prototype", "UIDesign"):
+            await self._send_stage_screenshots(stage_key, project_dir, task)
+
+        approval_msg = CompanyMessage(
+            content=(
+                f"## {stage_key} 已完成，请确认\n\n"
+                "请查看以上内容，回复：\n"
+                "- 「通过」「OK」「确认」→ 进入下一步\n"
+                "- 直接说修改意见 → 我会修改后重新提交\n"
+            ),
+            cause_by="ApprovalRequest",
+            sent_from="PM",
+            task_id=task.task_id,
+        )
+        await self._env.publish(approval_msg)
+
+        self._waiting_approval = stage_key
+        approval_timeout = 24 * 3600
+        start = _t.monotonic()
+        while _t.monotonic() - start < approval_timeout:
+            await _aio.sleep(2)
+            if self._pipeline_user_msgs:
+                user_reply = self._pipeline_user_msgs[-1].content
+                self._pipeline_user_msgs.clear()
+                approved = self._is_approval(user_reply)
+                self._waiting_approval = None
+                return (approved, "" if approved else user_reply)
+        self._waiting_approval = None
+        return (True, "")
+
+    async def _send_stage_screenshots(
+        self, stage_key: str, project_dir: Optional[Path], task: "CompanyTask"
+    ) -> None:
+        """渲染原型/UI截图并发送给用户。"""
+        if not project_dir:
+            return
+        subdir = "prototypes" if stage_key == "Prototype" else "ui-designs"
+        try:
+            from agent.company.prototype_renderer import render_all_prototypes
+            screenshots = await render_all_prototypes(project_dir, subdir)
+            if screenshots:
+                img_list = "\n".join(f"- {p.name}" for p in screenshots)
+                notify = CompanyMessage(
+                    content=f"已生成 {len(screenshots)} 张{stage_key}截图：\n{img_list}\n\n截图保存在 {project_dir / subdir} 目录",
+                    cause_by="StatusUpdate",
+                    sent_from="PM",
+                    task_id=task.task_id,
+                )
+                await self._env.publish(notify)
+        except ImportError:
+            logger.info("Playwright 不可用，跳过截图渲染，用户可直接查看 HTML 文件")
+        except Exception as e:
+            logger.warning("截图渲染失败: %s", e)
 
     @staticmethod
     def _extract_workspace_from_requirement(requirement: str) -> Optional[Path]:
@@ -454,6 +539,10 @@ class Company:
         rework_feedbacks: dict[str, list[str]] = {}
         max_rework = self._config.max_rework
         stages_done: dict[str, bool] = {k: False for k in self._pipeline.stage_keys}
+        if not self._needs_prototype:
+            stages_done["Prototype"] = True
+            stages_done["UIDesign"] = True
+            logger.info("纯后端/CLI 项目，跳过 Prototype 和 UIDesign 阶段")
         idle_rounds = 0
         supplement_injected: set[str] = set()
         stage_outputs: dict[str, str] = {}
@@ -617,10 +706,66 @@ class Company:
                     if result_msg.cause_by == "WritePRD":
                         stages_done["PRD"] = True
                         stage_outputs["PRD"] = result_msg.content
+                        # --- Approval gate ---
+                        _stage_def = self._pipeline.stage_for_action("WritePRD")
+                        if _stage_def and _stage_def.requires_approval:
+                            _proj_dir = self._extract_workspace_from_requirement(requirement)
+                            _approved, _feedback = await self._wait_for_approval("PRD", task, _proj_dir)
+                            if not _approved:
+                                stages_done["PRD"] = False
+                                _rework = CompanyMessage(
+                                    content=f"## 用户反馈（请根据意见修改 PRD 后重新提交）\n{_feedback}",
+                                    cause_by="WritePRD", sent_from="Human", send_to="PM", task_id=task.task_id,
+                                )
+                                await self._env.publish(_rework)
+                                break
+                    elif result_msg.cause_by == "WritePrototype":
+                        stages_done["Prototype"] = True
+                        stage_outputs["Prototype"] = result_msg.content
+                        _stage_def = self._pipeline.stage_for_action("WritePrototype")
+                        if _stage_def and _stage_def.requires_approval:
+                            _proj_dir = self._extract_workspace_from_requirement(requirement)
+                            _approved, _feedback = await self._wait_for_approval("Prototype", task, _proj_dir)
+                            if not _approved:
+                                stages_done["Prototype"] = False
+                                _rework = CompanyMessage(
+                                    content=f"## 用户反馈（请根据意见修改原型后重新提交）\n{_feedback}",
+                                    cause_by="WritePrototype", sent_from="Human", send_to="PM", task_id=task.task_id,
+                                )
+                                await self._env.publish(_rework)
+                                break
+                    elif result_msg.cause_by == "WriteUIDesign":
+                        stages_done["UIDesign"] = True
+                        stage_outputs["UIDesign"] = result_msg.content
+                        _stage_def = self._pipeline.stage_for_action("WriteUIDesign")
+                        if _stage_def and _stage_def.requires_approval:
+                            _proj_dir = self._extract_workspace_from_requirement(requirement)
+                            _approved, _feedback = await self._wait_for_approval("UIDesign", task, _proj_dir)
+                            if not _approved:
+                                stages_done["UIDesign"] = False
+                                _rework = CompanyMessage(
+                                    content=f"## 用户反馈（请根据意见修改 UI 设计后重新提交）\n{_feedback}",
+                                    cause_by="WriteUIDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
+                                )
+                                await self._env.publish(_rework)
+                                break
                     elif result_msg.cause_by == "WriteDesign":
                         stages_done["PRD"] = True
                         stages_done["Design"] = True
                         stage_outputs["Design"] = result_msg.content
+                        # --- Approval gate for Design ---
+                        _stage_def = self._pipeline.stage_for_action("WriteDesign")
+                        if _stage_def and _stage_def.requires_approval:
+                            _proj_dir = self._extract_workspace_from_requirement(requirement)
+                            _approved, _feedback = await self._wait_for_approval("Design", task, _proj_dir)
+                            if not _approved:
+                                stages_done["Design"] = False
+                                _rework = CompanyMessage(
+                                    content=f"## 用户反馈（请根据意见修改技术设计后重新提交）\n{_feedback}",
+                                    cause_by="WriteDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
+                                )
+                                await self._env.publish(_rework)
+                                break
 
                         modules = self._parse_modules(result_msg.content)
                         if modules:
@@ -1718,6 +1863,11 @@ class Company:
                         logger.info("\u9879\u76ee\u540d\u4e2d\u6587\u2192\u82f1\u6587: %s \u2192 %s", original_cn, candidate)
                     project_name = candidate
 
+            needs_prototype = True
+            proto_match = _re_name.search(r'NEEDS_PROTOTYPE:\s*(YES|NO)', eval_text, _re_name.IGNORECASE)
+            if proto_match and proto_match.group(1).upper() == "NO":
+                needs_prototype = False
+
             existing_project = self._find_project_by_name(task_context, project_name=project_name)
 
             if not project_name and not existing_project:
@@ -1778,6 +1928,7 @@ class Company:
                 )
 
             self._pipeline_running = True
+            self._needs_prototype = needs_prototype
             self._env._pipeline_user_queue = []
             asyncio.create_task(self._run_pipeline_task(enriched, project_dir))
             return
@@ -1922,6 +2073,8 @@ class Company:
         import re as _re
         stage_role_map = [
             ("PRD", "PM"),
+            ("Prototype", "PM"),
+            ("UIDesign", "PM"),
             ("Design", "PM"),
             ("Env", "Developer"),
             ("Code", "Developer"),
@@ -1938,7 +2091,7 @@ class Company:
                 kick_content = f"## 继续执行 {stage_key} 阶段\n"
                 if "Design" in stage_outputs:
                     kick_content += stage_outputs["Design"][:1500]
-                elif "PRD" in stage_outputs and stage_key in ("Design", "Env", "Code"):
+                elif "PRD" in stage_outputs and stage_key in ("Prototype", "UIDesign", "Design", "Env", "Code"):
                     kick_content += stage_outputs["PRD"][:1500]
                 else:
                     pdir = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
@@ -1951,7 +2104,9 @@ class Company:
                     kick_content += f"\n\n## 项目工作目录\n{pdir_match.group(1)}\n"
                 cause_map = {
                     "PRD": "EvaluateRequirement",
-                    "Design": "WritePRD",
+                    "Prototype": "WritePRD",
+                    "UIDesign": "WritePrototype",
+                    "Design": "WriteUIDesign",
                     "Env": "WriteDesign",
                     "Code": "WriteDesign",
                     "Verify": "FixComplete",

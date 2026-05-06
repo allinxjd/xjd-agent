@@ -10,7 +10,8 @@ from agent.company.action import Action, _apply_workspace_guard, ALL_ACTIONS
 class TestActionDefinitions:
     def test_all_actions_registered(self):
         expected = {
-            "UserRequirement", "EvaluateRequirement", "WritePRD", "WriteDesign",
+            "UserRequirement", "EvaluateRequirement", "WritePRD",
+            "WritePrototype", "WriteUIDesign", "WriteDesign",
             "SetupEnv", "WriteCode", "VerifyRun", "CodeReview", "FixCode",
             "WriteTest", "RunTest",
             "DeployPlan", "ExecuteDeploy", "ChatReply", "QuickTask",
