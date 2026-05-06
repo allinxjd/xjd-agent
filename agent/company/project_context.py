@@ -1,6 +1,8 @@
 """ProjectContext — 流水线项目状态容器.
 
 封装单个项目在 pipeline 执行期间的所有状态，替代 company.py 中散落的局部变量。
+支持"包装模式"：传入已有的 stages_done/stage_outputs 字典，共享引用，
+使得现有代码无需一次性全改。
 """
 
 from __future__ import annotations
@@ -30,6 +32,32 @@ class ProjectContext:
     tech_stack: str = ""
     port: Optional[int] = None
     status: str = "in_progress"
+
+    @classmethod
+    def wrap(
+        cls,
+        name: str,
+        stages_done: dict[str, bool],
+        stage_outputs: dict[str, str],
+        rework_counts: dict[str, int],
+        directory: Optional[Path] = None,
+        requirement: str = "",
+    ) -> "ProjectContext":
+        """包装已有字典创建 context（共享引用，不复制）."""
+        ctx = cls.__new__(cls)
+        ctx.name = name
+        ctx.directory = directory
+        ctx.requirement = requirement
+        ctx.stages_done = stages_done
+        ctx.stage_outputs = stage_outputs
+        ctx.rework_counts = rework_counts
+        ctx.rework_feedbacks = {}
+        ctx.port = None
+        ctx.status = "in_progress"
+        ctx.tech_stack = ""
+        if directory and directory.exists():
+            ctx.tech_stack = ctx._detect_tech_stack()
+        return ctx
 
     def __post_init__(self) -> None:
         if self.directory and not self.tech_stack:

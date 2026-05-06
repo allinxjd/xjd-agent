@@ -213,6 +213,7 @@ class Company:
         self._pipeline_user_msgs: list[CompanyMessage] = []
         self._active_project_name: str = ""
         self._switched_project_dir: Optional[Path] = None
+        self._project_ctx: Optional["ProjectContext"] = None
         self._waiting_approval: Optional[str] = None
         self._needs_prototype: bool = True
         self._pending_project_name: Optional[dict] = None
@@ -914,6 +915,17 @@ class Company:
                     stages_done[k] = False
                 stage_outputs.clear()
 
+        from agent.company.project_context import ProjectContext
+        ctx = ProjectContext.wrap(
+            name=self._active_project_name or task.task_id,
+            stages_done=stages_done,
+            stage_outputs=stage_outputs,
+            rework_counts=rework_counts,
+            directory=_project_dir,
+            requirement=requirement,
+        )
+        self._project_ctx = ctx
+
         for round_num in range(1, max_rounds + 1):
             if self._pipeline_cancel:
                 logger.info("Pipeline 被用户暂停 (round %d)", round_num)
@@ -960,7 +972,7 @@ class Company:
                 self._pipeline_user_msgs.clear()
 
             if self._env.is_idle():
-                if all(stages_done.values()):
+                if ctx.is_complete:
                     logger.info("所有角色空闲且所有阶段完成，结束 (round %d)", round_num)
                     break
                 kicked = self._kick_next_stage(stages_done, stage_outputs, requirement, task)
@@ -986,8 +998,8 @@ class Company:
                 "ExecuteDeploy": "执行部署",
             }
             # 计算总阶段数和已完成数，用于进度显示
-            _total_stages = len(stages_done)
-            _done_count = sum(1 for v in stages_done.values() if v)
+            _total_stages = ctx.total_stages
+            _done_count = ctx.done_count
             for role in self._env.roles.values():
                 if not role.has_pending:
                     continue
@@ -2105,7 +2117,12 @@ class Company:
                         if responder:
                             history_lines = [f"[{s}]: {c}" for s, c in self._standby_history[-10:]]
                             _proj_hint = ""
-                            if self._active_project_name:
+                            if self._project_ctx:
+                                _proj_hint = (
+                                    f"## 当前项目\n{self._project_ctx.get_context_summary()}\n"
+                                    f"注意：只讨论这个项目，不要混入其他项目信息。\n\n"
+                                )
+                            elif self._active_project_name:
                                 _proj_dir = self._switched_project_dir or self._find_latest_project_dir()
                                 _tech_info = ""
                                 if _proj_dir:
@@ -2639,6 +2656,7 @@ class Company:
         finally:
             remaining = self._env._pipeline_user_queue or []
             self._pipeline_running = False
+            self._project_ctx = None
             # 保留 _active_project_name，避免 ChatReply 上下文丢失当前项目
             self._env._pipeline_user_queue = None
             for m in remaining:
