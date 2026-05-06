@@ -13,6 +13,13 @@ examples:
   - 让团队帮我写一个爬虫脚本
   - 启动 AI Company 待命模式
 secrets:
+  - key: COMPANY_BOSS_TITLE
+    description: 用户称呼（如"老板"、"张总"、"您"）
+    group: 团队风格
+    default: "老板"
+  - key: COMPANY_CHAT_STYLE
+    description: PM 回复风格规则（多行文本，定义机器人说话方式）
+    group: 团队风格
   - key: FEISHU_GROUP_CHAT_ID
     description: 飞书群 chat_id（可选，配置后消息同步到飞书群）
     group: 飞书群配置

@@ -49,6 +49,8 @@ class CompanyRole(AgentRole):
     _runtime_registry: Any = field(default=None, repr=False)
     _processed_msg_ids: set = field(default_factory=set, repr=False)
     _workspace: Optional[str] = field(default=None, repr=False)
+    _boss_title: str = field(default="老板", repr=False)
+    _locale: Any = field(default=None, repr=False)
 
     def put_message(self, msg: CompanyMessage) -> None:
         self._inbox.append(msg)

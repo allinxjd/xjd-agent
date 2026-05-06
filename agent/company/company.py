@@ -10,6 +10,7 @@ from typing import Any, Optional
 from agent.company.action import USER_REQUIREMENT, EVALUATE_REQUIREMENT
 from agent.company.chat_bridge import ChatBridge
 from agent.company.environment import CompanyEnvironment
+from agent.company.validators import STAGE_VALIDATORS, validate_checkpoint_output
 from agent.company.feishu_bridge import FeishuBotConfig, FeishuBridge
 from agent.company.locale import CompanyLocale
 from agent.company.memory import CompanyMemory
@@ -185,6 +186,18 @@ class Company:
         self._pipeline = self._config.pipeline
         self._locale = CompanyLocale.load(self._config.locale)
         self._boss_title = self._config.boss_title or self._locale.get("address.boss", "老板")
+        # 从技能配置读取用户自定义风格（优先级高于 locale 默认值）
+        try:
+            from agent.core.secrets import get_secrets_store
+            _secrets = get_secrets_store()
+            _custom_title = _secrets.get("ai-company", "COMPANY_BOSS_TITLE")
+            if _custom_title:
+                self._boss_title = _custom_title
+            _custom_style = _secrets.get("ai-company", "COMPANY_CHAT_STYLE")
+            if _custom_style:
+                self._locale._data["chat_style"] = _custom_style
+        except Exception:
+            pass
         self._env = CompanyEnvironment()
         self._router = router
         self._registry = tool_registry
@@ -196,7 +209,9 @@ class Company:
         self._store.open()
         self._shared_memory = CompanyMemory(memory_manager)
         self._pipeline_running = False
+        self._pipeline_cancel = False
         self._pipeline_user_msgs: list[CompanyMessage] = []
+        self._active_project_name: str = ""
         self._waiting_approval: Optional[str] = None
         self._needs_prototype: bool = True
         self._pending_project_name: Optional[dict] = None
@@ -223,6 +238,7 @@ class Company:
         role._runtime_router = self._router
         role._runtime_registry = self._registry
         role._boss_title = self._boss_title
+        role._locale = self._locale
         if "{boss_title}" in (role.system_prompt or ""):
             role.system_prompt = role.system_prompt.replace("{boss_title}", self._boss_title)
         if self._karpathy_prompt and self._karpathy_prompt not in (role.system_prompt or ""):
@@ -349,12 +365,15 @@ class Company:
         if stage_key in ("Prototype", "UIDesign"):
             await self._send_stage_screenshots(stage_key, project_dir, task)
 
+        _stage_names = {
+            "PRD": "需求文档", "Prototype": "原型图",
+            "UIDesign": "UI 设计", "Design": "技术方案",
+        }
+        _display = _stage_names.get(stage_key, stage_key)
         approval_msg = CompanyMessage(
             content=(
-                f"## {stage_key} 已完成，请确认\n\n"
-                "请查看以上内容，回复：\n"
-                "- 「通过」「OK」「确认」→ 进入下一步\n"
-                "- 直接说修改意见 → 我会修改后重新提交\n"
+                f"{_display}已完成，请审阅附件。\n"
+                "回复「确认」继续，或直接说修改意见。"
             ),
             cause_by="ApprovalRequest",
             sent_from="PM",
@@ -389,10 +408,20 @@ class Company:
         target_dir = project_dir / subdir
         target_dir.mkdir(parents=True, exist_ok=True)
 
+        # 清理 LLM 工具调用残留的 XML 标签
+        content = _re.sub(r'</?tool_result[^>]*>', '', content)
+        content = _re.sub(r'</?tool_use[^>]*>', '', content)
+        content = _re.sub(r'\{"content":\s*"', '', content)
+        content = _re.sub(r'"\s*,\s*"is_error":\s*false\}', '', content)
+
         # 解析 HTML 块：支持 ```html ... ``` 格式
         html_blocks = _re.findall(r'```html\s*\n(.*?)```', content, _re.DOTALL)
         if not html_blocks:
-            if '<html' in content.lower() or '<!doctype' in content.lower():
+            # 提取所有完整 HTML 文档
+            html_docs = _re.findall(r'(<!DOCTYPE html>.*?</html>)', content, _re.DOTALL | _re.IGNORECASE)
+            if html_docs:
+                html_blocks = html_docs
+            elif '<html' in content.lower() or '<!doctype' in content.lower():
                 html_blocks = [content]
 
         if not html_blocks:
@@ -410,9 +439,20 @@ class Company:
         page_info: list[dict] = []
         for i, html in enumerate(html_blocks):
             header_text = sections[i] if i < len(sections) else ""
+            # 从 HTML <title> 标签提取页面名称
+            title_match = _re.search(r'<title[^>]*>([^<]+)</title>', html, _re.IGNORECASE)
+            name_from_title = title_match.group(1).strip() if title_match else ""
+            # 从 markdown 标题提取
             name_match = _re.search(r'#{1,3}\s+(.+?)(?:\n|$)', header_text)
-            name = name_match.group(1).strip() if name_match else f"页面 {i+1}"
-            desc_lines = [l.strip() for l in header_text.strip().split('\n') if l.strip() and not l.strip().startswith('#')]
+            name_from_header = name_match.group(1).strip() if name_match else ""
+            # 优先用 header，fallback 到 title，再 fallback 到 "页面 N"
+            name = name_from_header or name_from_title or f"页面 {i+1}"
+            # 确保名称不含 HTML/JSON 残留
+            if '<' in name or '{' in name:
+                name = name_from_title or f"页面 {i+1}"
+            name = name[:60]
+            desc_lines = [l.strip() for l in header_text.strip().split('\n')
+                          if l.strip() and not l.strip().startswith('#') and '<' not in l and '{' not in l]
             desc = '\n'.join(desc_lines[-3:]) if desc_lines else ""
             safe_name = _re.sub(r'[^\w一-鿿-]', '-', name).strip('-')[:50] or f"page-{i+1}"
             file_path = target_dir / f"{safe_name}.html"
@@ -441,7 +481,7 @@ class Company:
 
         # 发送报告文件到飞书
         report_msg = CompanyMessage(
-            content=f"## {stage_key} 原型报告已生成（共 {len(page_info)} 页）\n包含产品流程图、功能脑图和各页面截图。\n请用 Typora 或 VS Code 打开查看。",
+            content=f"{stage_key} 报告已生成（共 {len(page_info)} 页），请用浏览器打开查看。",
             cause_by="StageFile",
             sent_from="PM",
             task_id=task.task_id,
@@ -453,61 +493,68 @@ class Company:
         self, page_info: list[dict], screenshots: dict[str, "Path"],
         target_dir: "Path", stage_key: str
     ) -> "Path":
-        """生成专业原型图 Markdown 报告（截图 base64 嵌入 + Mermaid 流程图/脑图）。"""
+        """生成专业原型报告（HTML 格式，自包含，截图 base64 嵌入）。"""
         import base64 as _b64
         from datetime import datetime
         label = "原型图" if stage_key == "Prototype" else "UI 设计稿"
+        now = datetime.now().strftime('%Y-%m-%d %H:%M')
 
-        lines: list[str] = []
-        lines.append(f"# {label}设计文档\n")
-        lines.append(f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}  ")
-        lines.append(f"> 页面数量: {len(page_info)}  ")
-        lines.append(f"> 视口: 375 x 812 (移动端)\n")
-
-        lines.append("---\n")
-        lines.append("## 产品流程图\n")
-        lines.append("```mermaid")
-        lines.append("flowchart TD")
+        pages_html = []
         for i, info in enumerate(page_info):
-            safe_label = info["name"].replace('"', "'")
-            lines.append(f'    P{i}["{safe_label}"]')
-        for i in range(len(page_info) - 1):
-            lines.append(f"    P{i} --> P{i+1}")
-        lines.append("```\n")
-
-        lines.append("## 功能模块脑图\n")
-        lines.append("```mermaid")
-        lines.append("mindmap")
-        lines.append(f"  root(({label}))")
-        for info in page_info:
-            safe_name = info["name"].replace("(", "（").replace(")", "）")
-            lines.append(f"    {safe_name}")
-            if info.get("desc"):
-                for feat in info["desc"].split('\n')[:3]:
-                    feat = feat.strip()
-                    if feat:
-                        feat = feat.replace("(", "（").replace(")", "）")
-                        lines.append(f"      {feat}")
-        lines.append("```\n")
-
-        lines.append("---\n")
-        lines.append("## 页面详情\n")
-        for i, info in enumerate(page_info):
-            lines.append(f"### {i+1}. {info['name']}\n")
-            if info.get("desc"):
-                lines.append(f"{info['desc']}\n")
-            if info["safe_name"] in screenshots:
+            has_screenshot = info["safe_name"] in screenshots
+            if has_screenshot:
                 img_path = screenshots[info["safe_name"]]
                 img_data = img_path.read_bytes()
                 b64 = _b64.b64encode(img_data).decode()
-                lines.append(f"![{info['name']}](data:image/png;base64,{b64})\n")
+                img_tag = f'<img src="data:image/png;base64,{b64}" alt="{info["name"]}" style="max-width:375px;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);">'
             else:
-                lines.append("*（截图未生成，请打开对应 HTML 文件查看）*\n")
-            lines.append(f"源文件: `{info['file'].name}`\n")
-            lines.append("---\n")
+                img_tag = f'<div style="width:375px;height:200px;background:#f3f4f6;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:14px;">请打开 {info["file"].name} 查看</div>'
+            desc_html = f'<p style="color:#6b7280;font-size:13px;margin:8px 0 0;">{info["desc"]}</p>' if info.get("desc") else ""
+            pages_html.append(f'''
+        <div style="margin-bottom:32px;">
+          <h3 style="font-size:16px;font-weight:600;margin-bottom:8px;">{i+1}. {info["name"]}</h3>
+          {desc_html}
+          <div style="margin-top:12px;">{img_tag}</div>
+          <p style="font-size:12px;color:#9ca3af;margin-top:8px;">源文件: {info["file"].name}</p>
+        </div>''')
 
-        report_path = target_dir / f"{stage_key.lower()}-report.md"
-        report_path.write_text("\n".join(lines), encoding="utf-8")
+        flow_items = " → ".join(f'<span style="background:#eff6ff;padding:4px 10px;border-radius:6px;font-size:13px;">{info["name"]}</span>' for info in page_info)
+
+        html = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>{label}报告</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; margin:0; padding:40px; background:#fafafa; color:#1f2937; line-height:1.6; }}
+  .container {{ max-width:800px; margin:0 auto; background:#fff; border-radius:16px; padding:40px; box-shadow:0 1px 3px rgba(0,0,0,0.06); }}
+  .header {{ border-bottom:1px solid #e5e7eb; padding-bottom:20px; margin-bottom:32px; }}
+  .header h1 {{ font-size:24px; font-weight:700; margin:0 0 8px; }}
+  .meta {{ font-size:13px; color:#6b7280; }}
+  .flow {{ margin-bottom:32px; padding:16px; background:#f9fafb; border-radius:10px; }}
+  .flow-title {{ font-size:14px; font-weight:600; margin-bottom:10px; color:#374151; }}
+  .pages {{ }}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>{label}报告</h1>
+    <div class="meta">生成时间: {now} | 页面数量: {len(page_info)} | 视口: 375 x 812</div>
+  </div>
+  <div class="flow">
+    <div class="flow-title">页面流程</div>
+    <div>{flow_items}</div>
+  </div>
+  <div class="pages">
+    {"".join(pages_html)}
+  </div>
+</div>
+</body>
+</html>'''
+
+        report_path = target_dir / f"{stage_key.lower()}-report.html"
+        report_path.write_text(html, encoding="utf-8")
         return report_path
 
     async def _send_stage_screenshots(
@@ -714,6 +761,14 @@ class Company:
                             if _saved_stages.get(k, False):
                                 stages_done[k] = True
                         stage_outputs.update(_meta.get("stage_outputs", {}))
+                        # 验证各阶段是否真正产出了有效内容
+                        for _stage_key in list(stages_done.keys()):
+                            if stages_done.get(_stage_key):
+                                _output = stage_outputs.get(_stage_key, "")
+                                if not validate_checkpoint_output(_stage_key, _output, _pdir):
+                                    stages_done[_stage_key] = False
+                                    stage_outputs.pop(_stage_key, None)
+                                    logger.info("断点恢复: %s 无有效产出，重置为未完成", _stage_key)
                         _port = _meta.get("port")
                         if _port:
                             _port_file = _pdir / ".port"
@@ -731,8 +786,9 @@ class Company:
                                     task_id=task.task_id,
                                 ))
                             else:
-                                logger.info("断点恢复: PRD 内容为澄清提问，跳过发布")
+                                logger.info("断点恢复: PRD 内容为澄清提问，重置为未完成")
                                 stage_outputs.pop("PRD", None)
+                                stages_done["PRD"] = False
                         if stage_outputs.get("Design"):
                             _is_clarify = any(s in stage_outputs["Design"] for s in _clarify_signals)
                             if not _is_clarify:
@@ -742,8 +798,9 @@ class Company:
                                     task_id=task.task_id,
                                 ))
                             else:
-                                logger.info("断点恢复: Design 内容为澄清提问，跳过发布")
+                                logger.info("断点恢复: Design 内容为澄清提问，重置为未完成")
                                 stage_outputs.pop("Design", None)
+                                stages_done["Design"] = False
                 except Exception as e:
                     logger.warning("读取断点信息失败: %s", e)
 
@@ -760,6 +817,11 @@ class Company:
                 stage_outputs.clear()
 
         for round_num in range(1, max_rounds + 1):
+            if self._pipeline_cancel:
+                logger.info("Pipeline 被用户暂停 (round %d)", round_num)
+                self._pipeline_cancel = False
+                task.status = "paused"
+                break
             if _time.monotonic() > pipeline_deadline:
                 logger.warning("Pipeline 超时 (%d 分钟)，强制结束 (round %d)", max_minutes, round_num)
                 timeout_msg = CompanyMessage(
@@ -811,11 +873,27 @@ class Company:
 
             logger.info("=== Round %d === stages=%s", round_num, stages_done)
             round_had_work = False
+            _STAGE_LABELS = {
+                "WritePRD": "正在编写需求文档...",
+                "WritePrototype": "正在设计原型图...",
+                "WriteUIDesign": "正在设计 UI...",
+                "WriteDesign": "正在编写技术方案...",
+                "SetupEnv": "正在搭建开发环境...",
+                "WriteCode": "正在编写代码...",
+                "VerifyRun": "正在验证运行...",
+                "CodeReview": "正在进行代码审查...",
+                "WriteTest": "正在编写测试...",
+                "RunTest": "正在运行测试...",
+                "DeployPlan": "正在制定部署方案...",
+                "ExecuteDeploy": "正在执行部署...",
+            }
             for role in self._env.roles.values():
                 if not role.has_pending:
                     continue
+                _stage_cause = role._inbox[0].cause_by if role._inbox else ""
+                _stage_label = _STAGE_LABELS.get(_stage_cause, f"{role.name} 工作中...")
                 status_msg = CompanyMessage(
-                    content=f"{role.name} 开始工作...",
+                    content=_stage_label,
                     cause_by="RoleCheckin",
                     sent_from=role.name,
                     task_id=task.task_id,
@@ -849,6 +927,21 @@ class Company:
                     round_had_work = True
 
                     if result_msg.cause_by == "WritePRD":
+                        _validator = STAGE_VALIDATORS.get("WritePRD")
+                        _vr = _validator(result_msg.content) if _validator else None
+                        if _vr and not _vr.valid:
+                            _attempts = rework_counts.get("WritePRD_validate", 0) + 1
+                            rework_counts["WritePRD_validate"] = _attempts
+                            if _attempts >= 3:
+                                logger.warning("WritePRD 验证失败 %d 次，降级接受", _attempts)
+                            else:
+                                logger.warning("WritePRD %s，要求重做 (%d/3)", _vr.reason, _attempts)
+                                _rework = CompanyMessage(
+                                    content=f"## 系统提示\n{_vr.rework_hint}\n\n## 需求\n{requirement}",
+                                    cause_by="WritePRD", sent_from="Human", send_to="PM", task_id=task.task_id,
+                                )
+                                await self._env.publish(_rework)
+                                break
                         stages_done["PRD"] = True
                         stage_outputs["PRD"] = result_msg.content
                         await self._env.publish(result_msg)
@@ -866,6 +959,29 @@ class Company:
                                 await self._env.publish(_rework)
                                 break
                     elif result_msg.cause_by == "WritePrototype":
+                        _validator = STAGE_VALIDATORS.get("WritePrototype")
+                        _vr = _validator(result_msg.content) if _validator else None
+                        if _vr and not _vr.valid:
+                            _attempts = rework_counts.get("WritePrototype_validate", 0) + 1
+                            rework_counts["WritePrototype_validate"] = _attempts
+                            if _attempts >= 3:
+                                logger.warning("WritePrototype 验证失败 %d 次，跳过原型阶段", _attempts)
+                                stages_done["Prototype"] = True
+                                stage_outputs["Prototype"] = ""
+                                _skip_msg = CompanyMessage(
+                                    content="原型图生成未达标，跳过进入下一阶段。",
+                                    cause_by="ChatReply", sent_from="PM", task_id=task.task_id,
+                                )
+                                await self._env.publish(_skip_msg)
+                                break
+                            else:
+                                logger.warning("WritePrototype %s，要求重做 (%d/3)", _vr.reason, _attempts)
+                                _rework = CompanyMessage(
+                                    content=f"## 系统提示\n{_vr.rework_hint}",
+                                    cause_by="WritePrototype", sent_from="Human", send_to="PM", task_id=task.task_id,
+                                )
+                                await self._env.publish(_rework)
+                                break
                         stages_done["Prototype"] = True
                         stage_outputs["Prototype"] = result_msg.content
                         _proj_dir = self._extract_workspace_from_requirement(requirement)
@@ -882,6 +998,29 @@ class Company:
                                 await self._env.publish(_rework)
                                 break
                     elif result_msg.cause_by == "WriteUIDesign":
+                        _validator = STAGE_VALIDATORS.get("WriteUIDesign")
+                        _vr = _validator(result_msg.content) if _validator else None
+                        if _vr and not _vr.valid:
+                            _attempts = rework_counts.get("WriteUIDesign_validate", 0) + 1
+                            rework_counts["WriteUIDesign_validate"] = _attempts
+                            if _attempts >= 3:
+                                logger.warning("WriteUIDesign 验证失败 %d 次，跳过 UI 设计阶段", _attempts)
+                                stages_done["UIDesign"] = True
+                                stage_outputs["UIDesign"] = ""
+                                _skip_msg = CompanyMessage(
+                                    content="UI 设计生成未达标，跳过进入下一阶段。",
+                                    cause_by="ChatReply", sent_from="PM", task_id=task.task_id,
+                                )
+                                await self._env.publish(_skip_msg)
+                                break
+                            else:
+                                logger.warning("WriteUIDesign %s，要求重做 (%d/3)", _vr.reason, _attempts)
+                                _rework = CompanyMessage(
+                                    content=f"## 系统提示\n{_vr.rework_hint}",
+                                    cause_by="WriteUIDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
+                                )
+                                await self._env.publish(_rework)
+                                break
                         stages_done["UIDesign"] = True
                         stage_outputs["UIDesign"] = result_msg.content
                         _proj_dir = self._extract_workspace_from_requirement(requirement)
@@ -898,6 +1037,21 @@ class Company:
                                 await self._env.publish(_rework)
                                 break
                     elif result_msg.cause_by == "WriteDesign":
+                        _validator = STAGE_VALIDATORS.get("WriteDesign")
+                        _vr = _validator(result_msg.content) if _validator else None
+                        if _vr and not _vr.valid:
+                            _attempts = rework_counts.get("WriteDesign_validate", 0) + 1
+                            rework_counts["WriteDesign_validate"] = _attempts
+                            if _attempts >= 3:
+                                logger.warning("WriteDesign 验证失败 %d 次，降级接受", _attempts)
+                            else:
+                                logger.warning("WriteDesign %s，要求重做 (%d/3)", _vr.reason, _attempts)
+                                _rework = CompanyMessage(
+                                    content=f"## 系统提示\n{_vr.rework_hint}\n\n请重新输出完整的技术设计文档。",
+                                    cause_by="WriteDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
+                                )
+                                await self._env.publish(_rework)
+                                break
                         stages_done["PRD"] = True
                         stages_done["Design"] = True
                         stage_outputs["Design"] = result_msg.content
@@ -1691,6 +1845,24 @@ class Company:
                     self._standby_history.append((m.sent_from, m.content))
                     self._store.save_message(m)
 
+                # 检测暂停/切换项目指令
+                _pause_keywords = ("暂停", "先停", "停一下", "暂停开发", "先暂停", "切换到", "切换项目", "换个项目")
+                _pause_msg = None
+                for m in collected:
+                    if any(kw in m.content for kw in _pause_keywords):
+                        _pause_msg = m
+                        break
+                if _pause_msg:
+                    logger.info("用户请求暂停/切换项目: %s", _pause_msg.content[:50])
+                    self._pipeline_cancel = True
+                    notify = CompanyMessage(
+                        content="当前项目已暂停，请发送新的需求或指定要切换的项目。",
+                        cause_by="ChatReply",
+                        sent_from="PM",
+                    )
+                    await self._env.publish(notify)
+                    return
+
                 if getattr(self, '_waiting_approval', None):
                     self._pipeline_user_msgs.extend(collected)
                     return
@@ -1786,7 +1958,11 @@ class Company:
                             responder = self._env.roles.get("PM")
                         if responder:
                             history_lines = [f"[{s}]: {c}" for s, c in self._standby_history[-10:]]
+                            _proj_hint = ""
+                            if self._active_project_name:
+                                _proj_hint = f"## 当前项目\n{self._active_project_name}\n注意：只讨论这个项目，不要混入其他项目信息。\n\n"
                             chat_context = (
+                                f"{_proj_hint}"
                                 "当前团队正在开发中（pipeline 运行中）。\n\n"
                                 f"## 对话记录\n" + "\n".join(history_lines)
                             )
@@ -2101,6 +2277,11 @@ class Company:
             asyncio.create_task(self._run_quick_task(quick_target, user_messages))
             return
 
+        # 检测风格设置指令
+        _style_updated = await self._try_update_style(user_messages)
+        if _style_updated:
+            return
+
         if len(self._standby_history) > 40:
             self._standby_history = self._standby_history[-30:]
 
@@ -2108,6 +2289,13 @@ class Company:
         history_lines = [f"[{s}]: {c}" for s, c in self._standby_history[-10:]]
         history_text = "\n".join(history_lines)
         project_status = self._build_project_status()
+
+        # 从最近对话中推断当前讨论的项目
+        _current_project_hint = ""
+        _recent_text = " ".join(c for _, c in self._standby_history[-5:])
+        _proj_dir = self._find_project_by_name(_recent_text, "")
+        if _proj_dir:
+            _current_project_hint = f"\n\n## 当前讨论项目\n{_proj_dir.name}\n注意：只讨论这个项目相关的内容，不要混入其他项目的信息。\n"
 
         target_roles: set[str] = set()
         for m in user_messages:
@@ -2130,7 +2318,7 @@ class Company:
                     f"如果话题跟你无关，回复「这块我没意见，听{self._boss_title}和 PM 的」即可，不要硬凑。"
                 )
             chat_context = (
-                f"当前时间: {now}\n\n{project_status}"
+                f"当前时间: {now}\n\n{project_status}{_current_project_hint}"
                 f"## 对话记录\n{history_text}{role_hint}"
             )
             reply_msg = await responder._act(CHAT_REPLY, chat_context)
@@ -2145,16 +2333,88 @@ class Company:
         if hasattr(self, "_standby_stop"):
             self._standby_stop.set()
 
+    async def _try_update_style(self, messages: list[CompanyMessage]) -> bool:
+        """检测并处理风格设置指令。返回 True 表示已处理。"""
+        import re as _re
+        text = " ".join(m.content for m in messages)
+
+        _title_patterns = [
+            r"(?:以后|今后)?(?:叫我|称呼我|喊我)(?:为)?[「「]?(.{1,10})[」」]?",
+            r"(?:称呼|叫法)(?:改为|改成|换成)[「「]?(.{1,10})[」」]?",
+        ]
+        new_title = None
+        for pat in _title_patterns:
+            m = _re.search(pat, text)
+            if m:
+                new_title = m.group(1).strip("「」 ")
+                break
+
+        _style_keywords = ("回复风格", "说话风格", "聊天风格", "回复方式", "语气", "带emoji", "带表情",
+                           "不要emoji", "活泼一点", "正式一点", "专业一点", "轻松一点")
+        has_style_cmd = any(kw in text for kw in _style_keywords)
+
+        if not new_title and not has_style_cmd:
+            return False
+
+        from agent.core.secrets import get_secrets_store
+        store = get_secrets_store()
+        pm_role = self._env.roles.get("PM")
+        reply_parts = []
+
+        if new_title:
+            store.set("ai-company", "COMPANY_BOSS_TITLE", new_title)
+            self._boss_title = new_title
+            for role in self._env.roles.values():
+                role._boss_title = new_title
+            reply_parts.append(f"好的，以后称呼您为「{new_title}」。")
+
+        if has_style_cmd:
+            _style_map = {
+                "带emoji": "回复可以适当使用 emoji 表情",
+                "带表情": "回复可以适当使用 emoji 表情",
+                "不要emoji": "回复不使用 emoji",
+                "活泼一点": "回复语气轻松活泼，可以用 emoji 和口语化表达",
+                "轻松一点": "回复语气轻松自然，不要太正式",
+                "正式一点": "回复简洁专业，不用 emoji，不寒暄",
+                "专业一点": "回复简洁专业，结论先行，不用 emoji",
+            }
+            matched_style = None
+            for kw, style_desc in _style_map.items():
+                if kw in text:
+                    matched_style = style_desc
+                    break
+
+            if matched_style:
+                current_style = store.get("ai-company", "COMPANY_CHAT_STYLE") or self._locale.get("chat_style", "")
+                new_style = f"## 回复规则\n- 称呼用户为「{self._boss_title}」\n- {matched_style}\n- 仔细阅读对话记录，延续之前的讨论\n- 遇到模糊需求追问具体细节\n- 有专业判断，会提出建议，但尊重客户最终决定"
+                store.set("ai-company", "COMPANY_CHAT_STYLE", new_style)
+                self._locale._data["chat_style"] = new_style
+                reply_parts.append(f"风格已更新：{matched_style}。")
+            else:
+                reply_parts.append("收到，如需调整具体风格，可以在技能设置面板中编辑「团队风格」。")
+
+        if pm_role and reply_parts:
+            confirm = CompanyMessage(
+                content=" ".join(reply_parts),
+                cause_by="ChatReply",
+                sent_from="PM",
+            )
+            await self._env.publish(confirm)
+            self._standby_history.append(("PM", confirm.content))
+
+        return True
+
     async def _run_pipeline_task(self, req: str, pdir) -> None:
         """执行 pipeline 并在完成后清理状态、发送通知."""
         from pathlib import Path
         result = None
         status = "failed"
+        project_path = Path(pdir) if not isinstance(pdir, Path) else pdir
+        self._active_project_name = project_path.name
         try:
             try:
                 from agent.company.project_manager import ProjectManager
                 mgr = ProjectManager()
-                project_path = Path(pdir) if not isinstance(pdir, Path) else pdir
                 project_name = project_path.name.split("-", 1)[-1] if "-" in project_path.name else project_path.name
                 backup = mgr.backup_before_deploy(project_name)
                 if backup:
@@ -2165,6 +2425,8 @@ class Company:
             last_task = getattr(self, '_last_task', None)
             if last_task and getattr(last_task, 'status', '') == 'timeout':
                 status = "timeout"
+            elif last_task and getattr(last_task, 'status', '') == 'paused':
+                status = "in_progress"
             else:
                 status = "done" if result else "failed"
         except Exception as e:
@@ -2172,6 +2434,7 @@ class Company:
         finally:
             remaining = self._env._pipeline_user_queue or []
             self._pipeline_running = False
+            self._active_project_name = ""
             self._env._pipeline_user_queue = None
             for m in remaining:
                 for role in self._env.roles.values():

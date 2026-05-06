@@ -954,6 +954,30 @@ class WebServer:
                             all_msgs = all_msgs[-50:]
                     session_msgs = all_msgs
 
+                # Fast path: AI Company 控制命令直接执行，不经过 LLM
+                _company_shortcut = await self._try_company_shortcut(user_message)
+                if _company_shortcut is not None:
+                    result_content = _company_shortcut
+                    if gw_session:
+                        gw_session.add_message("user", user_message)
+                        gw_session.add_message("assistant", result_content)
+                        await self._session_mgr._persist_session(gw_session)
+                    # 先发 stream 创建前端消息气泡，再发 complete 结束
+                    await _safe_send({
+                        "type": "stream",
+                        "content": result_content,
+                    })
+                    await _safe_send({
+                        "type": "complete",
+                        "content": result_content,
+                        "tool_calls": 1,
+                        "tokens": 0,
+                        "duration_ms": 0,
+                    })
+                    if lock:
+                        lock.release()
+                    return
+
                 result = await asyncio.wait_for(
                     self._engine.run_turn(
                         user_message,
@@ -1072,6 +1096,16 @@ class WebServer:
 
         if not message:
             return web.json_response({"error": "message required"}, status=400)
+
+        # Fast path: AI Company 控制命令直接执行，不经过 LLM
+        _company_result = await self._try_company_shortcut(message)
+        if _company_result is not None:
+            return web.json_response({
+                "content": _company_result,
+                "tool_calls": 1,
+                "tokens": 0,
+                "duration_ms": 0,
+            })
 
         if not self._engine:
             return web.json_response({"error": "engine not initialized"}, status=500)
@@ -2519,6 +2553,23 @@ class WebServer:
         return web.json_response({"error": "task not found or already running"}, status=404)
 
     # ── AI Company API ──────────────────────────────────────────
+
+    async def _try_company_shortcut(self, message: str):
+        """AI Company 控制命令快捷路径，匹配则直接执行返回结果，不经过 LLM."""
+        msg = message.strip().lower()
+        _start_kw = ("启动待命", "待命模式", "启动ai公司", "启动一人公司", "团队上线", "让团队上线", "standby", "ai公司技能")
+        _stop_kw = ("停止待命", "团队下线", "关闭ai公司", "停止ai公司", "stop standby", "暂停ai公司")
+        if any(kw in msg for kw in _start_kw):
+            logger.info("Company shortcut: start (msg=%s)", msg[:30])
+            from agent.tools.company_tools import company_standby
+            result = await company_standby()
+            return result.replace("[FINAL_ANSWER]", "")
+        if any(kw in msg for kw in _stop_kw):
+            logger.info("Company shortcut: stop (msg=%s)", msg[:30])
+            from agent.tools.company_tools import company_stop_standby
+            result = await company_stop_standby()
+            return result.replace("[FINAL_ANSWER]", "")
+        return None
 
     async def _company_standby(self, request):
         """POST /api/company/standby — start AI Company standby mode."""

@@ -199,7 +199,7 @@ async def company_standby(is_recovery: bool = False) -> str:
     global _standby_company
 
     if _standby_company is not None:
-        return "AI Company 待命模式已在运行中 🫡"
+        return "[FINAL_ANSWER]AI Company 待命模式已在运行中"
 
     router, config = _build_router()
     if not router:
@@ -251,13 +251,24 @@ async def company_standby(is_recovery: bool = False) -> str:
         logger.warning("保存 company_standby_enabled 失败: %s", e)
 
     bot_count = 0
+    bot_lines: list[str] = []
     if company._feishu_bridge:
         bot_count = len(company._feishu_bridge._adapters)
+        for role_name, adapter in company._feishu_bridge._adapters.items():
+            bot = getattr(adapter, "_bot_user", None)
+            display = getattr(bot, "display_name", "") if bot else ""
+            if display:
+                bot_lines.append(f"  - {role_name}: {display}")
+            else:
+                bot_lines.append(f"  - {role_name}: (未获取到名称)")
+
+    bots_info = "\n".join(bot_lines) if bot_lines else "  (无)"
 
     return (
-        f"AI Company 待命模式已启动 🫡\n\n"
+        f"[FINAL_ANSWER]AI Company 待命模式已启动\n\n"
         f"飞书 Bot 已连接: {bot_count} 个\n"
-        f"各角色已在飞书群报到，等待老板指令。\n\n"
+        f"{bots_info}\n\n"
+        f"各角色已在飞书群报到，等待指令。\n"
         f"不 @人时 PM 回复，@某角色时该角色回复。\n"
         f"下达开发任务时自动启动流水线。"
     )
@@ -279,7 +290,7 @@ async def company_stop_standby() -> str:
     except Exception as e:
         logger.warning("保存 company_standby_enabled 失败: %s", e)
 
-    return "AI Company 待命模式已停止 👋"
+    return "[FINAL_ANSWER]AI Company 待命模式已停止，团队已下线。"
 
 
 def register_company_tools(registry: Any) -> None:

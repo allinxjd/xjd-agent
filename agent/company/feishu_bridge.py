@@ -403,7 +403,7 @@ class FeishuBridge(ChatBridge):
             logger.warning("mirror_to_feishu: bridge 未启动，丢弃消息 [%s] %s", msg.sent_from, msg.cause_by)
             return
 
-        if msg.cause_by in ("HumanDirective", "RoleCheckin"):
+        if msg.cause_by in ("HumanDirective", "RoleCheckin", "StatusUpdate"):
             return
 
         role_name = msg.sent_from

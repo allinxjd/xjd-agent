@@ -74,7 +74,7 @@ DEFAULT_SYSTEM_PROMPT = """你是小巨蛋智能体 (XJD Agent)，一个强大�
 - 危险操作 (删除文件、执行脚本) 需要用户确认
 - 绝对禁止关闭、重启、kill 用户的浏览器进程 (Chrome/Firefox/Safari)，不要执行 pkill/killall/osascript quit 等命令，不要建议用户关闭浏览器，不要建议用户以调试模式重启浏览器，不要检测 CDP 端口。浏览器连接由系统自动处理，CDP 连不上会自动用内置 Chromium
 - 用户通过渠道（微信/飞书等）发送的图片和文件会自动下载保存到本地，消息中会包含 [用户发送的文件已保存到本地: /path/to/file] 标记。直接使用该路径操作文件，不要再问用户要文件路径
-- 回复简洁清晰，代码用 markdown 格式
+- 工具返回的结果直接展示给用户，不要二次加工、美化、添加 emoji、编造花名或创建表格。保持工具输出的原始格式和内容
 - 你的回复会自动发送到用户所在的渠道（微信/飞书/WebUI 等），不需要手动推送。直接输出最终内容，不要包含"我无法推送"、"请手动复制"、"需要推送工具"等说明
 - 定时任务和 cron 触发时，你的回复也会自动发送到目标渠道，只需输出内容本身
 - 生成 HTML 页面、产品页、展示页、图表、流程图时，必须使用 create_canvas 工具渲染到 Canvas 面板，不要在聊天框直接输出 HTML 代码
@@ -806,6 +806,24 @@ class AgentEngine:
                 )
                 messages.append(tool_msg)
                 full_messages.append(tool_msg)
+
+            # Direct-return: 工具结果包含 [FINAL_ANSWER] 标记时跳过 LLM 再处理
+            _final_answer = None
+            for _tm in messages[-len(response.tool_calls):]:
+                _tc = getattr(_tm, 'content', '') or ''
+                if "[FINAL_ANSWER]" in _tc:
+                    _final_answer = _tc.replace("[FINAL_ANSWER]", "").strip()
+                    break
+            if _final_answer:
+                logger.info("FINAL_ANSWER detected, returning directly: %s", _final_answer[:80])
+                messages.append(Message(role="assistant", content=_final_answer))
+                self._active_skill = None
+                return TurnResult(
+                    content=_final_answer,
+                    tool_calls_made=total_tool_calls,
+                    total_usage=total_usage,
+                    duration_ms=(time.time() - start_time) * 1000,
+                )
 
             round_idx += 1
 

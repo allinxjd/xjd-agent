@@ -112,6 +112,24 @@ class Action:
         boss_title = getattr(role, '_boss_title', '老板')
         if "{boss_title}" in prompt:
             prompt = prompt.replace("{boss_title}", boss_title)
+        if "{chat_style}" in prompt:
+            locale = getattr(role, '_locale', None)
+            chat_style = ""
+            if locale:
+                chat_style = locale.get("chat_style", "")
+            if not chat_style:
+                chat_style = (
+                    "## 回复规则\n"
+                    f"- 称呼用户为「{boss_title}」\n"
+                    "- 仔细阅读对话记录，延续之前的讨论，不重复已回答的问题\n"
+                    "- 遇到模糊需求追问具体细节\n"
+                    "- 遇到风险或需求冲突主动提示\n"
+                    "- 有专业判断，会提出建议，但尊重客户最终决定\n"
+                    "- 讨论中可以主动提出方案草案，让客户确认后再启动开发"
+                )
+            else:
+                chat_style = chat_style.replace("{boss_title}", boss_title)
+            prompt = prompt.replace("{chat_style}", chat_style)
 
         # 确保 prompt 包含项目工作目录（Reviewer/QA 的 context 可能不含此信息）
         if "## 项目工作目录\n" not in prompt and getattr(role, '_workspace', None):
@@ -590,7 +608,8 @@ WRITE_CODE = Action(
         "- 绝对不要用 run_terminal 写文件（cat >、echo >、tee、heredoc 等）\n"
         "- write_file 的 file_path 必须是完整绝对路径，以项目工作目录开头\n"
         "- 如果上下文包含「项目工作目录」，所有文件操作必须在该目录下\n"
-        "- 代码写入 src/，配置文件放项目根目录\n"
+        "- 后端代码写入 src/，前端代码按设计方案指定的目录（如 miniapp/、web/）\n"
+        "- 配置文件放项目根目录\n"
         "- 如果项目目录下有 .port 文件，必须读取其中的端口号作为服务监听端口，不要自己选端口\n"
         "- 如果项目目录下有 .env 文件，用 os.environ 或 dotenv 读取配置\n"
         "- 绝对不要写入隐藏目录（如 .xjd-agent/）\n\n"
@@ -764,16 +783,7 @@ CHAT_REPLY = Action(
     use_cheap_model=True,
     prompt_template=(
         "你是项目产品经理，在飞书群里与客户沟通。\n\n"
-        "## 回复规则\n"
-        "- 称呼用户为「{boss_title}」\n"
-        "- 回复简洁直接，1-2 句话，不寒暄不废话\n"
-        "- 结论先行，有需要再补充细节\n"
-        "- 不用 emoji，不用感叹号堆砌\n"
-        "- 仔细阅读对话记录，延续之前的讨论，不重复已回答的问题\n"
-        "- 遇到模糊需求追问具体细节\n"
-        "- 遇到风险或需求冲突主动提示\n"
-        "- 有专业判断，会提出建议，但尊重客户最终决定\n"
-        "- 讨论中可以主动提出方案草案，让客户确认后再启动开发\n\n"
+        "{chat_style}\n\n"
         "## 身份\n"
         "- 7×24 在线，不存在「下班」「明天再说」\n"
         "- 不用时间推脱工作\n\n"
