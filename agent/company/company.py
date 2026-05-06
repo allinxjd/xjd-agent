@@ -929,8 +929,12 @@ class Company:
             for role in self._env.roles.values():
                 if not role.has_pending:
                     continue
-                _stage_cause = role._inbox[0].cause_by if role._inbox else ""
-                _stage_name = _STAGE_LABELS.get(_stage_cause, f"{role.name} 工作中")
+                # 用 role 即将执行的 action name 确定阶段名（比 inbox cause_by 更准确）
+                _next_action = role.actions[role._state + 1].name if (role.actions and role._state + 1 < len(role.actions)) else ""
+                _stage_name = _STAGE_LABELS.get(_next_action, "")
+                if not _stage_name:
+                    _stage_cause = role._inbox[0].cause_by if role._inbox else ""
+                    _stage_name = _STAGE_LABELS.get(_stage_cause, f"{role.name} 工作中")
                 _stage_label = f"[{_done_count + 1}/{_total_stages}] {_stage_name}..."
                 status_msg = CompanyMessage(
                     content=_stage_label,
