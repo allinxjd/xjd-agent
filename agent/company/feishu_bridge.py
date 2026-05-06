@@ -148,17 +148,48 @@ class FeishuBridge(ChatBridge):
         """定期检查各 Bot 连接健康状态，重启掉线的 Bot，补启未启动的 Bot.
 
         除了检查进程存活，还检查消息活跃度 — 静默断连时强制重连并补漏消息。
+        同时定期轮询 REST API 补漏（飞书群消息只推送给被@的Bot）。
         """
         import asyncio
         import time as _time
         from gateway.platforms.feishu import FeishuAdapter
 
         _ACTIVITY_TIMEOUT = 300  # 5 min
+        _POLL_INTERVAL = 10  # 每 10 秒轮询一次
+        _last_poll_ts = _time.time()
+        _health_check_counter = 0
 
         while self._started:
-            await asyncio.sleep(60)
+            await asyncio.sleep(_POLL_INTERVAL)
             if not self._started:
                 break
+
+            # --- 定期轮询 REST API 补漏（核心：解决群消息不推送问题）---
+            now = _time.time()
+            adapter = next(iter(self._adapters.values()), None)
+            if adapter and self._group_chat_id:
+                try:
+                    missed = await adapter.fetch_missed_messages(
+                        self._group_chat_id, _last_poll_ts - 5
+                    )
+                    for event_dict in missed:
+                        msg_id = event_dict.get("message", {}).get("message_id", "")
+                        if msg_id in self._seen_msg_ids:
+                            continue
+                        self._seen_msg_ids[msg_id] = True
+                        try:
+                            await adapter._handle_message_event(event_dict)
+                        except Exception as e:
+                            logger.warning("飞书轮询消息处理失败 [%s]: %s", msg_id, e)
+                    _last_poll_ts = now
+                except Exception as e:
+                    logger.debug("飞书轮询异常: %s", e)
+
+            # --- 健康检查（每 60 秒一次）---
+            _health_check_counter += 1
+            if _health_check_counter < 6:
+                continue
+            _health_check_counter = 0
 
             for role_name, adapter in list(self._adapters.items()):
                 feishu_proc = getattr(adapter, '_feishu_proc', None)
@@ -293,7 +324,7 @@ class FeishuBridge(ChatBridge):
             remaining = remaining[cut:].lstrip()
         return chunks
 
-    _DOC_ACTIONS = {"WritePRD", "WriteDesign", "CodeReview", "WriteTest", "DeployPlan"}
+    _DOC_ACTIONS = {"WritePRD", "WriteDesign", "CodeReview", "WriteTest", "DeployPlan", "StageFile"}
     _FILE_THRESHOLD = 500
 
     @staticmethod
@@ -329,6 +360,7 @@ class FeishuBridge(ChatBridge):
     async def mirror_to_feishu(self, msg: CompanyMessage) -> None:
         """将 CompanyMessage 通过对应角色的 Bot 发送到飞书群."""
         if not self._started:
+            logger.warning("mirror_to_feishu: bridge 未启动，丢弃消息 [%s] %s", msg.sent_from, msg.cause_by)
             return
 
         if msg.cause_by == "HumanDirective":
@@ -340,14 +372,44 @@ class FeishuBridge(ChatBridge):
         if not adapter:
             adapter = next(iter(self._adapters.values()), None)
             if not adapter:
+                logger.warning("mirror_to_feishu: 无可用 adapter，丢弃消息 [%s] %s", role_name, msg.cause_by)
                 return
 
         content = msg.content
         content = self._clean_llm_artifacts(content)
 
-        if len(content) > self._FILE_THRESHOLD and msg.cause_by != "ChatReply" and msg.cause_by != "RoleCheckin":
-            filename = self._action_to_filename(msg.cause_by)
-            file_data = content.encode("utf-8")
+        # 原型/UI 截图：发送为图片
+        if msg.cause_by == "StageImage" and msg.metadata.get("image_path"):
+            from pathlib import Path as _P
+            img_path = _P(msg.metadata["image_path"])
+            if img_path.exists():
+                try:
+                    from gateway.platforms.base import OutgoingMessage, MessageType
+                    img_data = img_path.read_bytes()
+                    image_key = await adapter._upload_image(img_data)
+                    out = OutgoingMessage(
+                        chat_id=self._group_chat_id,
+                        message_type=MessageType.IMAGE,
+                        media_url=image_key,
+                    )
+                    await adapter.send_message(out)
+                    return
+                except Exception as e:
+                    logger.warning("飞书图片发送失败 [%s]，降级为文件: %r", role_name, e)
+
+        force_file = msg.cause_by == "StageFile"
+        if (force_file or len(content) > self._FILE_THRESHOLD) and msg.cause_by != "ChatReply" and msg.cause_by != "RoleCheckin":
+            filename = msg.metadata.get("filename") or self._action_to_filename(msg.cause_by)
+            file_path = msg.metadata.get("file_path")
+            if file_path:
+                from pathlib import Path as _P
+                _fp = _P(file_path)
+                if _fp.exists():
+                    file_data = _fp.read_bytes()
+                else:
+                    file_data = content.encode("utf-8")
+            else:
+                file_data = content.encode("utf-8")
             try:
                 from gateway.platforms.base import OutgoingMessage, MessageType
                 out = OutgoingMessage(

@@ -384,6 +384,7 @@ class FeishuAdapter(BasePlatformAdapter):
         self._running = True
         self._event_loop = asyncio.get_event_loop()
         self._last_sdk_activity = _time.time()
+        self._active_chat_ids: set[str] = set()
 
         event_queue: multiprocessing.Queue = multiprocessing.Queue()
         self._feishu_queue = event_queue
@@ -421,8 +422,12 @@ class FeishuAdapter(BasePlatformAdapter):
                 if event_dict is None:
                     continue
                 if event_dict.get("__heartbeat__"):
+                    self._last_sdk_activity = _time.time()
                     continue
                 self._last_sdk_activity = _time.time()
+                chat_id = event_dict.get("message", {}).get("chat_id", "")
+                if chat_id:
+                    self._active_chat_ids.add(chat_id)
                 try:
                     await self._handle_message_event(event_dict)
                 except Exception as e:
@@ -432,30 +437,46 @@ class FeishuAdapter(BasePlatformAdapter):
 
         async def _watchdog():
             """每 30 秒检查子进程存活 + 消息活跃度，静默断连时强制重启."""
-            _ACTIVITY_TIMEOUT = 300  # 5 min no messages → assume silent disconnect
+            _ACTIVITY_TIMEOUT = 300  # 5 min no heartbeat → assume silent disconnect
             while self._running:
                 await asyncio.sleep(30)
                 if not self._running:
                     break
+                need_recovery = False
+                recovery_since = 0.0
                 if self._feishu_proc and not self._feishu_proc.is_alive():
                     logger.warning("飞书 SDK 子进程已退出 (exit=%s)，重启中...",
                                    self._feishu_proc.exitcode)
                     self._last_restart_reason = "process_dead"
+                    recovery_since = self._last_sdk_activity
                     _start_subprocess()
+                    need_recovery = True
                 elif self._feishu_proc and self._feishu_proc.is_alive():
                     idle = _time.time() - self._last_sdk_activity
                     if idle > _ACTIVITY_TIMEOUT:
                         logger.warning(
-                            "飞书 SDK 静默超时 (%.0fs 无消息)，疑似 WebSocket 断连，强制重启子进程",
+                            "飞书 SDK 静默超时 (%.0fs 无心跳)，疑似 WebSocket 断连，强制重启子进程",
                             idle,
                         )
                         self._last_restart_reason = "activity_timeout"
+                        recovery_since = self._last_sdk_activity
                         self._feishu_proc.terminate()
                         self._feishu_proc.join(timeout=3)
                         if self._feishu_proc.is_alive():
                             self._feishu_proc.kill()
                         _start_subprocess()
                         self._last_sdk_activity = _time.time()
+                        need_recovery = True
+
+                if need_recovery and self._active_chat_ids and recovery_since > 0:
+                    await asyncio.sleep(3)
+                    for cid in list(self._active_chat_ids):
+                        try:
+                            missed = await self.fetch_missed_messages(cid, recovery_since)
+                            for evt in missed:
+                                await self._handle_message_event(evt)
+                        except Exception as e:
+                            logger.warning("飞书断连补漏失败 (chat=%s): %s", cid, e)
 
         self._ws_watchdog_task = asyncio.create_task(_watchdog())
 
@@ -625,6 +646,23 @@ class FeishuAdapter(BasePlatformAdapter):
         if result.get("code") != 0:
             raise RuntimeError(f"飞书文件上传失败: {result.get('msg', '')}")
         return result["data"]["file_key"]
+
+    async def _upload_image(self, image_data: bytes) -> str:
+        """上传图片到飞书, 返回 image_key."""
+        client = await self._ensure_http_client()
+        token = await self._get_tenant_token()
+
+        import io
+        resp = await client.post(
+            "https://open.feishu.cn/open-apis/im/v1/images",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"image_type": "message"},
+            files={"image": ("screenshot.png", io.BytesIO(image_data), "image/png")},
+        )
+        result = resp.json()
+        if result.get("code") != 0:
+            raise RuntimeError(f"飞书图片上传失败: {result.get('msg', '')}")
+        return result["data"]["image_key"]
 
     # ── 安全: 签名验证 + 加密解密 + 事件去重 ──────────────
 

@@ -371,27 +371,167 @@ class Company:
         self._waiting_approval = None
         return (True, "")
 
+    async def _save_and_send_prototypes(
+        self, content: str, project_dir: Optional[Path], task: "CompanyTask", stage_key: str
+    ) -> None:
+        """解析 WritePrototype/WriteUIDesign 输出，保存 HTML，渲染 PNG，生成专业原型报告。"""
+        import re as _re
+        import base64 as _b64
+        if not project_dir:
+            return
+
+        subdir = "prototypes" if stage_key == "Prototype" else "ui-designs"
+        target_dir = project_dir / subdir
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        # 解析 HTML 块：支持 ```html ... ``` 格式
+        html_blocks = _re.findall(r'```html\s*\n(.*?)```', content, _re.DOTALL)
+        if not html_blocks:
+            if '<html' in content.lower() or '<!doctype' in content.lower():
+                html_blocks = [content]
+
+        if not html_blocks:
+            notify = CompanyMessage(
+                content=content[:2000],
+                cause_by=f"Write{stage_key}",
+                sent_from="PM",
+                task_id=task.task_id,
+            )
+            await self._env.publish(notify)
+            return
+
+        # 提取页面名称和描述
+        sections = _re.split(r'```html\s*\n.*?```', content, flags=_re.DOTALL)
+        page_info: list[dict] = []
+        for i, html in enumerate(html_blocks):
+            header_text = sections[i] if i < len(sections) else ""
+            name_match = _re.search(r'#{1,3}\s+(.+?)(?:\n|$)', header_text)
+            name = name_match.group(1).strip() if name_match else f"页面 {i+1}"
+            desc_lines = [l.strip() for l in header_text.strip().split('\n') if l.strip() and not l.strip().startswith('#')]
+            desc = '\n'.join(desc_lines[-3:]) if desc_lines else ""
+            safe_name = _re.sub(r'[^\w一-鿿-]', '-', name).strip('-')[:50] or f"page-{i+1}"
+            file_path = target_dir / f"{safe_name}.html"
+            file_path.write_text(html.strip(), encoding="utf-8")
+            page_info.append({"name": name, "desc": desc, "file": file_path, "safe_name": safe_name})
+
+        logger.info("原型 HTML 已保存: %d 个文件到 %s", len(page_info), target_dir)
+
+        # 渲染 PNG 截图
+        screenshots: dict[str, Path] = {}
+        try:
+            from agent.company.prototype_renderer import render_html_to_image
+            for info in page_info:
+                img = await render_html_to_image(info["file"])
+                if img:
+                    screenshots[info["safe_name"]] = img
+        except ImportError:
+            logger.info("Playwright 不可用，原型报告将不含截图")
+        except Exception as e:
+            logger.warning("截图渲染失败: %s", e)
+
+        # 生成专业原型报告 HTML（自包含，截图 base64 嵌入）
+        report_path = await self._generate_prototype_report(
+            page_info, screenshots, target_dir, stage_key
+        )
+
+        # 发送报告文件到飞书
+        report_msg = CompanyMessage(
+            content=f"## {stage_key} 原型报告已生成（共 {len(page_info)} 页）\n包含产品流程图、功能脑图和各页面截图。\n请用 Typora 或 VS Code 打开查看。",
+            cause_by="StageFile",
+            sent_from="PM",
+            task_id=task.task_id,
+            metadata={"file_path": str(report_path), "filename": report_path.name},
+        )
+        await self._env.publish(report_msg)
+
+    async def _generate_prototype_report(
+        self, page_info: list[dict], screenshots: dict[str, "Path"],
+        target_dir: "Path", stage_key: str
+    ) -> "Path":
+        """生成专业原型图 Markdown 报告（截图 base64 嵌入 + Mermaid 流程图/脑图）。"""
+        import base64 as _b64
+        from datetime import datetime
+        label = "原型图" if stage_key == "Prototype" else "UI 设计稿"
+
+        lines: list[str] = []
+        lines.append(f"# {label}设计文档\n")
+        lines.append(f"> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}  ")
+        lines.append(f"> 页面数量: {len(page_info)}  ")
+        lines.append(f"> 视口: 375 x 812 (移动端)\n")
+
+        lines.append("---\n")
+        lines.append("## 产品流程图\n")
+        lines.append("```mermaid")
+        lines.append("flowchart TD")
+        for i, info in enumerate(page_info):
+            safe_label = info["name"].replace('"', "'")
+            lines.append(f'    P{i}["{safe_label}"]')
+        for i in range(len(page_info) - 1):
+            lines.append(f"    P{i} --> P{i+1}")
+        lines.append("```\n")
+
+        lines.append("## 功能模块脑图\n")
+        lines.append("```mermaid")
+        lines.append("mindmap")
+        lines.append(f"  root(({label}))")
+        for info in page_info:
+            safe_name = info["name"].replace("(", "（").replace(")", "）")
+            lines.append(f"    {safe_name}")
+            if info.get("desc"):
+                for feat in info["desc"].split('\n')[:3]:
+                    feat = feat.strip()
+                    if feat:
+                        feat = feat.replace("(", "（").replace(")", "）")
+                        lines.append(f"      {feat}")
+        lines.append("```\n")
+
+        lines.append("---\n")
+        lines.append("## 页面详情\n")
+        for i, info in enumerate(page_info):
+            lines.append(f"### {i+1}. {info['name']}\n")
+            if info.get("desc"):
+                lines.append(f"{info['desc']}\n")
+            if info["safe_name"] in screenshots:
+                img_path = screenshots[info["safe_name"]]
+                img_data = img_path.read_bytes()
+                b64 = _b64.b64encode(img_data).decode()
+                lines.append(f"![{info['name']}](data:image/png;base64,{b64})\n")
+            else:
+                lines.append("*（截图未生成，请打开对应 HTML 文件查看）*\n")
+            lines.append(f"源文件: `{info['file'].name}`\n")
+            lines.append("---\n")
+
+        report_path = target_dir / f"{stage_key.lower()}-report.md"
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+        return report_path
+
     async def _send_stage_screenshots(
         self, stage_key: str, project_dir: Optional[Path], task: "CompanyTask"
     ) -> None:
-        """渲染原型/UI截图并发送给用户。"""
+        """渲染原型/UI截图并发送给用户（兼容旧调用）。"""
         if not project_dir:
             return
         subdir = "prototypes" if stage_key == "Prototype" else "ui-designs"
+        target_dir = project_dir / subdir
+        if not target_dir.exists():
+            return
+
+        screenshots: list[Path] = []
         try:
             from agent.company.prototype_renderer import render_all_prototypes
             screenshots = await render_all_prototypes(project_dir, subdir)
             if screenshots:
-                img_list = "\n".join(f"- {p.name}" for p in screenshots)
-                notify = CompanyMessage(
-                    content=f"已生成 {len(screenshots)} 张{stage_key}截图：\n{img_list}\n\n截图保存在 {project_dir / subdir} 目录",
-                    cause_by="StatusUpdate",
-                    sent_from="PM",
-                    task_id=task.task_id,
-                )
-                await self._env.publish(notify)
+                for img_path in screenshots:
+                    img_msg = CompanyMessage(
+                        content=f"[截图] {img_path.stem}",
+                        cause_by="StageImage",
+                        sent_from="PM",
+                        task_id=task.task_id,
+                        metadata={"image_path": str(img_path), "filename": img_path.name},
+                    )
+                    await self._env.publish(img_msg)
         except ImportError:
-            logger.info("Playwright 不可用，跳过截图渲染，用户可直接查看 HTML 文件")
+            logger.info("Playwright 不可用，跳过截图渲染")
         except Exception as e:
             logger.warning("截图渲染失败: %s", e)
 
@@ -706,6 +846,7 @@ class Company:
                     if result_msg.cause_by == "WritePRD":
                         stages_done["PRD"] = True
                         stage_outputs["PRD"] = result_msg.content
+                        await self._env.publish(result_msg)
                         # --- Approval gate ---
                         _stage_def = self._pipeline.stage_for_action("WritePRD")
                         if _stage_def and _stage_def.requires_approval:
@@ -722,9 +863,10 @@ class Company:
                     elif result_msg.cause_by == "WritePrototype":
                         stages_done["Prototype"] = True
                         stage_outputs["Prototype"] = result_msg.content
+                        _proj_dir = self._extract_workspace_from_requirement(requirement)
+                        await self._save_and_send_prototypes(result_msg.content, _proj_dir, task, "Prototype")
                         _stage_def = self._pipeline.stage_for_action("WritePrototype")
                         if _stage_def and _stage_def.requires_approval:
-                            _proj_dir = self._extract_workspace_from_requirement(requirement)
                             _approved, _feedback = await self._wait_for_approval("Prototype", task, _proj_dir)
                             if not _approved:
                                 stages_done["Prototype"] = False
@@ -737,9 +879,10 @@ class Company:
                     elif result_msg.cause_by == "WriteUIDesign":
                         stages_done["UIDesign"] = True
                         stage_outputs["UIDesign"] = result_msg.content
+                        _proj_dir = self._extract_workspace_from_requirement(requirement)
+                        await self._save_and_send_prototypes(result_msg.content, _proj_dir, task, "UIDesign")
                         _stage_def = self._pipeline.stage_for_action("WriteUIDesign")
                         if _stage_def and _stage_def.requires_approval:
-                            _proj_dir = self._extract_workspace_from_requirement(requirement)
                             _approved, _feedback = await self._wait_for_approval("UIDesign", task, _proj_dir)
                             if not _approved:
                                 stages_done["UIDesign"] = False
@@ -753,6 +896,7 @@ class Company:
                         stages_done["PRD"] = True
                         stages_done["Design"] = True
                         stage_outputs["Design"] = result_msg.content
+                        await self._env.publish(result_msg)
                         # --- Approval gate for Design ---
                         _stage_def = self._pipeline.stage_for_action("WriteDesign")
                         if _stage_def and _stage_def.requires_approval:
@@ -1482,8 +1626,13 @@ class Company:
         except Exception as e:
             logger.error("QuickTask 执行异常: %s", e)
         finally:
+            remaining = self._env._pipeline_user_queue or []
             self._pipeline_running = False
             self._env._pipeline_user_queue = None
+            for m in remaining:
+                for role in self._env.roles.values():
+                    if m.cause_by in role.watch_actions:
+                        role.put_message(m)
 
     _ROLE_NICK_MAP: dict[str, list[str]] = None
     _ROLE_TOPIC_KEYWORDS: dict[str, list[str]] = None
@@ -1536,6 +1685,10 @@ class Company:
                 for m in collected:
                     self._standby_history.append((m.sent_from, m.content))
                     self._store.save_message(m)
+
+                if getattr(self, '_waiting_approval', None):
+                    self._pipeline_user_msgs.extend(collected)
+                    return
 
                 _confirm_only_prefixes = (
                     "开干", "可以", "没问题", "OK", "ok", "好的", "行",
@@ -1632,10 +1785,13 @@ class Company:
                                 "当前团队正在开发中（pipeline 运行中）。\n\n"
                                 f"## 对话记录\n" + "\n".join(history_lines)
                             )
-                            reply_msg = await responder._act(CHAT_REPLY, chat_context)
-                            self._standby_history.append((responder.name, reply_msg.content))
-                            self._store.save_message(reply_msg)
-                            await self._env.publish(reply_msg)
+                            try:
+                                reply_msg = await responder._act(CHAT_REPLY, chat_context)
+                                self._standby_history.append((responder.name, reply_msg.content))
+                                self._store.save_message(reply_msg)
+                                await self._env.publish(reply_msg)
+                            except Exception as e:
+                                logger.error("Pipeline 中 ChatReply 失败 [%s]: %s", responder.name, e)
             return
 
         pm_role = self._env.roles.get("PM")
@@ -2009,8 +2165,13 @@ class Company:
         except Exception as e:
             logger.error("Pipeline 执行异常: %s", e)
         finally:
+            remaining = self._env._pipeline_user_queue or []
             self._pipeline_running = False
             self._env._pipeline_user_queue = None
+            for m in remaining:
+                for role in self._env.roles.values():
+                    if m.cause_by in role.watch_actions:
+                        role.put_message(m)
             self._update_project_status(pdir, status)
             import re as _re
             access_url = getattr(self, '_last_deploy_url', '')
@@ -2114,6 +2275,19 @@ class Company:
                     "Test": "FixComplete",
                     "Deploy": "FixComplete",
                 }
+                # 设置 PM 的 action 指针到正确位置
+                action_name_map = {
+                    "PRD": "WritePRD",
+                    "Prototype": "WritePrototype",
+                    "UIDesign": "WriteUIDesign",
+                    "Design": "WriteDesign",
+                }
+                target_action = action_name_map.get(stage_key)
+                if target_action and role.actions:
+                    for idx, a in enumerate(role.actions):
+                        if a.name == target_action:
+                            role._state = idx - 1
+                            break
                 kick_msg = CompanyMessage(
                     content=kick_content,
                     cause_by=cause_map.get(stage_key, "FixComplete"),

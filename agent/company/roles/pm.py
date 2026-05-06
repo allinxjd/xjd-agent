@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from agent.company.action import WRITE_DESIGN, WRITE_PRD
+from agent.company.action import WRITE_DESIGN, WRITE_PRD, WRITE_PROTOTYPE, WRITE_UI_DESIGN
 from agent.company.role import CompanyRole
 
 if TYPE_CHECKING:
@@ -44,7 +44,8 @@ def create_pm(locale: Optional[CompanyLocale] = None) -> CompanyRole:
         backstory=backstory,
         model_override=locale.get("roles.pm.model", None) if locale else None,
         watch_actions=["UserRequirement", "HumanDirective"],
-        actions=[WRITE_PRD, WRITE_DESIGN],
+        actions=[WRITE_PRD, WRITE_PROTOTYPE, WRITE_UI_DESIGN, WRITE_DESIGN],
+        max_actions_per_run=1,
         tools_filter=[],
         karpathy_constraints=karpathy,
     )

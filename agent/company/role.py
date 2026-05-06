@@ -39,6 +39,7 @@ class CompanyRole(AgentRole):
     watch_actions: list[str] = field(default_factory=list)
     actions: list[Action] = field(default_factory=list)
     react_mode: str = "by_order"
+    max_actions_per_run: int = 0
     karpathy_constraints: list[str] = field(default_factory=list)
     feishu_bot_app_id: str = ""
 
@@ -136,7 +137,8 @@ class CompanyRole(AgentRole):
 
         original_context = "\n\n---\n\n".join(m.content for m in messages)
         context = original_context
-        self._state = -1
+        if self._state < 0:
+            self._state = -1
         results: list[CompanyMessage] = []
 
         while True:
@@ -154,6 +156,9 @@ class CompanyRole(AgentRole):
                 )
             results.append(msg)
             context = f"{original_context}\n\n---\n\n## {action.name} 执行结果\n{msg.content}"
+
+            if self.max_actions_per_run and len(results) >= self.max_actions_per_run:
+                break
 
             if any(m.cause_by == "HumanDirective" for m in self._inbox):
                 logger.info("[%s] 检测到新用户消息，暂停后续 action", self.name)

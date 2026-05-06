@@ -108,7 +108,7 @@ class Action:
     async def run(self, context: str, role: CompanyRole) -> str:
         from agent.core.engine import AgentEngine
 
-        prompt = self.prompt_template.format(context=context) if self.prompt_template else context
+        prompt = self.prompt_template.replace("{context}", context) if self.prompt_template else context
 
         # 确保 prompt 包含项目工作目录（Reviewer/QA 的 context 可能不含此信息）
         if "## 项目工作目录\n" not in prompt and getattr(role, '_workspace', None):
@@ -390,15 +390,35 @@ WRITE_UI_DESIGN = Action(
         "- 加载态：skeleton 骨架屏（animate-pulse 灰色块）\n"
         "- 空状态：居中插图(SVG) + 说明文案 + 操作按钮\n"
         "- Toast/提示：success(绿) / error(红) / info(蓝) 三种样式\n\n"
-        "## 2.4 交互标注\n"
-        "每个页面 HTML 底部添加 <!-- INTERACTIONS --> 注释块：\n"
+        "## 2.4 交互设计（必须完整输出）\n"
+        "每个页面 HTML 底部添加 <!-- INTERACTIONS --> 注释块，包含以下全部内容：\n"
         "```html\n"
         "<!-- INTERACTIONS\n"
-        "- 页面转场: push(从右滑入) / modal(从底弹出) / fade\n"
+        "[页面跳转]\n"
+        "- 点击XX → 跳转到 YY页面 (push/modal/replace)\n"
+        "- 返回按钮 → 返回上一页 (pop)\n"
+        "\n"
+        "[转场动效]\n"
+        "- 页面进入: push(从右滑入) / modal(从底弹出) / fade\n"
+        "- 页面退出: pop(向右滑出) / dismiss(向下收起)\n"
+        "\n"
+        "[组件交互]\n"
         "- 按钮点击: scale(0.95) + 150ms + primary-dark\n"
         "- 列表加载: 下拉刷新(pull-to-refresh) + 触底加载更多\n"
         "- 弹窗出现: fade-in + scale(0.95→1) + 250ms ease-enter\n"
-        "- 手势: 左滑删除(列表项) / 长按拖拽排序\n"
+        "- 输入框聚焦: 键盘弹起 + 页面上推避让\n"
+        "\n"
+        "[手势操作]\n"
+        "- 左滑: 删除/归档(列表项)\n"
+        "- 长按: 拖拽排序 / 弹出操作菜单\n"
+        "- 双指缩放: 图片查看\n"
+        "- 边缘右滑: 返回上一页\n"
+        "\n"
+        "[状态变化]\n"
+        "- 空态: 居中插图 + 引导文案 + 操作按钮\n"
+        "- 加载态: skeleton骨架屏 / spinner\n"
+        "- 错误态: 错误提示 + 重试按钮\n"
+        "- 成功态: 对勾动画 + 自动跳转(1.5s)\n"
         "-->\n"
         "```\n\n"
         "# ═══════════════════════════════════════\n"
