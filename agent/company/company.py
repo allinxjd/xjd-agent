@@ -1549,6 +1549,10 @@ class Company:
 
         interrupted = self._detect_interrupted_projects()
         if interrupted:
+            # 设置最近中断项目为当前活跃项目，防止 PM 丢失上下文
+            first_proj_name, first_proj_dir, _, _ = interrupted[0]
+            self._active_project_name = first_proj_name
+            self._switched_project_dir = first_proj_dir
             for proj_name, proj_dir, done, pending in interrupted:
                 done_str = "/".join(done) if done else "无"
                 pending_str = "/".join(pending)
@@ -1708,6 +1712,31 @@ class Company:
             for d in dirs:
                 if d.is_dir() and (d / ".project.json").exists():
                     return d
+            return None
+        except Exception:
+            return None
+
+    def _find_resumable_project(self) -> Optional[Path]:
+        """找到最近的可恢复项目（status=in_progress 且有未完成阶段）."""
+        import json as _rj
+        try:
+            projects_dir = get_projects_dir()
+            if not projects_dir.exists():
+                return None
+            dirs = sorted(projects_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+            for d in dirs:
+                if not d.is_dir():
+                    continue
+                meta_file = d / ".project.json"
+                if not meta_file.exists():
+                    continue
+                try:
+                    meta = _rj.loads(meta_file.read_text())
+                except Exception:
+                    continue
+                if meta.get("status") in ("in_progress", "timeout") and meta.get("stages_done"):
+                    if not all(meta["stages_done"].values()):
+                        return d
             return None
         except Exception:
             return None
@@ -2125,7 +2154,8 @@ class Company:
                     if resume_project:
                         break
                 if not resume_project:
-                    resume_project = self._find_latest_project_dir()
+                    # 找最近的 in_progress 项目，而不是最新修改的项目
+                    resume_project = self._find_resumable_project()
                 if resume_project:
                     _rmeta_file = resume_project / ".project.json"
                     if _rmeta_file.exists():
@@ -2349,12 +2379,15 @@ class Company:
         history_text = "\n".join(history_lines)
         project_status = self._build_project_status()
 
-        # 从最近对话中推断当前讨论的项目
+        # 确定当前项目上下文：优先用已明确设置的活跃项目
         _current_project_hint = ""
-        _recent_text = " ".join(c for _, c in self._standby_history[-5:])
-        _proj_dir = self._find_project_by_name(_recent_text, "")
-        if _proj_dir:
-            _current_project_hint = f"\n\n## 当前讨论项目\n{_proj_dir.name}\n注意：只讨论这个项目相关的内容，不要混入其他项目的信息。\n"
+        if self._active_project_name:
+            _current_project_hint = f"\n\n## 当前项目\n{self._active_project_name}\n注意：只讨论这个项目相关的内容，不要混入其他项目的信息。\n"
+        else:
+            _recent_text = " ".join(c for _, c in self._standby_history[-5:])
+            _proj_dir = self._find_project_by_name(_recent_text, "")
+            if _proj_dir:
+                _current_project_hint = f"\n\n## 当前讨论项目\n{_proj_dir.name}\n注意：只讨论这个项目相关的内容，不要混入其他项目的信息。\n"
 
         target_roles: set[str] = set()
         for m in user_messages:
@@ -2965,6 +2998,9 @@ class Company:
                 project_dirs = sorted(projects_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)[:3]
                 proj_lines = []
                 for pd in project_dirs:
+                    # 有活跃项目时只展示该项目，避免 PM 混淆
+                    if self._active_project_name and self._active_project_name not in pd.name:
+                        continue
                     meta_file = pd / ".project.json"
                     if meta_file.exists():
                         meta = json.loads(meta_file.read_text())
