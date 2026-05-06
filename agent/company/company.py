@@ -665,6 +665,60 @@ class Company:
         return ""
 
     @staticmethod
+    def _extract_tech_stack(project_dir: Path) -> str:
+        """从项目目录提取技术栈摘要，供 Design 阶段参考."""
+        parts = []
+        # 检测语言和框架
+        markers = {
+            "requirements.txt": "Python (pip)",
+            "pyproject.toml": "Python",
+            "package.json": "Node.js/JavaScript",
+            "tsconfig.json": "TypeScript",
+            "go.mod": "Go",
+            "Cargo.toml": "Rust",
+            "pom.xml": "Java (Maven)",
+        }
+        for fname, tech in markers.items():
+            if (project_dir / fname).exists():
+                parts.append(f"- 检测到 `{fname}` → {tech}")
+        # 检测框架
+        app_py = project_dir / "app.py"
+        if app_py.exists():
+            try:
+                content = app_py.read_text(encoding="utf-8")[:2000]
+                if "flask" in content.lower() or "Flask" in content:
+                    parts.append("- 后端框架: Flask")
+                elif "fastapi" in content.lower() or "FastAPI" in content:
+                    parts.append("- 后端框架: FastAPI")
+                elif "django" in content.lower():
+                    parts.append("- 后端框架: Django")
+            except Exception:
+                pass
+        # 检测前端模板
+        templates_dir = project_dir / "templates"
+        if templates_dir.exists():
+            html_files = list(templates_dir.glob("*.html"))
+            if html_files:
+                names = [f.name for f in html_files[:10]]
+                parts.append(f"- 前端模板: Jinja2 ({', '.join(names)})")
+        static_dir = project_dir / "static"
+        if static_dir.exists():
+            parts.append("- 静态资源: static/ 目录存在")
+        # 列出 src/ 下的主要文件
+        src_dir = project_dir / "src"
+        if src_dir.exists():
+            py_files = list(src_dir.rglob("*.py"))
+            if py_files:
+                names = [str(f.relative_to(project_dir)) for f in py_files[:15]]
+                parts.append(f"- 源码文件 ({len(py_files)} 个 .py): {', '.join(names[:10])}")
+            ts_files = list(src_dir.rglob("*.ts")) + list(src_dir.rglob("*.tsx"))
+            if ts_files:
+                parts.append(f"- TypeScript 文件: {len(ts_files)} 个")
+        if not parts:
+            return ""
+        return "## 现有项目技术栈（必须兼容）\n" + "\n".join(parts) + "\n"
+
+    @staticmethod
     def _collect_project_files(project_dir: Path, max_chars: int = 30000, max_files: int = 100) -> str:
         """收集项目 src/ 目录下的所有代码文件内容，用于 Reviewer 审查."""
         src_dir = project_dir / "src"
@@ -2228,6 +2282,7 @@ class Company:
                 enriched = (
                     f"## 项目工作目录\n{resume_dir}\n"
                     f"这是一个已有项目，断点恢复模式。\n\n"
+                    f"{self._extract_tech_stack(resume_dir)}\n"
                     f"## 现有代码\n{existing_code}\n\n"
                     f"{env_context}\n\n"
                     f"## 用户需求\n{full_requirement}"
@@ -2663,6 +2718,11 @@ class Company:
                 pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
                 if pdir_match:
                     kick_content += f"\n\n## 项目工作目录\n{pdir_match.group(1)}\n"
+                    # Design/Code 阶段注入现有技术栈，防止方案与项目不匹配
+                    if stage_key in ("Design", "Code", "Env"):
+                        _tech = self._extract_tech_stack(Path(pdir_match.group(1)))
+                        if _tech:
+                            kick_content += f"\n{_tech}\n"
                 cause_map = {
                     "PRD": "EvaluateRequirement",
                     "Prototype": "WritePRD",
