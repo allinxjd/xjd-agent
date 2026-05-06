@@ -2521,7 +2521,7 @@ class Company:
         finally:
             remaining = self._env._pipeline_user_queue or []
             self._pipeline_running = False
-            self._active_project_name = ""
+            # 保留 _active_project_name，避免 ChatReply 上下文丢失当前项目
             self._env._pipeline_user_queue = None
             for m in remaining:
                 for role in self._env.roles.values():
