@@ -34,9 +34,19 @@ def validate_prd(content: str) -> ValidationResult:
     return ValidationResult(valid=True)
 
 
-def validate_html_output(content: str) -> ValidationResult:
-    """原型图/UI 设计必须包含有效 HTML."""
+def validate_html_output(content: str, project_dir=None) -> ValidationResult:
+    """原型图/UI 设计必须包含有效 HTML（文本中或磁盘文件）."""
     has_html = "<html" in content.lower() or "```html" in content
+    if not has_html and project_dir:
+        from pathlib import Path
+        pdir = Path(project_dir) if not isinstance(project_dir, Path) else project_dir
+        for subdir in ("prototypes", "ui-designs"):
+            d = pdir / subdir
+            if d.exists():
+                html_files = list(d.glob("*.html"))
+                if html_files:
+                    has_html = True
+                    break
     if not has_html:
         return ValidationResult(
             valid=False,
@@ -44,7 +54,7 @@ def validate_html_output(content: str) -> ValidationResult:
             rework_hint=(
                 "你的输出不包含 HTML 文件。请严格按照要求，"
                 "为每个页面生成完整的 HTML 文件（包含 <html><head><body>），"
-                "不要只输出文字说明。"
+                "不要只输出文字说明。必须使用 write_file 工具将 HTML 写入文件。"
             ),
         )
     return ValidationResult(valid=True)
@@ -78,7 +88,7 @@ def validate_code_output(content: str) -> ValidationResult:
     return ValidationResult(valid=True)
 
 
-STAGE_VALIDATORS: dict[str, Callable[[str], ValidationResult]] = {
+STAGE_VALIDATORS: dict[str, Callable] = {
     "WritePRD": validate_prd,
     "WritePrototype": validate_html_output,
     "WriteUIDesign": validate_html_output,

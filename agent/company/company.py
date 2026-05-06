@@ -961,7 +961,8 @@ class Company:
                                 break
                     elif result_msg.cause_by == "WritePrototype":
                         _validator = STAGE_VALIDATORS.get("WritePrototype")
-                        _vr = _validator(result_msg.content) if _validator else None
+                        _proj_dir = self._extract_workspace_from_requirement(requirement)
+                        _vr = _validator(result_msg.content, project_dir=_proj_dir) if _validator else None
                         if _vr and not _vr.valid:
                             _attempts = rework_counts.get("WritePrototype_validate", 0) + 1
                             rework_counts["WritePrototype_validate"] = _attempts
@@ -1000,7 +1001,8 @@ class Company:
                                 break
                     elif result_msg.cause_by == "WriteUIDesign":
                         _validator = STAGE_VALIDATORS.get("WriteUIDesign")
-                        _vr = _validator(result_msg.content) if _validator else None
+                        _proj_dir = self._extract_workspace_from_requirement(requirement)
+                        _vr = _validator(result_msg.content, project_dir=_proj_dir) if _validator else None
                         if _vr and not _vr.valid:
                             _attempts = rework_counts.get("WriteUIDesign_validate", 0) + 1
                             rework_counts["WriteUIDesign_validate"] = _attempts
