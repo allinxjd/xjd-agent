@@ -212,6 +212,7 @@ class Company:
         self._pipeline_cancel = False
         self._pipeline_user_msgs: list[CompanyMessage] = []
         self._active_project_name: str = ""
+        self._switched_project_dir: Optional[Path] = None
         self._waiting_approval: Optional[str] = None
         self._needs_prototype: bool = True
         self._pending_project_name: Optional[dict] = None
@@ -1659,7 +1660,9 @@ class Company:
         return results[:3]
 
     def _find_latest_project_dir(self) -> Optional[Path]:
-        """找到最近的项目工作目录."""
+        """找到最近的项目工作目录。如果用户手动切换了项目，优先返回切换目标。"""
+        if self._switched_project_dir and self._switched_project_dir.exists():
+            return self._switched_project_dir
         try:
             projects_dir = get_projects_dir()
             if not projects_dir.exists():
@@ -1855,8 +1858,14 @@ class Company:
                 if _pause_msg:
                     logger.info("用户请求暂停/切换项目: %s", _pause_msg.content[:50])
                     self._pipeline_cancel = True
+                    # 尝试直接切换到目标项目
+                    _switch_result = self._try_switch_project([_pause_msg])
+                    if _switch_result and "已切换" in _switch_result:
+                        notify_text = f"当前项目已暂停。{_switch_result}"
+                    else:
+                        notify_text = "当前项目已暂停，请发送新的需求或指定要切换的项目。"
                     notify = CompanyMessage(
-                        content="当前项目已暂停，请发送新的需求或指定要切换的项目。",
+                        content=notify_text,
                         cause_by="ChatReply",
                         sent_from="PM",
                     )
@@ -2282,6 +2291,19 @@ class Company:
         if _style_updated:
             return
 
+        # 检测项目切换指令
+        _switch_result = self._try_switch_project(user_messages)
+        if _switch_result:
+            switch_msg = CompanyMessage(
+                content=_switch_result,
+                cause_by="ChatReply",
+                sent_from=pm_role.name,
+            )
+            await self._env.publish(switch_msg)
+            self._standby_history.append((pm_role.name, switch_msg.content))
+            self._store.save_message(switch_msg)
+            return
+
         if len(self._standby_history) > 40:
             self._standby_history = self._standby_history[-30:]
 
@@ -2332,6 +2354,33 @@ class Company:
         """外部调用停止待命模式."""
         if hasattr(self, "_standby_stop"):
             self._standby_stop.set()
+
+    def _try_switch_project(self, messages: list[CompanyMessage]) -> Optional[str]:
+        """检测项目切换指令，切换成功返回确认文案，否则返回 None."""
+        import re as _re_sw
+        text = " ".join(m.content for m in messages)
+        switch_patterns = [
+            r"切换到[「「]?(.+?)[」」]?(?:项目|工程)?$",
+            r"切换[「「]?(.+?)[」」]?(?:项目|工程)",
+            r"(?:打开|进入|去)[「「]?(.+?)[」」]?(?:项目|工程)",
+            r"(?:项目|工程)切换(?:到|为)[「「]?(.+?)[」」]?$",
+        ]
+        target_name = None
+        for pat in switch_patterns:
+            m = _re_sw.search(pat, text)
+            if m:
+                target_name = m.group(1).strip()
+                break
+        if not target_name:
+            return None
+        project_dir = self._find_project_by_name(target_name, project_name=target_name)
+        if project_dir:
+            self._switched_project_dir = project_dir
+            self._active_project_name = project_dir.name.split("-", 1)[-1] if "-" in project_dir.name else project_dir.name
+            for role in self._env.roles.values():
+                role._workspace = str(project_dir)
+            return f"已切换到「{self._active_project_name}」项目，后续操作将在此项目目录下进行。"
+        return f"未找到名为「{target_name}」的项目，请确认项目名称。"
 
     async def _try_update_style(self, messages: list[CompanyMessage]) -> bool:
         """检测并处理风格设置指令。返回 True 表示已处理。"""
@@ -2411,6 +2460,7 @@ class Company:
         status = "failed"
         project_path = Path(pdir) if not isinstance(pdir, Path) else pdir
         self._active_project_name = project_path.name
+        self._switched_project_dir = project_path
         try:
             try:
                 from agent.company.project_manager import ProjectManager
