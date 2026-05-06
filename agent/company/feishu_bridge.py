@@ -144,7 +144,8 @@ class FeishuBridge(ChatBridge):
             return
         try:
             await self._recover_missed_messages(
-                adapter, self._start_ts + 30, lookback=35, silent=True
+                adapter, self._start_ts + 30, lookback=35, silent=True,
+                silent_before_ts=self._start_ts,
             )
             logger.info("飞书启动补漏完成")
         except Exception as e:
@@ -291,12 +292,15 @@ class FeishuBridge(ChatBridge):
     async def _recover_missed_messages(
         self, adapter: Any, reconnect_ts: float,
         lookback: int = 600, silent: bool = False,
+        silent_before_ts: float = 0,
     ) -> None:
         """重连后通过 REST API 补漏断连期间的消息.
 
         Args:
             lookback: 回溯秒数（默认 600s 用于断连恢复，启动补漏用 35s）
             silent: True 时仅标记消息为已见，不触发处理（避免历史消息触发 ChatReply）
+            silent_before_ts: 仅对 create_time < 此时间戳的消息执行 silent 标记；
+                之后的消息正常注入处理。为 0 时按 silent 参数统一处理所有消息。
         """
         if not self._group_chat_id or not self._environment:
             return
@@ -314,22 +318,25 @@ class FeishuBridge(ChatBridge):
             if not missed:
                 logger.info("飞书补漏: 无遗漏消息 (lookback=%ds, silent=%s)", lookback, silent)
                 return
+            marked = 0
             injected = 0
             for event_dict in missed:
                 msg_id = event_dict.get("message", {}).get("message_id", "")
                 if msg_id in self._seen_msg_ids:
                     continue
                 self._seen_msg_ids[msg_id] = True
-                if silent:
-                    injected += 1
+                msg_create_time = int(event_dict.get("message", {}).get("create_time", "0")) / 1000
+                should_silent = silent and (silent_before_ts <= 0 or msg_create_time < silent_before_ts)
+                if should_silent:
+                    marked += 1
                     continue
                 try:
                     await adapter._handle_message_event(event_dict)
                     injected += 1
                 except Exception as e:
                     logger.warning("飞书补漏消息处理失败 [%s]: %s", msg_id, e)
-            logger.info("飞书补漏: %s %d 条消息 (lookback=%ds)",
-                        "标记已见" if silent else "注入", injected, lookback)
+            logger.info("飞书补漏: 标记已见 %d 条, 注入处理 %d 条 (lookback=%ds)",
+                        marked, injected, lookback)
         except Exception as e:
             logger.warning("飞书消息补漏异常: %s", e)
 
