@@ -348,12 +348,20 @@ class Company:
     def _is_approval(self, text: str) -> bool:
         """判断用户回复是否为审批通过。"""
         text_clean = text.strip().lower()
-        approve_keywords = [
+        # 精确匹配：整条消息就是审批词（去掉标点后）
+        import re as _re_ap
+        text_norm = _re_ap.sub(r'[^\w一-鿿]', '', text_clean)
+        exact_approvals = [
             "通过", "ok", "确认", "可以", "没问题", "行",
-            "好的", "approved", "lgtm", "yes", "好", "过",
+            "好的", "好", "approved", "lgtm", "yes", "过",
+            "没问题的", "可以的", "行的", "好吧", "嗯",
         ]
-        if len(text_clean) < 20:
-            return any(kw in text_clean for kw in approve_keywords)
+        if text_norm in exact_approvals:
+            return True
+        # 短消息（<10字）包含审批关键词且不含动词/名词干扰
+        if len(text_clean) < 10:
+            short_approvals = ["通过", "ok", "确认", "没问题", "approved", "lgtm"]
+            return any(kw in text_clean for kw in short_approvals)
         return False
 
     async def _wait_for_approval(
@@ -2098,10 +2106,20 @@ class Company:
                             history_lines = [f"[{s}]: {c}" for s, c in self._standby_history[-10:]]
                             _proj_hint = ""
                             if self._active_project_name:
-                                _proj_hint = f"## 当前项目\n{self._active_project_name}\n注意：只讨论这个项目，不要混入其他项目信息。\n\n"
+                                _proj_dir = self._switched_project_dir or self._find_latest_project_dir()
+                                _tech_info = ""
+                                if _proj_dir:
+                                    _tech_info = self._extract_tech_stack(_proj_dir)
+                                _proj_hint = (
+                                    f"## 当前项目\n{self._active_project_name}\n"
+                                    f"{'项目目录：' + str(_proj_dir) if _proj_dir else ''}\n"
+                                    f"{_tech_info}\n"
+                                    f"注意：只讨论这个项目，不要混入其他项目信息。\n\n"
+                                )
                             chat_context = (
                                 f"{_proj_hint}"
-                                "当前团队正在开发中（pipeline 运行中）。\n\n"
+                                "当前团队正在开发中（pipeline 运行中）。\n"
+                                "你可以基于项目信息回答用户问题，不要说'无法查看文件'。\n\n"
                                 f"## 对话记录\n" + "\n".join(history_lines)
                             )
                             try:
