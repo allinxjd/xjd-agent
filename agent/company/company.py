@@ -1604,6 +1604,7 @@ class Company:
             "创建一个", "建一个", "生成一个",
             "安排开发", "安排一下", "动手吧", "动手做", "你就开始",
             "现在就做", "现在就开发", "现在开始",
+            "开发好", "做好", "搞好", "实现好",
         ]
         if any(kw in text for kw in strong):
             return True
@@ -2143,31 +2144,34 @@ class Company:
         has_weak = any(i == "weak" for _, i in intents)
         has_task_intent = has_strong or has_weak
 
-        if not has_task_intent:
-            resume_keywords = ["继续", "接着来", "断点恢复", "继续开发", "接着开发", "恢复", "接着做", "继续做"]
-            has_resume = any(kw in m.content for m in user_messages for kw in resume_keywords)
-            if has_resume:
-                import json as _rjson
-                resume_project = None
-                for m in user_messages:
-                    resume_project = self._find_project_by_name(m.content)
-                    if resume_project:
-                        break
-                if not resume_project:
-                    # 找最近的 in_progress 项目，而不是最新修改的项目
-                    resume_project = self._find_resumable_project()
+        # 断点恢复检测：优先于 task_intent 评估，避免 resume 关键词被当作新任务
+        resume_keywords = ["继续", "接着来", "断点恢复", "继续开发", "接着开发", "恢复", "接着做", "继续做"]
+        has_resume = any(kw in m.content for m in user_messages for kw in resume_keywords)
+        # "确认"/"开干" 等 weak intent 在有可恢复项目时也应触发 resume
+        if not has_resume and has_weak and not has_strong:
+            confirm_resume_kw = ["确认", "开干", "就按这个来", "没问题", "可以开始"]
+            has_resume = any(kw in m.content for m in user_messages for kw in confirm_resume_kw)
+        if has_resume:
+            import json as _rjson
+            resume_project = None
+            for m in user_messages:
+                resume_project = self._find_project_by_name(m.content)
                 if resume_project:
-                    _rmeta_file = resume_project / ".project.json"
-                    if _rmeta_file.exists():
-                        try:
-                            _rmeta = _rjson.loads(_rmeta_file.read_text())
-                            if _rmeta.get("status") in ("timeout", "in_progress") and _rmeta.get("stages_done"):
-                                has_task_intent = True
-                                has_strong = True
-                                self._resume_project_dir = resume_project
-                                logger.info("检测到断点恢复意图，项目: %s", resume_project.name)
-                        except Exception:
-                            pass
+                    break
+            if not resume_project:
+                resume_project = self._find_resumable_project()
+            if resume_project:
+                _rmeta_file = resume_project / ".project.json"
+                if _rmeta_file.exists():
+                    try:
+                        _rmeta = _rjson.loads(_rmeta_file.read_text())
+                        if _rmeta.get("status") in ("timeout", "in_progress") and _rmeta.get("stages_done"):
+                            has_task_intent = True
+                            has_strong = True
+                            self._resume_project_dir = resume_project
+                            logger.info("检测到断点恢复意图，项目: %s", resume_project.name)
+                    except Exception:
+                        pass
 
         if has_task_intent:
             if len(self._standby_history) > self._config.standby_history_max:
