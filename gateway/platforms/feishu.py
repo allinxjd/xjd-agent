@@ -700,17 +700,21 @@ class FeishuAdapter(BasePlatformAdapter):
         self._processed_events[event_id] = now
         return False
 
-    async def fetch_missed_messages(self, chat_id: str, since_ts: float, limit: int = 50) -> list[dict]:
+    async def fetch_missed_messages(self, chat_id: str, since_ts: float, limit: int = 50, exclude_sender_ids: set | None = None) -> list[dict]:
         """通过 REST API 拉取群聊历史消息，用于断连后补漏.
 
         Args:
             chat_id: 群聊 ID (oc_ 开头)
             since_ts: 起始时间戳 (秒)，只返回此时间之后的消息
             limit: 最多拉取条数
+            exclude_sender_ids: 需要排除的 sender open_id 集合（所有 bot 的 open_id）
         Returns:
             未处理过的消息事件列表 (与 _handle_message_event 格式兼容)
         """
         missed: list[dict] = []
+        all_bot_ids = exclude_sender_ids or set()
+        if self._bot_user and self._bot_user.user_id:
+            all_bot_ids.add(self._bot_user.user_id)
         try:
             start_time = str(int(since_ts))
             end_time = str(int(time.time()))
@@ -725,7 +729,6 @@ class FeishuAdapter(BasePlatformAdapter):
                 return missed
 
             items = result.get("data", {}).get("items", [])
-            bot_open_id = self._bot_user.user_id if self._bot_user else ""
 
             for item in items:
                 msg_id = item.get("message_id", "")
@@ -734,8 +737,13 @@ class FeishuAdapter(BasePlatformAdapter):
                 if msg_id in self._processed_events:
                     continue
                 sender_info = item.get("sender", {})
+                sender_type = sender_info.get("sender_type", "")
+                if sender_type == "app":
+                    self._processed_events[msg_id] = time.time()
+                    continue
                 sender_open_id = sender_info.get("id", "")
-                if sender_open_id == bot_open_id:
+                if sender_open_id in all_bot_ids:
+                    self._processed_events[msg_id] = time.time()
                     continue
                 event_dict = {
                     "message": {
@@ -764,7 +772,9 @@ class FeishuAdapter(BasePlatformAdapter):
                 self._processed_events[msg_id] = time.time()
                 missed.append(event_dict)
 
-            logger.info("飞书历史消息补漏: 拉取 %d 条，新消息 %d 条", len(items), len(missed))
+            bot_filtered = len(items) - len(missed) - sum(1 for i in items if i.get("message_id", "") in self._processed_events)
+            logger.info("飞书历史消息补漏: 拉取 %d 条，新消息 %d 条，过滤bot %d 条",
+                        len(items), len(missed), max(0, bot_filtered))
         except Exception as e:
             logger.warning("飞书历史消息补漏异常: %s", e)
         return missed

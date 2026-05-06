@@ -203,6 +203,7 @@ class Config:
 
     # AI Company 待命模式持久化标志
     company_standby_enabled: bool = False
+    company_boss_title: str = ""
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> Config:
@@ -301,6 +302,7 @@ class Config:
             config.hub_url = data.get("hub_url", "https://ai.allinxjd.com")
             config.channels = data.get("channels", {})
             config.company_standby_enabled = data.get("company_standby_enabled", False)
+            config.company_boss_title = data.get("company_boss_title", "")
 
             return config
 
@@ -402,6 +404,8 @@ class Config:
             data["channels"] = self.channels
 
         data["company_standby_enabled"] = self.company_standby_enabled
+        if self.company_boss_title:
+            data["company_boss_title"] = self.company_boss_title
 
         # 不序列化敏感 key 到 YAML (api_key 通过环境变量管理)
         # voice 的 api_key 也不写入

@@ -135,7 +135,7 @@ async def company_run(
     """
     from agent.tools.registry import ToolRegistry
     from agent.tools.builtin import register_builtin_tools
-    from agent.company import Company
+    from agent.company import Company, CompanyConfig
     from agent.company.roles import create_default_team
 
     router, config = _build_router()
@@ -152,11 +152,13 @@ async def company_run(
         if not feishu_chat_id or not feishu_bots:
             return "Error: 飞书未配置，请在 config.yaml 中添加 company.feishu 段"
 
+    company_cfg = CompanyConfig(boss_title=config.company_boss_title)
     company = Company(
         router=router,
         tool_registry=registry,
         feishu_chat_id=feishu_chat_id,
         feishu_bots=feishu_bots,
+        config=company_cfg,
     )
     team = create_default_team()
     company.hire_team(team)
@@ -191,7 +193,7 @@ async def company_standby(is_recovery: bool = False) -> str:
     import asyncio
     from agent.tools.registry import ToolRegistry
     from agent.tools.builtin import register_builtin_tools
-    from agent.company import Company
+    from agent.company import Company, CompanyConfig
     from agent.company.roles import create_default_team
 
     global _standby_company
@@ -210,11 +212,13 @@ async def company_standby(is_recovery: bool = False) -> str:
     if not feishu_chat_id or not feishu_bots:
         return "Error: 飞书未配置，请在技能密钥页面配置飞书 Bot"
 
+    company_cfg = CompanyConfig(boss_title=config.company_boss_title)
     company = Company(
         router=router,
         tool_registry=registry,
         feishu_chat_id=feishu_chat_id,
         feishu_bots=feishu_bots,
+        config=company_cfg,
     )
     team = create_default_team()
     company.hire_team(team)

@@ -130,7 +130,11 @@ class FeishuBridge(ChatBridge):
         self._adapters.clear()
 
     async def _startup_recovery(self) -> None:
-        """启动后延迟拉取历史消息，弥补长连接建立期间的消息空窗."""
+        """启动后延迟拉取历史消息，弥补长连接建立期间的消息空窗.
+
+        只补漏启动期间（~30s）的消息，不回溯历史。
+        补漏的消息仅标记为已见，不触发 ChatReply 处理。
+        """
         import asyncio
         await asyncio.sleep(30)
         if not self._started:
@@ -139,7 +143,9 @@ class FeishuBridge(ChatBridge):
         if not adapter:
             return
         try:
-            await self._recover_missed_messages(adapter, self._start_ts + 30)
+            await self._recover_missed_messages(
+                adapter, self._start_ts + 30, lookback=35, silent=True
+            )
             logger.info("飞书启动补漏完成")
         except Exception as e:
             logger.warning("飞书启动补漏失败: %s", e)
@@ -169,14 +175,26 @@ class FeishuBridge(ChatBridge):
             adapter = next(iter(self._adapters.values()), None)
             if adapter and self._group_chat_id:
                 try:
+                    bot_open_ids = set()
+                    for a in self._adapters.values():
+                        bot = getattr(a, "_bot_user", None)
+                        if bot and getattr(bot, "user_id", ""):
+                            bot_open_ids.add(bot.user_id)
+
                     missed = await adapter.fetch_missed_messages(
-                        self._group_chat_id, _last_poll_ts - 5
+                        self._group_chat_id, _last_poll_ts - 5,
+                        exclude_sender_ids=bot_open_ids,
                     )
                     for event_dict in missed:
                         msg_id = event_dict.get("message", {}).get("message_id", "")
                         if msg_id in self._seen_msg_ids:
                             continue
-                        self._seen_msg_ids[msg_id] = True
+                        sender_open_id = event_dict.get("sender", {}).get("sender_id", {}).get("open_id", "")
+                        if sender_open_id in bot_open_ids:
+                            self._seen_msg_ids[msg_id] = True
+                            continue
+                        if msg_id in self._seen_msg_ids:
+                            continue
                         try:
                             await adapter._handle_message_event(event_dict)
                         except Exception as e:
@@ -270,26 +288,48 @@ class FeishuBridge(ChatBridge):
                 except Exception as e:
                     logger.warning("飞书 Bot %s 补启失败: %s", role_name, e)
 
-    async def _recover_missed_messages(self, adapter: Any, reconnect_ts: float) -> None:
-        """重连后通过 REST API 补漏断连期间的消息."""
+    async def _recover_missed_messages(
+        self, adapter: Any, reconnect_ts: float,
+        lookback: int = 600, silent: bool = False,
+    ) -> None:
+        """重连后通过 REST API 补漏断连期间的消息.
+
+        Args:
+            lookback: 回溯秒数（默认 600s 用于断连恢复，启动补漏用 35s）
+            silent: True 时仅标记消息为已见，不触发处理（避免历史消息触发 ChatReply）
+        """
         if not self._group_chat_id or not self._environment:
             return
         try:
-            since_ts = reconnect_ts - 600
-            missed = await adapter.fetch_missed_messages(self._group_chat_id, since_ts)
+            since_ts = reconnect_ts - lookback
+            bot_open_ids = set()
+            for a in self._adapters.values():
+                bot = getattr(a, "_bot_user", None)
+                if bot and getattr(bot, "user_id", ""):
+                    bot_open_ids.add(bot.user_id)
+            missed = await adapter.fetch_missed_messages(
+                self._group_chat_id, since_ts,
+                exclude_sender_ids=bot_open_ids,
+            )
             if not missed:
-                logger.info("飞书补漏: 无遗漏消息")
+                logger.info("飞书补漏: 无遗漏消息 (lookback=%ds, silent=%s)", lookback, silent)
                 return
+            injected = 0
             for event_dict in missed:
                 msg_id = event_dict.get("message", {}).get("message_id", "")
                 if msg_id in self._seen_msg_ids:
                     continue
                 self._seen_msg_ids[msg_id] = True
+                if silent:
+                    injected += 1
+                    continue
                 try:
                     await adapter._handle_message_event(event_dict)
+                    injected += 1
                 except Exception as e:
                     logger.warning("飞书补漏消息处理失败 [%s]: %s", msg_id, e)
-            logger.info("飞书补漏: 注入 %d 条遗漏消息", len(missed))
+            logger.info("飞书补漏: %s %d 条消息 (lookback=%ds)",
+                        "标记已见" if silent else "注入", injected, lookback)
         except Exception as e:
             logger.warning("飞书消息补漏异常: %s", e)
 
@@ -363,7 +403,7 @@ class FeishuBridge(ChatBridge):
             logger.warning("mirror_to_feishu: bridge 未启动，丢弃消息 [%s] %s", msg.sent_from, msg.cause_by)
             return
 
-        if msg.cause_by == "HumanDirective":
+        if msg.cause_by in ("HumanDirective", "RoleCheckin"):
             return
 
         role_name = msg.sent_from

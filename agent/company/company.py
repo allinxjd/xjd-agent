@@ -120,6 +120,7 @@ class CompanyConfig:
     standby_history_context: int = 10
     idle_rounds_to_stop: int = 2
     locale: str = "zh-CN"
+    boss_title: str = ""
     projects_dir: str = ""
     pipeline: PipelineConfig = field(default_factory=PipelineConfig.default)
 
@@ -183,6 +184,7 @@ class Company:
         self._config = config or CompanyConfig()
         self._pipeline = self._config.pipeline
         self._locale = CompanyLocale.load(self._config.locale)
+        self._boss_title = self._config.boss_title or self._locale.get("address.boss", "老板")
         self._env = CompanyEnvironment()
         self._router = router
         self._registry = tool_registry
@@ -220,6 +222,9 @@ class Company:
         """注册角色到环境，注入运行时依赖和 Karpathy 准则."""
         role._runtime_router = self._router
         role._runtime_registry = self._registry
+        role._boss_title = self._boss_title
+        if "{boss_title}" in (role.system_prompt or ""):
+            role.system_prompt = role.system_prompt.replace("{boss_title}", self._boss_title)
         if self._karpathy_prompt and self._karpathy_prompt not in (role.system_prompt or ""):
             role.system_prompt = (role.system_prompt or "") + "\n\n" + self._karpathy_prompt
         self._env.add_role(role)
@@ -758,7 +763,7 @@ class Company:
             if _time.monotonic() > pipeline_deadline:
                 logger.warning("Pipeline 超时 (%d 分钟)，强制结束 (round %d)", max_minutes, round_num)
                 timeout_msg = CompanyMessage(
-                    content=f"老板，流水线已运行超过 {max_minutes} 分钟（安全上限），自动停止了。已完成的模块代码已保存在项目目录中。",
+                    content=f"流水线已运行超过 {max_minutes} 分钟（安全上限），自动停止。已完成的模块代码已保存在项目目录中。",
                     cause_by="ChatReply",
                     sent_from="PM",
                     task_id=task.task_id,
@@ -776,7 +781,7 @@ class Company:
                     supplement = "\n".join(m.content for m in new_msgs)
                     for m in new_msgs:
                         supplement_injected.add(m.content)
-                    requirement += f"\n\n## 老板补充需求\n{supplement}"
+                    requirement += f"\n\n## {self._boss_title}补充需求\n{supplement}"
                     next_role = None
                     for rn in self._pipeline.role_order:
                         r = self._env.roles.get(rn)
@@ -784,7 +789,7 @@ class Company:
                             next_role = rn
                             break
                     inject_msg = CompanyMessage(
-                        content=f"## 老板补充需求\n{supplement}",
+                        content=f"## {self._boss_title}补充需求\n{supplement}",
                         cause_by="SupplementRequirement",
                         sent_from="PM",
                         send_to=next_role or "PM",
@@ -811,7 +816,7 @@ class Company:
                     continue
                 status_msg = CompanyMessage(
                     content=f"{role.name} 开始工作...",
-                    cause_by="StatusUpdate",
+                    cause_by="RoleCheckin",
                     sent_from=role.name,
                     task_id=task.task_id,
                 )
@@ -937,8 +942,8 @@ class Company:
                             escalate = CompanyMessage(
                                 content=(
                                     f"## Developer 反馈需求问题\n{result_msg.content[:1000]}\n\n"
-                                    "请检查对话记录，确认需求是否清晰。如果需求没有跟老板确认过，"
-                                    "请在群里向老板核实后，重新整理需求和设计方案给 Developer。"
+                                    f"请检查对话记录，确认需求是否清晰。如果需求没有跟{self._boss_title}确认过，"
+                                    f"请在群里向{self._boss_title}核实后，重新整理需求和设计方案给 Developer。"
                                 ),
                                 cause_by="WriteCode",
                                 sent_from="Developer",
@@ -1138,7 +1143,7 @@ class Company:
                             stages_done["Review"] = True
                             stages_done["Test"] = True
                             escalate = CompanyMessage(
-                                content=f"老板，{role.name} 连续两轮指出类似问题但修复无效。先继续推进，这个问题可能需要人工介入 🔧",
+                                content=f"{role.name} 连续两轮指出类似问题但修复无效，先继续推进，后续可能需要人工介入。",
                                 cause_by="ChatReply",
                                 sent_from="PM",
                                 task_id=task.task_id,
@@ -1206,7 +1211,7 @@ class Company:
                             logger.info("返工达上限但最终结果已通过，正常 APPROVED")
                         else:
                             escalate = CompanyMessage(
-                                content=f"老板，{role.name} 已经打回 {max_rework} 次了，团队尽力修了但还有问题。先继续推进，后续再优化 🫡",
+                                content=f"{role.name} 已打回 {max_rework} 次，团队尽力修复但仍有问题。先继续推进，后续再优化。",
                                 cause_by="ChatReply",
                                 sent_from="PM",
                                 task_id=task.task_id,
@@ -1331,15 +1336,15 @@ class Company:
 
         if is_recovery:
             recovery_msg = CompanyMessage(
-                content="老板，系统刚重启，团队已自动恢复上线 🫡 随时待命！",
-                cause_by="RoleCheckin",
+                content="系统已重启，服务就绪。",
+                cause_by="ChatReply",
                 sent_from="PM",
             )
             await self._env.publish(recovery_msg)
         else:
             for role in self._env.roles.values():
                 bot_name = self._get_bot_display_name(role.name)
-                line = f"老板好 🫡 {bot_name}到岗了，随时待命"
+                line = f"{bot_name}到岗，随时待命。"
                 checkin = CompanyMessage(
                     content=line,
                     cause_by="RoleCheckin",
@@ -1357,7 +1362,7 @@ class Company:
                 pending_str = "/".join(pending)
                 notify = CompanyMessage(
                     content=(
-                        f"老板，上次「{proj_name}」项目的流水线被中断了"
+                        f"上次「{proj_name}」项目的流水线被中断"
                         f"（已完成：{done_str}，未完成：{pending_str}）。\n"
                         f"回复「继续」即可从断点恢复，不会重复已完成的阶段。"
                     ),
@@ -1598,7 +1603,7 @@ class Company:
         )
 
         ack = CompanyMessage(
-            content=f"收到老板，让{self._get_bot_display_name(role.name)}马上处理 🫡",
+            content=f"收到，已安排{self._get_bot_display_name(role.name)}处理。",
             cause_by="ChatReply",
             sent_from="PM",
         )
@@ -1710,7 +1715,7 @@ class Company:
                 if quick_target:
                     quick_msgs = collected
                     ack = CompanyMessage(
-                        content="收到老板，先处理操作任务 🫡",
+                        content="收到，先处理操作任务。",
                         cause_by="ChatReply",
                         sent_from="PM",
                     )
@@ -1733,7 +1738,7 @@ class Company:
                             self._task_queue.append({"raw_message": m.content})
                             pos = len(self._task_queue)
                             queue_ack = CompanyMessage(
-                                content=f"收到老板 🫡 新项目需求已排队（第 {pos} 位），当前任务完成后自动开始",
+                                content=f"收到，新项目需求已排队（第 {pos} 位），当前任务完成后自动开始。",
                                 cause_by="ChatReply",
                                 sent_from="PM",
                             )
@@ -1757,7 +1762,7 @@ class Company:
                         self._pipeline_user_msgs.extend(supplement_msgs)
                         summary = "、".join(m.content[:30] for m in supplement_msgs)
                         ack = CompanyMessage(
-                            content=f"收到老板 🫡 补充需求已记录，会纳入当前开发：\n{summary}",
+                            content=f"收到，补充需求已记录，会纳入当前开发：\n{summary}",
                             cause_by="ChatReply",
                             sent_from="PM",
                         )
@@ -1767,7 +1772,7 @@ class Company:
                         self._task_queue.append({"raw_message": m.content})
                         pos = len(self._task_queue)
                         queue_ack = CompanyMessage(
-                            content=f"收到老板 🫡 新任务已排队（第 {pos} 位），当前项目完成后自动开始",
+                            content=f"收到，新任务已排队（第 {pos} 位），当前项目完成后自动开始。",
                             cause_by="ChatReply",
                             sent_from="PM",
                         )
@@ -1834,9 +1839,9 @@ class Company:
                     logger.info("用户项目名中文→英文: %s → %s", display_name, clean_name)
 
                 confirm_content = (
-                    f"收到老板 👌 项目名「{clean_name}」（{display_name}）已确认，这就安排团队开干！"
+                    f"项目名「{clean_name}」（{display_name}）已确认，开始安排开发。"
                     if display_name != clean_name
-                    else f"收到老板 👌 项目名「{clean_name}」已确认，这就安排团队开干！"
+                    else f"项目名「{clean_name}」已确认，开始安排开发。"
                 )
                 confirm_msg = CompanyMessage(
                     content=confirm_content,
@@ -1873,7 +1878,7 @@ class Company:
                 return
             else:
                 retry_msg = CompanyMessage(
-                    content="老板，还没给项目名呢！给个 2-6 个字的正式名字？比如「智能计算器」「Holu资讯」",
+                    content="还没给项目名。请提供 2-6 个字的正式名称，例如「智能计算器」「Holu资讯」。",
                     cause_by="ChatReply",
                     sent_from=pm_role.name,
                 )
@@ -1930,7 +1935,7 @@ class Company:
                 display = name_parts[1] if len(name_parts) > 1 else resume_dir.name
 
                 confirm_msg = CompanyMessage(
-                    content=f"收到老板 👌 从断点恢复「{display}」，跳过已完成的 {'/'.join(done_list)}，继续执行 {'/'.join(pending_list)}",
+                    content=f"从断点恢复「{display}」，跳过已完成的 {'/'.join(done_list)}，继续执行 {'/'.join(pending_list)}。",
                     cause_by="ChatReply",
                     sent_from=pm_role.name,
                 )
@@ -1984,7 +1989,7 @@ class Company:
             first_line = eval_text.strip().split("\n")[0].strip()
 
             if first_line.startswith("NEED_CLARIFY"):
-                clarify_text = eval_text.strip().split("\n", 1)[1].strip() if "\n" in eval_text.strip() else "老板，需求不太明确，能再说具体点吗？"
+                clarify_text = eval_text.strip().split("\n", 1)[1].strip() if "\n" in eval_text.strip() else "需求不太明确，能再说具体点吗？"
                 clarify_msg = CompanyMessage(
                     content=clarify_text,
                     cause_by="ChatReply",
@@ -1996,7 +2001,7 @@ class Company:
                 return
 
             confirm_msg = CompanyMessage(
-                content="收到老板 👌 需求已确认，我这就安排团队开干！",
+                content="需求已确认，开始安排开发。",
                 cause_by="ChatReply",
                 sent_from=pm_role.name,
             )
@@ -2034,7 +2039,7 @@ class Company:
                     "req_summary": req_summary,
                 }
                 clarify_msg = CompanyMessage(
-                    content="老板，项目叫什么名字？给个正式的项目名我好建档 📋",
+                    content="请为项目命名（2-6 个字），用于建档。",
                     cause_by="ChatReply",
                     sent_from=pm_role.name,
                 )
@@ -2122,14 +2127,14 @@ class Company:
                 role_hint = (
                     f"\n\n你是{responder.description}，用户的讨论涉及你的专业领域。"
                     f"从你的专业角度参与讨论，提出建议或指出潜在问题。"
-                    f"如果话题跟你无关，回复「这块我没意见，听老板和 PM 的」即可，不要硬凑。"
+                    f"如果话题跟你无关，回复「这块我没意见，听{self._boss_title}和 PM 的」即可，不要硬凑。"
                 )
             chat_context = (
                 f"当前时间: {now}\n\n{project_status}"
                 f"## 对话记录\n{history_text}{role_hint}"
             )
             reply_msg = await responder._act(CHAT_REPLY, chat_context)
-            if role_name != "PM" and any(skip in reply_msg.content for skip in ["没意见", "听老板", "不涉及", "跟我无关"]):
+            if role_name != "PM" and any(skip in reply_msg.content for skip in ["没意见", f"听{self._boss_title}", "不涉及", "跟我无关"]):
                 continue
             self._standby_history.append((responder.name, reply_msg.content))
             self._store.save_message(reply_msg)
@@ -2189,14 +2194,14 @@ class Company:
                 stages = getattr(self, '_last_stages_done', {})
                 done_list = [k for k, v in stages.items() if v]
                 progress = f"（已完成: {', '.join(done_list)}）" if done_list else ""
-                msg_text = f"老板，任务超时了{progress}。代码已保存在项目目录，说「继续」可以从断点恢复。\n项目目录: {pdir}{url_info}"
+                msg_text = f"任务超时{progress}。代码已保存至项目目录，回复「继续」可从断点恢复。\n项目目录: {pdir}{url_info}"
             elif status == "done":
                 if access_url:
-                    msg_text = f"老板，项目开发完成！访问地址：{access_url}\n已部署上线，可以直接打开查看 ✅\n项目目录: {pdir}"
+                    msg_text = f"项目开发完成，已部署上线。\n访问地址: {access_url}\n项目目录: {pdir}"
                 else:
-                    msg_text = f"老板，项目开发完成！代码已写入项目目录 ✅\n项目目录: {pdir}"
+                    msg_text = f"项目开发完成，代码已保存至项目目录。\n项目目录: {pdir}"
             else:
-                msg_text = f"老板，项目开发遇到问题，未能完成。团队会继续跟进 🫡\n项目目录: {pdir}{url_info}"
+                msg_text = f"项目开发遇到问题，未能完成。\n项目目录: {pdir}{url_info}"
             done_msg = CompanyMessage(
                 content=msg_text,
                 cause_by="PipelineComplete",
@@ -2209,7 +2214,7 @@ class Company:
                 queue_remaining = len(self._task_queue)
                 queue_info = f"（队列还有 {queue_remaining} 个）" if queue_remaining else ""
                 notify = CompanyMessage(
-                    content=f"老板，开始处理下一个排队任务{queue_info} 🚀",
+                    content=f"开始处理下一个排队任务{queue_info}。",
                     cause_by="ChatReply",
                     sent_from="PM",
                 )
