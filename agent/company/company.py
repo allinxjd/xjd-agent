@@ -910,24 +910,28 @@ class Company:
             logger.info("=== Round %d === stages=%s", round_num, stages_done)
             round_had_work = False
             _STAGE_LABELS = {
-                "WritePRD": "正在编写需求文档...",
-                "WritePrototype": "正在设计原型图...",
-                "WriteUIDesign": "正在设计 UI...",
-                "WriteDesign": "正在编写技术方案...",
-                "SetupEnv": "正在搭建开发环境...",
-                "WriteCode": "正在编写代码...",
-                "VerifyRun": "正在验证运行...",
-                "CodeReview": "正在进行代码审查...",
-                "WriteTest": "正在编写测试...",
-                "RunTest": "正在运行测试...",
-                "DeployPlan": "正在制定部署方案...",
-                "ExecuteDeploy": "正在执行部署...",
+                "WritePRD": "需求文档",
+                "WritePrototype": "原型图设计",
+                "WriteUIDesign": "UI 设计",
+                "WriteDesign": "技术方案",
+                "SetupEnv": "搭建环境",
+                "WriteCode": "编写代码",
+                "VerifyRun": "验证运行",
+                "CodeReview": "代码审查",
+                "WriteTest": "编写测试",
+                "RunTest": "运行测试",
+                "DeployPlan": "部署方案",
+                "ExecuteDeploy": "执行部署",
             }
+            # 计算总阶段数和已完成数，用于进度显示
+            _total_stages = len(stages_done)
+            _done_count = sum(1 for v in stages_done.values() if v)
             for role in self._env.roles.values():
                 if not role.has_pending:
                     continue
                 _stage_cause = role._inbox[0].cause_by if role._inbox else ""
-                _stage_label = _STAGE_LABELS.get(_stage_cause, f"{role.name} 工作中...")
+                _stage_name = _STAGE_LABELS.get(_stage_cause, f"{role.name} 工作中")
+                _stage_label = f"[{_done_count + 1}/{_total_stages}] {_stage_name}..."
                 status_msg = CompanyMessage(
                     content=_stage_label,
                     cause_by="RoleCheckin",
