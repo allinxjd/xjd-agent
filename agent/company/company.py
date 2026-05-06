@@ -426,6 +426,41 @@ class Company:
                 html_blocks = [content]
 
         if not html_blocks:
+            # LLM 可能通过 write_file 工具直接写入了文件，检查磁盘
+            existing_html = sorted(target_dir.glob("*.html"))
+            if existing_html:
+                html_blocks = []
+                _disk_page_info: list[dict] = []
+                for f in existing_html:
+                    html_content = f.read_text(encoding="utf-8")
+                    title_match = _re.search(r'<title[^>]*>([^<]+)</title>', html_content, _re.IGNORECASE)
+                    name = title_match.group(1).strip() if title_match else f.stem
+                    _disk_page_info.append({"name": name, "desc": "", "file": f, "safe_name": f.stem})
+                logger.info("从磁盘读取 %s HTML: %d 个文件", subdir, len(_disk_page_info))
+                # 跳过解析，直接用磁盘文件生成报告
+                screenshots: dict[str, Path] = {}
+                try:
+                    from agent.company.prototype_renderer import render_html_to_image
+                    for info in _disk_page_info:
+                        img = await render_html_to_image(info["file"])
+                        if img:
+                            screenshots[info["safe_name"]] = img
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.warning("截图渲染失败: %s", e)
+                report_path = await self._generate_prototype_report(
+                    _disk_page_info, screenshots, target_dir, stage_key
+                )
+                report_msg = CompanyMessage(
+                    content=f"{stage_key} 报告已生成（共 {len(_disk_page_info)} 页），请用浏览器打开查看。",
+                    cause_by="StageFile",
+                    sent_from="PM",
+                    task_id=task.task_id,
+                    metadata={"file_path": str(report_path), "filename": report_path.name},
+                )
+                await self._env.publish(report_msg)
+                return
             notify = CompanyMessage(
                 content=content[:2000],
                 cause_by=f"Write{stage_key}",
