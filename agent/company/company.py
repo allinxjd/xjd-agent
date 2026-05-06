@@ -1995,10 +1995,11 @@ class Company:
 
     def _is_feedback_similar(self, prev: str, curr: str, threshold: float = 0.6) -> bool:
         """检测两次反馈是否高度相似（同类问题反复出现 = 卡住了）."""
+        import re as _re_fb
         def extract_issues(text: str) -> set[str]:
-            patterns = _re.findall(r'[\w/]+\.(?:py|js|ts|jsx|tsx)', text)
-            patterns += _re.findall(r'(?:Error|Exception|失败|错误|问题|bug|fix)[\w]*', text, _re.IGNORECASE)
-            patterns += _re.findall(r'`([^`]+)`', text)
+            patterns = _re_fb.findall(r'[\w/]+\.(?:py|js|ts|jsx|tsx)', text)
+            patterns += _re_fb.findall(r'(?:Error|Exception|失败|错误|问题|bug|fix)[\w]*', text, _re_fb.IGNORECASE)
+            patterns += _re_fb.findall(r'`([^`]+)`', text)
             return set(p.lower() for p in patterns)
 
         prev_issues = extract_issues(prev)
