@@ -916,6 +916,9 @@ class Company:
                 stage_outputs.clear()
 
         from agent.company.project_context import ProjectContext
+        from agent.company.state_machine import PipelineStateMachine
+        sm = PipelineStateMachine(self._pipeline.stage_keys)
+        sm._stages_done = stages_done  # 共享引用
         ctx = ProjectContext.wrap(
             name=self._active_project_name or task.task_id,
             stages_done=stages_done,
@@ -927,6 +930,7 @@ class Company:
         self._project_ctx = ctx
 
         for round_num in range(1, max_rounds + 1):
+            sm.set_round(round_num)
             if self._pipeline_cancel:
                 logger.info("Pipeline 被用户暂停 (round %d)", round_num)
                 self._pipeline_cancel = False
@@ -981,7 +985,7 @@ class Company:
                     break
                 logger.info("返工后主动触发下一阶段")
 
-            logger.info("=== Round %d === stages=%s", round_num, stages_done)
+            logger.info("=== Round %d === stages=%s", round_num, sm.summary())
             round_had_work = False
             _STAGE_LABELS = {
                 "WritePRD": "需求文档",
@@ -1392,8 +1396,7 @@ class Company:
                         )
                         if is_stuck and role_rework >= 2:
                             logger.warning("StuckDetector: %s 连续两轮反馈相似，判定卡住，强制通过", role.name)
-                            stages_done["Review"] = True
-                            stages_done["Test"] = True
+                            sm.force_pass(["Review", "Test"])
                             escalate = CompanyMessage(
                                 content=f"{role.name} 连续两轮指出类似问题但修复无效，先继续推进，后续可能需要人工介入。",
                                 cause_by="ChatReply",
@@ -1449,8 +1452,7 @@ class Company:
                         break
                     elif rework_target and role_rework >= max_rework:
                         logger.warning("返工次数已达上限 %d，强制通过 %s 阶段", max_rework, role.name)
-                        stages_done["Review"] = True
-                        stages_done["Test"] = True
+                        sm.force_pass(["Review", "Test"])
                         # 判断最终结果是否实际通过（测试全过或 Reviewer 无严重问题）
                         test_actually_passed = self._is_test_passed(result_msg.content) if role.name == "QA" else False
                         review_no_reject = (
