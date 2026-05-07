@@ -10,7 +10,7 @@ from typing import Any, Optional
 from agent.company.action import USER_REQUIREMENT, EVALUATE_REQUIREMENT
 from agent.company.chat_bridge import ChatBridge
 from agent.company.environment import CompanyEnvironment
-from agent.company.validators import STAGE_VALIDATORS, validate_checkpoint_output
+from agent.company.validators import validate_checkpoint_output
 from agent.company.feishu_bridge import FeishuBotConfig, FeishuBridge
 from agent.company.locale import CompanyLocale
 from agent.company.memory import CompanyMemory
@@ -1045,25 +1045,19 @@ class Company:
                     round_had_work = True
 
                     if result_msg.cause_by == "WritePRD":
-                        _validator = STAGE_VALIDATORS.get("WritePRD")
-                        _vr = _validator(result_msg.content) if _validator else None
-                        if _vr and not _vr.valid:
-                            _attempts = rework_counts.get("WritePRD_validate", 0) + 1
-                            rework_counts["WritePRD_validate"] = _attempts
-                            if _attempts >= 3:
-                                logger.warning("WritePRD 验证失败 %d 次，降级接受", _attempts)
-                            else:
-                                logger.warning("WritePRD %s，要求重做 (%d/3)", _vr.reason, _attempts)
-                                _rework = CompanyMessage(
-                                    content=f"## 系统提示\n{_vr.rework_hint}\n\n## 需求\n{requirement}",
-                                    cause_by="WritePRD", sent_from="Human", send_to="PM", task_id=task.task_id,
-                                )
-                                await self._env.publish(_rework)
-                                break
+                        from agent.company.stage_handler import STAGE_CONFIGS, handle_validation
+                        _cfg = STAGE_CONFIGS["WritePRD"]
+                        _sr = handle_validation(_cfg, result_msg.content, ctx)
+                        if _sr.action == "rework":
+                            _rework = CompanyMessage(
+                                content=f"## 系统提示\n{_sr.rework_hint}\n\n## 需求\n{requirement}",
+                                cause_by="WritePRD", sent_from="Human", send_to="PM", task_id=task.task_id,
+                            )
+                            await self._env.publish(_rework)
+                            break
                         stages_done["PRD"] = True
                         stage_outputs["PRD"] = result_msg.content
                         await self._env.publish(result_msg)
-                        # --- Approval gate ---
                         _stage_def = self._pipeline.stage_for_action("WritePRD")
                         if _stage_def and _stage_def.requires_approval:
                             _proj_dir = self._extract_workspace_from_requirement(requirement)
@@ -1071,39 +1065,34 @@ class Company:
                             if not _approved:
                                 stages_done["PRD"] = False
                                 _rework = CompanyMessage(
-                                    content=f"## 用户反馈（请根据意见修改 PRD 后重新提交）\n{_feedback}",
+                                    content=f"## 用户反馈（{_cfg.approval_feedback_template}）\n{_feedback}",
                                     cause_by="WritePRD", sent_from="Human", send_to="PM", task_id=task.task_id,
                                 )
                                 await self._env.publish(_rework)
                                 break
                     elif result_msg.cause_by == "WritePrototype":
-                        _validator = STAGE_VALIDATORS.get("WritePrototype")
+                        from agent.company.stage_handler import STAGE_CONFIGS, handle_validation
+                        _cfg = STAGE_CONFIGS["WritePrototype"]
                         _proj_dir = self._extract_workspace_from_requirement(requirement)
-                        _vr = _validator(result_msg.content, project_dir=_proj_dir) if _validator else None
-                        if _vr and not _vr.valid:
-                            _attempts = rework_counts.get("WritePrototype_validate", 0) + 1
-                            rework_counts["WritePrototype_validate"] = _attempts
-                            if _attempts >= 3:
-                                logger.warning("WritePrototype 验证失败 %d 次，跳过原型阶段", _attempts)
-                                stages_done["Prototype"] = True
-                                stage_outputs["Prototype"] = ""
-                                _skip_msg = CompanyMessage(
-                                    content="原型图生成未达标，跳过进入下一阶段。",
-                                    cause_by="ChatReply", sent_from="PM", task_id=task.task_id,
-                                )
-                                await self._env.publish(_skip_msg)
-                                break
-                            else:
-                                logger.warning("WritePrototype %s，要求重做 (%d/3)", _vr.reason, _attempts)
-                                _rework = CompanyMessage(
-                                    content=f"## 系统提示\n{_vr.rework_hint}",
-                                    cause_by="WritePrototype", sent_from="Human", send_to="PM", task_id=task.task_id,
-                                )
-                                await self._env.publish(_rework)
-                                break
+                        _sr = handle_validation(_cfg, result_msg.content, ctx, project_dir=_proj_dir)
+                        if _sr.action == "skip":
+                            stages_done["Prototype"] = True
+                            stage_outputs["Prototype"] = ""
+                            _skip_msg = CompanyMessage(
+                                content=_cfg.skip_message,
+                                cause_by="ChatReply", sent_from="PM", task_id=task.task_id,
+                            )
+                            await self._env.publish(_skip_msg)
+                            break
+                        elif _sr.action == "rework":
+                            _rework = CompanyMessage(
+                                content=f"## 系统提示\n{_sr.rework_hint}",
+                                cause_by="WritePrototype", sent_from="Human", send_to="PM", task_id=task.task_id,
+                            )
+                            await self._env.publish(_rework)
+                            break
                         stages_done["Prototype"] = True
                         stage_outputs["Prototype"] = result_msg.content
-                        _proj_dir = self._extract_workspace_from_requirement(requirement)
                         await self._save_and_send_prototypes(result_msg.content, _proj_dir, task, "Prototype")
                         _stage_def = self._pipeline.stage_for_action("WritePrototype")
                         if _stage_def and _stage_def.requires_approval:
@@ -1111,39 +1100,34 @@ class Company:
                             if not _approved:
                                 stages_done["Prototype"] = False
                                 _rework = CompanyMessage(
-                                    content=f"## 用户反馈（请根据意见修改原型后重新提交）\n{_feedback}",
+                                    content=f"## 用户反馈（{_cfg.approval_feedback_template}）\n{_feedback}",
                                     cause_by="WritePrototype", sent_from="Human", send_to="PM", task_id=task.task_id,
                                 )
                                 await self._env.publish(_rework)
                                 break
                     elif result_msg.cause_by == "WriteUIDesign":
-                        _validator = STAGE_VALIDATORS.get("WriteUIDesign")
+                        from agent.company.stage_handler import STAGE_CONFIGS, handle_validation
+                        _cfg = STAGE_CONFIGS["WriteUIDesign"]
                         _proj_dir = self._extract_workspace_from_requirement(requirement)
-                        _vr = _validator(result_msg.content, project_dir=_proj_dir) if _validator else None
-                        if _vr and not _vr.valid:
-                            _attempts = rework_counts.get("WriteUIDesign_validate", 0) + 1
-                            rework_counts["WriteUIDesign_validate"] = _attempts
-                            if _attempts >= 3:
-                                logger.warning("WriteUIDesign 验证失败 %d 次，跳过 UI 设计阶段", _attempts)
-                                stages_done["UIDesign"] = True
-                                stage_outputs["UIDesign"] = ""
-                                _skip_msg = CompanyMessage(
-                                    content="UI 设计生成未达标，跳过进入下一阶段。",
-                                    cause_by="ChatReply", sent_from="PM", task_id=task.task_id,
-                                )
-                                await self._env.publish(_skip_msg)
-                                break
-                            else:
-                                logger.warning("WriteUIDesign %s，要求重做 (%d/3)", _vr.reason, _attempts)
-                                _rework = CompanyMessage(
-                                    content=f"## 系统提示\n{_vr.rework_hint}",
-                                    cause_by="WriteUIDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
-                                )
-                                await self._env.publish(_rework)
-                                break
+                        _sr = handle_validation(_cfg, result_msg.content, ctx, project_dir=_proj_dir)
+                        if _sr.action == "skip":
+                            stages_done["UIDesign"] = True
+                            stage_outputs["UIDesign"] = ""
+                            _skip_msg = CompanyMessage(
+                                content=_cfg.skip_message,
+                                cause_by="ChatReply", sent_from="PM", task_id=task.task_id,
+                            )
+                            await self._env.publish(_skip_msg)
+                            break
+                        elif _sr.action == "rework":
+                            _rework = CompanyMessage(
+                                content=f"## 系统提示\n{_sr.rework_hint}",
+                                cause_by="WriteUIDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
+                            )
+                            await self._env.publish(_rework)
+                            break
                         stages_done["UIDesign"] = True
                         stage_outputs["UIDesign"] = result_msg.content
-                        _proj_dir = self._extract_workspace_from_requirement(requirement)
                         await self._save_and_send_prototypes(result_msg.content, _proj_dir, task, "UIDesign")
                         _stage_def = self._pipeline.stage_for_action("WriteUIDesign")
                         if _stage_def and _stage_def.requires_approval:
@@ -1151,32 +1135,26 @@ class Company:
                             if not _approved:
                                 stages_done["UIDesign"] = False
                                 _rework = CompanyMessage(
-                                    content=f"## 用户反馈（请根据意见修改 UI 设计后重新提交）\n{_feedback}",
+                                    content=f"## 用户反馈（{_cfg.approval_feedback_template}）\n{_feedback}",
                                     cause_by="WriteUIDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
                                 )
                                 await self._env.publish(_rework)
                                 break
                     elif result_msg.cause_by == "WriteDesign":
-                        _validator = STAGE_VALIDATORS.get("WriteDesign")
-                        _vr = _validator(result_msg.content) if _validator else None
-                        if _vr and not _vr.valid:
-                            _attempts = rework_counts.get("WriteDesign_validate", 0) + 1
-                            rework_counts["WriteDesign_validate"] = _attempts
-                            if _attempts >= 3:
-                                logger.warning("WriteDesign 验证失败 %d 次，降级接受", _attempts)
-                            else:
-                                logger.warning("WriteDesign %s，要求重做 (%d/3)", _vr.reason, _attempts)
-                                _rework = CompanyMessage(
-                                    content=f"## 系统提示\n{_vr.rework_hint}\n\n请重新输出完整的技术设计文档。",
-                                    cause_by="WriteDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
-                                )
-                                await self._env.publish(_rework)
-                                break
+                        from agent.company.stage_handler import STAGE_CONFIGS, handle_validation
+                        _cfg = STAGE_CONFIGS["WriteDesign"]
+                        _sr = handle_validation(_cfg, result_msg.content, ctx)
+                        if _sr.action == "rework":
+                            _rework = CompanyMessage(
+                                content=f"## 系统提示\n{_sr.rework_hint}\n\n请重新输出完整的技术设计文档。",
+                                cause_by="WriteDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
+                            )
+                            await self._env.publish(_rework)
+                            break
                         stages_done["PRD"] = True
                         stages_done["Design"] = True
                         stage_outputs["Design"] = result_msg.content
                         await self._env.publish(result_msg)
-                        # --- Approval gate for Design ---
                         _stage_def = self._pipeline.stage_for_action("WriteDesign")
                         if _stage_def and _stage_def.requires_approval:
                             _proj_dir = self._extract_workspace_from_requirement(requirement)
@@ -1184,7 +1162,7 @@ class Company:
                             if not _approved:
                                 stages_done["Design"] = False
                                 _rework = CompanyMessage(
-                                    content=f"## 用户反馈（请根据意见修改技术设计后重新提交）\n{_feedback}",
+                                    content=f"## 用户反馈（{_cfg.approval_feedback_template}）\n{_feedback}",
                                     cause_by="WriteDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
                                 )
                                 await self._env.publish(_rework)
