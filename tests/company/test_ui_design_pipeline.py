@@ -257,36 +257,21 @@ class TestImageEnhancement:
         assert "ph-img" in html
 
     @pytest.mark.asyncio
-    async def test_ecommerce_called_with_reference(self, ui_dir):
-        """电商项目有参考图时调用电商做图."""
+    async def test_no_key_returns_early(self, ui_dir):
+        """No OPENAI_API_KEY — returns without modifying HTML."""
         from agent.company.company import Company
-
-        # 创建参考图
-        ref_dir = ui_dir / "assets"
-        ref_dir.mkdir()
-        (ref_dir / "product.jpg").write_bytes(b'\xff\xd8\xff\xe0' + b'\x00' * 50)
 
         company = MagicMock(spec=Company)
         company._env = MagicMock()
-        company._env.roles = {"PM": MagicMock(_requirement_text="淘宝电商详情页设计", _ui_platform="mobile")}
+        company._env.roles = {}
 
-        with patch("agent.tools.ecommerce_tools.generate_ecommerce_image", new_callable=AsyncMock) as mock_ecom, \
-             patch("agent.core.secrets.get_secrets_store") as mock_secrets:
-            mock_secrets.return_value = MagicMock()
-            mock_secrets.return_value.get = lambda skill, key, default=None: "test" if key in ("CALABASH_PHONE", "CALABASH_PASSWORD") else default
-
-            import json
-            img_path = str(ui_dir / "ui-designs" / "assets" / "taobao_main_123_1.jpg")
-            (ui_dir / "ui-designs" / "assets").mkdir(exist_ok=True)
-            Path(img_path).write_bytes(b'\xff\xd8' + b'\x00' * 50)
-            mock_ecom.return_value = json.dumps({
-                "success": True,
-                "images": [{"path": img_path, "size_kb": 50}]
-            })
-
+        with patch.dict("os.environ", {}, clear=True):
+            import os
+            os.environ.pop("OPENAI_API_KEY", None)
             await Company._enhance_placeholder_images(company, ui_dir, MagicMock())
-            mock_ecom.assert_called_once()
-            assert "taobao" in mock_ecom.call_args.kwargs.get("platform", "")
+
+        html = (ui_dir / "ui-designs" / "page1.html").read_text()
+        assert "ph-img" in html
 
 
 # ═══════════════════════════════════════════════════════════════════

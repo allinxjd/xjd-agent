@@ -549,35 +549,9 @@ class Company:
         assets_dir = ui_dir / "assets"
         assets_dir.mkdir(exist_ok=True)
 
-        # 检测项目类型
-        pm_role = self._env.roles.get("PM")
-        requirement = getattr(pm_role, '_requirement_text', '') if pm_role else ''
-        is_ecommerce = any(
-            kw in requirement for kw in ("电商", "淘宝", "京东", "小红书", "详情页", "主图", "商品")
-        )
-
-        # 查找参考图片（电商做图需要）
-        ref_image = None
-        if is_ecommerce:
-            for ref_dir in (project_dir / "assets", project_dir / "references", project_dir):
-                if ref_dir.exists():
-                    for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
-                        refs = list(ref_dir.glob(ext))
-                        if refs:
-                            ref_image = str(refs[0])
-                            break
-                if ref_image:
-                    break
-
-        # 检测可用的图片生成能力
         has_openai = bool(os.environ.get("OPENAI_API_KEY"))
-        has_calabash = False
-        try:
-            from agent.core.secrets import get_secrets_store
-            secrets = get_secrets_store()
-            has_calabash = bool(secrets.get("ecommerce-image-pipeline", "CALABASH_PHONE"))
-        except Exception:
-            pass
+        if not has_openai:
+            return
 
         img_counter = 0
         for html_file in html_files:
@@ -593,54 +567,27 @@ class Company:
                 img_counter += 1
                 img_path = None
 
-                # 策略 1: 电商做图
-                if is_ecommerce and has_calabash and ref_image:
-                    try:
-                        from agent.tools.ecommerce_tools import generate_ecommerce_image
-                        import json
-                        platform_map = {"淘宝": "taobao", "京东": "jd", "小红书": "xiaohongshu"}
-                        ecom_platform = "taobao"
-                        for kw, p in platform_map.items():
-                            if kw in requirement:
-                                ecom_platform = p
-                                break
-                        kind = "detail" if "详情" in desc else "main"
-                        result_json = await generate_ecommerce_image(
-                            platform=ecom_platform, kind=kind,
-                            description=desc or "产品展示图",
-                            reference_image=ref_image,
-                            save_dir=str(assets_dir),
-                        )
-                        result = json.loads(result_json)
-                        if result.get("success") and result.get("images"):
-                            img_path = result["images"][0]["path"]
-                    except Exception as e:
-                        logger.debug("电商做图失败，降级: %s", e)
+                try:
+                    from agent.tools.media_tools import _image_generate
+                    size = "1792x1024" if "wide" in classes else (
+                        "1024x1792" if "portrait" in classes else "1024x1024"
+                    )
+                    prompt = desc if desc else "modern minimal UI illustration"
+                    result_text = await _image_generate(prompt=prompt, size=size)
+                    if "http" in result_text and "失败" not in result_text:
+                        import httpx
+                        url = _re.search(r'https?://\S+', result_text)
+                        if url:
+                            async with httpx.AsyncClient(timeout=30) as client:
+                                resp = await client.get(url.group())
+                                if resp.status_code == 200:
+                                    fname = f"gen_{img_counter}.png"
+                                    fpath = assets_dir / fname
+                                    fpath.write_bytes(resp.content)
+                                    img_path = str(fpath)
+                except Exception as e:
+                    logger.debug("图片生成失败，保留 CSS 占位: %s", e)
 
-                # 策略 2: DALL-E 通用生成
-                if not img_path and has_openai:
-                    try:
-                        from agent.tools.media_tools import _image_generate
-                        size = "1792x1024" if "wide" in classes else (
-                            "1024x1792" if "portrait" in classes else "1024x1024"
-                        )
-                        prompt = desc if desc else "modern minimal UI illustration"
-                        result_text = await _image_generate(prompt=prompt, size=size)
-                        if "http" in result_text and "失败" not in result_text:
-                            import httpx
-                            url = _re.search(r'https?://\S+', result_text)
-                            if url:
-                                async with httpx.AsyncClient(timeout=30) as client:
-                                    resp = await client.get(url.group())
-                                    if resp.status_code == 200:
-                                        fname = f"gen_{img_counter}.png"
-                                        fpath = assets_dir / fname
-                                        fpath.write_bytes(resp.content)
-                                        img_path = str(fpath)
-                    except Exception as e:
-                        logger.debug("DALL-E 生成失败，使用 CSS 兜底: %s", e)
-
-                # 替换 HTML
                 if img_path:
                     rel_path = Path(img_path).relative_to(ui_dir) if Path(img_path).is_relative_to(ui_dir) else f"assets/{Path(img_path).name}"
                     replacement = f'<img src="{rel_path}" class="ph-img {classes}" alt="{desc}" style="object-fit:cover;width:100%;height:100%;">'
