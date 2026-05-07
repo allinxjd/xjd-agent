@@ -1184,6 +1184,7 @@ class Company:
                                 rework_counts=rework_counts,
                                 task=task,
                                 pipeline_deadline=pipeline_deadline,
+                                sm=sm,
                             )
                         else:
                             logger.info("Design 未包含模块拆分，使用传统单体 pipeline")
@@ -2867,6 +2868,7 @@ class Company:
         rework_counts: dict[str, int],
         task: "CompanyTask",
         pipeline_deadline: float,
+        sm: "PipelineStateMachine | None" = None,
     ) -> None:
         """按模块循环执行 Code → Verify → Review，每个模块独立完成."""
         import asyncio
@@ -3035,9 +3037,14 @@ class Company:
 
             logger.info("模块 %s 完成 (%d/%d)", mod_name, i + 1, len(modules))
 
-        stages_done["Code"] = True
-        stages_done["Verify"] = True
-        stages_done["Review"] = True
+        if sm:
+            sm.complete("Code")
+            sm.complete("Verify")
+            sm.complete("Review")
+        else:
+            stages_done["Code"] = True
+            stages_done["Verify"] = True
+            stages_done["Review"] = True
 
         project_dir = self._extract_workspace_from_requirement(requirement)
         if project_dir:
