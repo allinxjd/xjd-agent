@@ -1059,7 +1059,7 @@ class Company:
                             )
                             await self._env.publish(_rework)
                             break
-                        stages_done["PRD"] = True
+                        sm.complete("PRD")
                         stage_outputs["PRD"] = result_msg.content
                         await self._env.publish(result_msg)
                         _stage_def = self._pipeline.stage_for_action("WritePRD")
@@ -1067,7 +1067,7 @@ class Company:
                             _proj_dir = self._extract_workspace_from_requirement(requirement)
                             _approved, _feedback = await self._wait_for_approval("PRD", task, _proj_dir)
                             if not _approved:
-                                stages_done["PRD"] = False
+                                sm.reset("PRD")
                                 _rework = CompanyMessage(
                                     content=f"## 用户反馈（{_cfg.approval_feedback_template}）\n{_feedback}",
                                     cause_by="WritePRD", sent_from="Human", send_to="PM", task_id=task.task_id,
@@ -1080,7 +1080,7 @@ class Company:
                         _proj_dir = self._extract_workspace_from_requirement(requirement)
                         _sr = handle_validation(_cfg, result_msg.content, ctx, project_dir=_proj_dir)
                         if _sr.action == "skip":
-                            stages_done["Prototype"] = True
+                            sm.complete("Prototype")
                             stage_outputs["Prototype"] = ""
                             _skip_msg = CompanyMessage(
                                 content=_cfg.skip_message,
@@ -1095,14 +1095,14 @@ class Company:
                             )
                             await self._env.publish(_rework)
                             break
-                        stages_done["Prototype"] = True
+                        sm.complete("Prototype")
                         stage_outputs["Prototype"] = result_msg.content
                         await self._save_and_send_prototypes(result_msg.content, _proj_dir, task, "Prototype")
                         _stage_def = self._pipeline.stage_for_action("WritePrototype")
                         if _stage_def and _stage_def.requires_approval:
                             _approved, _feedback = await self._wait_for_approval("Prototype", task, _proj_dir)
                             if not _approved:
-                                stages_done["Prototype"] = False
+                                sm.reset("Prototype")
                                 _rework = CompanyMessage(
                                     content=f"## 用户反馈（{_cfg.approval_feedback_template}）\n{_feedback}",
                                     cause_by="WritePrototype", sent_from="Human", send_to="PM", task_id=task.task_id,
@@ -1115,7 +1115,7 @@ class Company:
                         _proj_dir = self._extract_workspace_from_requirement(requirement)
                         _sr = handle_validation(_cfg, result_msg.content, ctx, project_dir=_proj_dir)
                         if _sr.action == "skip":
-                            stages_done["UIDesign"] = True
+                            sm.complete("UIDesign")
                             stage_outputs["UIDesign"] = ""
                             _skip_msg = CompanyMessage(
                                 content=_cfg.skip_message,
@@ -1130,14 +1130,14 @@ class Company:
                             )
                             await self._env.publish(_rework)
                             break
-                        stages_done["UIDesign"] = True
+                        sm.complete("UIDesign")
                         stage_outputs["UIDesign"] = result_msg.content
                         await self._save_and_send_prototypes(result_msg.content, _proj_dir, task, "UIDesign")
                         _stage_def = self._pipeline.stage_for_action("WriteUIDesign")
                         if _stage_def and _stage_def.requires_approval:
                             _approved, _feedback = await self._wait_for_approval("UIDesign", task, _proj_dir)
                             if not _approved:
-                                stages_done["UIDesign"] = False
+                                sm.reset("UIDesign")
                                 _rework = CompanyMessage(
                                     content=f"## 用户反馈（{_cfg.approval_feedback_template}）\n{_feedback}",
                                     cause_by="WriteUIDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
@@ -1155,8 +1155,8 @@ class Company:
                             )
                             await self._env.publish(_rework)
                             break
-                        stages_done["PRD"] = True
-                        stages_done["Design"] = True
+                        sm.complete("PRD")
+                        sm.complete("Design")
                         stage_outputs["Design"] = result_msg.content
                         await self._env.publish(result_msg)
                         _stage_def = self._pipeline.stage_for_action("WriteDesign")
@@ -1164,7 +1164,7 @@ class Company:
                             _proj_dir = self._extract_workspace_from_requirement(requirement)
                             _approved, _feedback = await self._wait_for_approval("Design", task, _proj_dir)
                             if not _approved:
-                                stages_done["Design"] = False
+                                sm.reset("Design")
                                 _rework = CompanyMessage(
                                     content=f"## 用户反馈（{_cfg.approval_feedback_template}）\n{_feedback}",
                                     cause_by="WriteDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
@@ -1188,7 +1188,7 @@ class Company:
                         else:
                             logger.info("Design 未包含模块拆分，使用传统单体 pipeline")
                     elif result_msg.cause_by == "SetupEnv":
-                        stages_done["Env"] = True
+                        sm.complete("Env")
                         if "ENV_FAIL" in result_msg.content:
                             logger.warning("环境安装失败，继续执行（Developer 可能需要手动处理）")
                     elif result_msg.cause_by == "WriteCode":
@@ -1228,7 +1228,7 @@ class Company:
                                 if wf_rework < max_rework:
                                     rework_counts["Developer_writefile"] = wf_rework + 1
                                     logger.warning("WriteCode 未调用 write_file，要求重试 (第%d次)", wf_rework + 1)
-                                    stages_done["Code"] = False
+                                    sm.reset("Code")
                                     _design_ctx = stage_outputs.get('Design', '')[:2000]
                                     _clarify_signals = ["澄清", "不清楚", "不知道", "需要先", "麻烦补充", "麻烦先告诉"]
                                     if not _design_ctx or any(s in _design_ctx for s in _clarify_signals):
@@ -1254,7 +1254,7 @@ class Company:
                                     break
                                 else:
                                     logger.warning("WriteCode 未调用 write_file 重试已达上限，强制继续")
-                        stages_done["Code"] = True
+                        sm.complete("Code")
                         workspace = self._extract_workspace_from_requirement(requirement)
                         if workspace:
                             code_listing = self._collect_project_files(
@@ -1270,7 +1270,7 @@ class Company:
                                 if role_rework < max_rework:
                                     rework_counts["Developer_empty"] = role_rework + 1
                                     logger.warning("WriteCode 完成但项目目录无代码文件，要求 Developer 重写 (第%d次)", role_rework + 1)
-                                    stages_done["Code"] = False
+                                    sm.reset("Code")
                                     rework_msg = CompanyMessage(
                                         content=(
                                             "项目目录下没有找到任何代码文件。\n"
@@ -1289,13 +1289,13 @@ class Company:
                                     break
                     elif result_msg.cause_by == "VerifyRun":
                         if "VERIFY_PASS" in result_msg.content:
-                            stages_done["Verify"] = True
+                            sm.complete("Verify")
                         else:
                             verify_rework = rework_counts.get("Developer_verify", 0)
                             if verify_rework < max_rework:
                                 rework_counts["Developer_verify"] = verify_rework + 1
                                 logger.warning("VerifyRun 失败，Developer 修复 (第%d次, patch 模式)", verify_rework + 1)
-                                stages_done["Verify"] = False
+                                sm.reset("Verify")
 
                                 fix_parts = [f"## 验证失败，请修复指出的问题\n{result_msg.content}"]
                                 pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
@@ -1318,7 +1318,7 @@ class Company:
                                 break
                             else:
                                 logger.warning("VerifyRun 返工次数已达上限，强制通过")
-                                stages_done["Verify"] = True
+                                sm.complete("Verify")
                     elif result_msg.cause_by == "CodeReview":
                         if self._has_code_incomplete(result_msg.content) or self._has_requirement_issue(result_msg.content):
                             _ws_review = self._extract_workspace_from_requirement(requirement)
@@ -1342,15 +1342,15 @@ class Company:
                                         task_id=task.task_id,
                                     )
                                     await self._env.publish(fix_msg)
-                                stages_done["Verify"] = False
-                                stages_done["Review"] = False
+                                sm.reset("Verify")
+                                sm.reset("Review")
                                 break
                             else:
                                 logger.warning("[Reviewer] 输出表示代码不完整，回退给 Developer 重写")
                                 self._clear_downstream_inboxes(role.name)
-                                stages_done["Code"] = False
-                                stages_done["Verify"] = False
-                                stages_done["Review"] = False
+                                sm.reset("Code")
+                                sm.reset("Verify")
+                                sm.reset("Review")
                                 rework_msg = CompanyMessage(
                                     content=(
                                         "Reviewer 反馈：收到的代码不完整，无法审查。\n"
@@ -1365,11 +1365,11 @@ class Company:
                                 await self._env.publish(rework_msg)
                                 break
                         if self._is_review_approved(result_msg.content):
-                            stages_done["Review"] = True
+                            sm.complete("Review")
                     elif result_msg.cause_by in ("WriteTest", "RunTest"):
                         if result_msg.cause_by == "RunTest":
                             if self._is_test_passed(result_msg.content):
-                                stages_done["Test"] = True
+                                sm.complete("Test")
                                 pdir_match = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
                                 if pdir_match:
                                     result_msg.content += f"\n\n## 项目工作目录\n{pdir_match.group(1)}\n"
@@ -1378,7 +1378,7 @@ class Company:
                             url_m = _re.search(r'http://[\w.\-]+:\d+[/\w.\-]*', result_msg.content)
                             if url_m:
                                 stage_outputs["Deploy"] = url_m.group(0)
-                            stages_done["Deploy"] = True
+                            sm.complete("Deploy")
 
                     stage_just_completed = (
                         (result_msg.cause_by == "CodeReview" and stages_done.get("Review"))
@@ -1438,9 +1438,9 @@ class Company:
                             await self._env.publish(fix_msg)
                             self._store.save_message(fix_msg)
 
-                        stages_done["Verify"] = False
-                        stages_done["Review"] = False
-                        stages_done["Test"] = False
+                        sm.reset("Verify")
+                        sm.reset("Review")
+                        sm.reset("Test")
 
                         rework_status = CompanyMessage(
                             content=f"{role.name} 发现问题，{rework_target} 正在修复（第 {role_rework + 1} 次，patch 模式）",
