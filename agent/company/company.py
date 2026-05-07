@@ -1954,7 +1954,7 @@ class Company:
         if not projects_dir.exists():
             return None
 
-        iterate_keywords = ["接着开发", "继续开发", "接着做", "继续做", "继续", "接着来", "断点恢复", "迭代", "升级", "加个功能", "加一个功能", "改一下"]
+        iterate_keywords = ["接着开发", "继续开发", "接着做", "继续做", "继续", "接着来", "断点恢复", "迭代", "升级", "加个功能", "加一个功能", "改一下", "重构", "就是", "部署一下"]
         is_iterate = any(kw in text for kw in iterate_keywords)
 
         dirs = sorted(projects_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -2505,6 +2505,10 @@ class Company:
                 needs_prototype = False
 
             existing_project = self._find_project_by_name(task_context, project_name=project_name)
+            # Also search conversation history if task_context alone didn't match
+            if not existing_project:
+                history_text = " ".join(c for _, c in self._standby_history[-10:])
+                existing_project = self._find_project_by_name(history_text, project_name=project_name)
 
             if not project_name and not existing_project:
                 self._pending_project_name = {

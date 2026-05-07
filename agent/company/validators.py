@@ -187,7 +187,7 @@ def validate_html_quality(content: str, project_dir=None) -> ValidationResult:
 
 
 def validate_prd(content: str) -> ValidationResult:
-    """PRD 必须是完整文档，不能只是提问."""
+    """PRD 必须是完整文档，不能只是提问，不能有待确认事项."""
     if len(content) < 500:
         clarify_signals = [
             "需要确认", "需要澄清", "请问", "请确认",
@@ -200,9 +200,22 @@ def validate_prd(content: str) -> ValidationResult:
                 rework_hint=(
                     "你的输出是提问而非 PRD 文档。请直接根据需求编写完整的产品需求文档"
                     "（Markdown 格式），包含项目概述、功能需求、技术约束等章节。"
-                    "如果需求不清晰，在文档末尾的「待确认事项」中列出问题。"
+                    "如果需求不清晰，根据行业最佳实践做出合理决策，不要留待确认事项。"
                 ),
             )
+    # 检查是否有待确认/待确定/待定事项
+    unresolved_signals = ["待确认", "待确定", "待定", "需要确认", "需要决策", "TBD", "TODO"]
+    found = [s for s in unresolved_signals if s in content]
+    if found:
+        return ValidationResult(
+            valid=False,
+            reason=f"PRD 包含未决事项: {', '.join(found)}",
+            rework_hint=(
+                "PRD 不允许包含待确认/待确定/待定事项。所有需求细节必须明确。"
+                "请根据行业最佳实践和上下文对不确定的部分做出合理决策，"
+                "直接写入 PRD，不要留给用户确认。"
+            ),
+        )
     return ValidationResult(valid=True)
 
 
