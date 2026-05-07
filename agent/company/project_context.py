@@ -161,8 +161,19 @@ class ProjectContext:
         """检测项目技术栈（轻量版，供 context 注入用）."""
         if not self.directory or not self.directory.exists():
             return ""
-        from agent.company.company import AICompany
-        return AICompany._extract_tech_stack(self.directory)
+        from agent.company.company import Company
+        return Company._extract_tech_stack(self.directory)
+
+    @property
+    def code_manager(self) -> "CodeManager":
+        """懒加载 CodeManager 实例."""
+        if not hasattr(self, "_code_manager") or self._code_manager is None:
+            from agent.company.code_manager import CodeManager
+            if self.directory and self.directory.exists():
+                self._code_manager = CodeManager(self.directory)
+            else:
+                self._code_manager = None
+        return self._code_manager
 
     def get_context_summary(self) -> str:
         """生成供 LLM prompt 注入的项目摘要."""

@@ -1258,11 +1258,18 @@ class Company:
                         sm.complete("Code")
                         workspace = self._extract_workspace_from_requirement(requirement)
                         if workspace:
-                            code_listing = self._collect_project_files(
-                                workspace,
-                                max_chars=self._config.max_project_chars,
-                                max_files=self._config.max_project_files,
-                            )
+                            if ctx.code_manager:
+                                ctx.code_manager.invalidate()
+                                code_listing = ctx.code_manager.collect_files(
+                                    max_chars=self._config.max_project_chars,
+                                    max_files=self._config.max_project_files,
+                                )
+                            else:
+                                code_listing = self._collect_project_files(
+                                    workspace,
+                                    max_chars=self._config.max_project_chars,
+                                    max_files=self._config.max_project_files,
+                                )
                             if code_listing:
                                 result_msg.content += f"\n\n## 代码文件内容\n{code_listing}"
                                 logger.info("已附加项目代码文件到 WriteCode 输出 (%d 字符)", len(code_listing))
