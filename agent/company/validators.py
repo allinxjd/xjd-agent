@@ -30,7 +30,8 @@ def _load_seed_classes(platform: str) -> set[str]:
     if not seed_path.exists():
         return set()
     content = seed_path.read_text(encoding="utf-8")
-    classes = set(re.findall(r'\.([\w][\w-]*)', content))
+    # Match CSS class selectors (start with letter or hyphen, not digits/decimals)
+    classes = set(re.findall(r'\.([a-zA-Z][a-zA-Z0-9_-]*)', content))
     _SEED_CLASSES[platform] = classes
     return classes
 
@@ -68,9 +69,16 @@ _EMOJI_RE = re.compile(
 
 
 def _check_hex_outside_root(content: str) -> Optional[str]:
-    """检查 :root 外是否有 hex 色值."""
-    body_content = _extract_body_content(content)
-    matches = re.findall(r'#[0-9a-fA-F]{3,8}\b', body_content)
+    """检查 :root 和 <style> 外是否有 hex 色值."""
+    parts = content.split('</style>')
+    if len(parts) > 1:
+        body_content = parts[-1]
+    else:
+        body_content = _extract_body_content(content)
+    # Remove HTML entities (&#10003; etc) and anchor links (#section) before checking
+    cleaned = re.sub(r'&#\d+;', '', body_content)
+    cleaned = re.sub(r'href="#[^"]*"', '', cleaned)
+    matches = re.findall(r'#[0-9a-fA-F]{3,8}\b', cleaned)
     if matches:
         samples = ', '.join(matches[:3])
         return f"发现 :root 外的 hex 色值: {samples}。请改用 CSS 变量（var(--accent) 等）"
@@ -86,7 +94,7 @@ def _check_custom_style(content: str) -> Optional[str]:
 
 
 def _check_class_whitelist(content: str, platform: str) -> Optional[str]:
-    """检查是否使用了 seed 未定义的 class."""
+    """检查是否使用了 seed 未定义的 class（允许少量语义化 class）."""
     whitelist = _load_seed_classes(platform)
     if not whitelist:
         return None
@@ -96,9 +104,10 @@ def _check_class_whitelist(content: str, platform: str) -> Optional[str]:
     for class_attr in used_classes:
         all_used.update(class_attr.split())
     unknown = all_used - whitelist - {''}
-    if unknown:
+    # Allow up to 5 unknown classes (LLMs add semantic names like "pricing-card")
+    if len(unknown) > 5:
         samples = ', '.join(sorted(unknown)[:5])
-        return f"使用了 seed 未定义的 class: {samples}。请只用 seed.html 中已有的 class"
+        return f"使用了过多 seed 未定义的 class ({len(unknown)}个): {samples}。请尽量只用 seed.html 中已有的 class"
     return None
 
 

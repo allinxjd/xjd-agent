@@ -96,10 +96,10 @@ class TestHtmlQualityValidator:
         assert err is None
 
     def test_unknown_class_detected(self):
-        html = '<html><head><style>:root{}</style></head><body><div class="my-custom-class">x</div></body></html>'
+        html = '<html><head><style>:root{}</style></head><body><div class="aaa bbb ccc ddd eee fff ggg">x</div></body></html>'
         err = _check_class_whitelist(html, "web")
         assert err is not None
-        assert "my-custom-class" in err
+        assert "seed 未定义" in err
 
     def test_seed_class_passes(self):
         html = '<html><head><style>:root{}</style></head><body><div class="container hero-center"><a class="btn btn-primary">ok</a></div></body></html>'
