@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Callable
+from pathlib import Path as _Path
+from typing import Callable, Optional
 
 
 @dataclass
@@ -12,6 +13,157 @@ class ValidationResult:
     valid: bool
     reason: str = ""
     rework_hint: str = ""
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  HTML 质量验证（P0 checklist 程序化检查）
+# ═══════════════════════════════════════════════════════════════════
+
+_SEED_CLASSES: dict[str, set[str]] = {}
+
+
+def _load_seed_classes(platform: str) -> set[str]:
+    """从 seed.html 提取所有 CSS class 名称作为白名单."""
+    if platform in _SEED_CLASSES:
+        return _SEED_CLASSES[platform]
+    seed_path = _Path(__file__).parent / "templates" / "ui" / platform / "seed.html"
+    if not seed_path.exists():
+        return set()
+    content = seed_path.read_text(encoding="utf-8")
+    classes = set(re.findall(r'\.([\w][\w-]*)', content))
+    _SEED_CLASSES[platform] = classes
+    return classes
+
+
+def _detect_platform_from_html(content: str) -> str:
+    """从 HTML 内容判断平台类型."""
+    if 'class="device"' in content or ".device" in content:
+        if "wx-navbar" in content or "wx-capsule" in content:
+            return "miniprogram"
+        return "mobile"
+    return "web"
+
+
+def _extract_body_content(content: str) -> str:
+    """提取 <body> 之后的内容（排除 :root 和 seed style 块）."""
+    body_match = re.search(r'<body[^>]*>', content, re.IGNORECASE)
+    if body_match:
+        return content[body_match.end():]
+    style_end = content.rfind('</style>')
+    if style_end != -1:
+        return content[style_end + 8:]
+    return content
+
+
+_EMOJI_RE = re.compile(
+    r'[\U0001F600-\U0001F64F'
+    r'\U0001F300-\U0001F5FF'
+    r'\U0001F680-\U0001F6FF'
+    r'\U0001F900-\U0001F9FF'
+    r'\U0001FA00-\U0001FA6F'
+    r'\U00002702-\U000027B0'
+    r'\U0000FE00-\U0000FE0F'
+    r'\U0001F1E0-\U0001F1FF]'
+)
+
+
+def _check_hex_outside_root(content: str) -> Optional[str]:
+    """检查 :root 外是否有 hex 色值."""
+    body_content = _extract_body_content(content)
+    matches = re.findall(r'#[0-9a-fA-F]{3,8}\b', body_content)
+    if matches:
+        samples = ', '.join(matches[:3])
+        return f"发现 :root 外的 hex 色值: {samples}。请改用 CSS 变量（var(--accent) 等）"
+    return None
+
+
+def _check_custom_style(content: str) -> Optional[str]:
+    """检查 body 内是否有额外 <style> 块."""
+    body_content = _extract_body_content(content)
+    if '<style' in body_content.lower():
+        return "不允许在 body 内添加 <style> 块，请只使用 seed 中预定义的 class"
+    return None
+
+
+def _check_class_whitelist(content: str, platform: str) -> Optional[str]:
+    """检查是否使用了 seed 未定义的 class."""
+    whitelist = _load_seed_classes(platform)
+    if not whitelist:
+        return None
+    body_content = _extract_body_content(content)
+    used_classes = set(re.findall(r'class="([^"]*)"', body_content))
+    all_used: set[str] = set()
+    for class_attr in used_classes:
+        all_used.update(class_attr.split())
+    unknown = all_used - whitelist - {''}
+    if unknown:
+        samples = ', '.join(sorted(unknown)[:5])
+        return f"使用了 seed 未定义的 class: {samples}。请只用 seed.html 中已有的 class"
+    return None
+
+
+def _check_accent_overuse(content: str) -> Optional[str]:
+    """检查 accent 使用是否超限."""
+    sections = re.findall(r'data-section', content)
+    section_count = max(len(sections), 1)
+    accent_count = content.count('var(--accent)')
+    limit = section_count * 2
+    if accent_count > limit:
+        return f"accent 使用过多（{accent_count}次，{section_count}个 section 限{limit}次）。请减少 accent 使用"
+    return None
+
+
+def _check_replace_placeholders(content: str) -> Optional[str]:
+    """检查是否有未替换的 [REPLACE] 占位符."""
+    if '[REPLACE]' in content:
+        return "仍有未替换的 [REPLACE] 占位符，请用实际内容替换所有 [REPLACE]"
+    return None
+
+
+def _check_emoji(content: str) -> Optional[str]:
+    """检查是否使用了 emoji 图标."""
+    body_content = _extract_body_content(content)
+    matches = _EMOJI_RE.findall(body_content)
+    if matches:
+        return f"检测到 emoji 图标（{''.join(matches[:3])}），请用 SVG 或 feature-mark class 替代"
+    return None
+
+
+def _check_data_section(content: str, platform: str) -> Optional[str]:
+    """Web 平台检查 section 是否有 data-section 属性."""
+    if platform != "web":
+        return None
+    sections = re.findall(r'<section[^>]*>', content, re.IGNORECASE)
+    missing = [s for s in sections if 'data-section' not in s]
+    if missing:
+        return f"有 {len(missing)} 个 <section> 缺少 data-section 属性，请为每个 section 添加"
+    return None
+
+
+def validate_html_quality(content: str, project_dir=None) -> ValidationResult:
+    """P0 质量检查 — 逐条验证 HTML 是否符合模板规范."""
+    html_blocks = re.findall(r'```html\s*\n(.*?)```', content, re.DOTALL)
+    if not html_blocks:
+        html_docs = re.findall(
+            r'(<!DOCTYPE html>.*?</html>)', content, re.DOTALL | re.IGNORECASE
+        )
+        html_blocks = html_docs if html_docs else [content]
+
+    for html in html_blocks:
+        platform = _detect_platform_from_html(html)
+        checks = [
+            _check_replace_placeholders(html),
+            _check_hex_outside_root(html),
+            _check_custom_style(html),
+            _check_emoji(html),
+            _check_accent_overuse(html),
+            _check_data_section(html, platform),
+            _check_class_whitelist(html, platform),
+        ]
+        for error in checks:
+            if error:
+                return ValidationResult(valid=False, reason=error, rework_hint=error)
+    return ValidationResult(valid=True)
 
 
 def validate_prd(content: str) -> ValidationResult:
@@ -88,10 +240,18 @@ def validate_code_output(content: str) -> ValidationResult:
     return ValidationResult(valid=True)
 
 
+def _validate_ui_design(content: str, project_dir=None) -> ValidationResult:
+    """WriteUIDesign 专用验证：先检查 HTML 存在，再检查质量."""
+    basic = validate_html_output(content, project_dir)
+    if not basic.valid:
+        return basic
+    return validate_html_quality(content, project_dir)
+
+
 STAGE_VALIDATORS: dict[str, Callable] = {
     "WritePRD": validate_prd,
     "WritePrototype": validate_html_output,
-    "WriteUIDesign": validate_html_output,
+    "WriteUIDesign": _validate_ui_design,
     "WriteDesign": validate_design,
     "WriteCode": validate_code_output,
 }

@@ -534,6 +534,162 @@ class Company:
         )
         await self._env.publish(report_msg)
 
+    async def _enhance_placeholder_images(self, project_dir: "Path", task) -> None:
+        """替换 .ph-img 占位区为 AI 生成的真实图片."""
+        import re as _re
+        import os
+
+        ui_dir = project_dir / "ui-designs"
+        if not ui_dir.exists():
+            return
+        html_files = sorted(ui_dir.glob("*.html"))
+        if not html_files:
+            return
+
+        assets_dir = ui_dir / "assets"
+        assets_dir.mkdir(exist_ok=True)
+
+        # 检测项目类型
+        pm_role = self._env.roles.get("PM")
+        requirement = getattr(pm_role, '_requirement_text', '') if pm_role else ''
+        is_ecommerce = any(
+            kw in requirement for kw in ("电商", "淘宝", "京东", "小红书", "详情页", "主图", "商品")
+        )
+
+        # 查找参考图片（电商做图需要）
+        ref_image = None
+        if is_ecommerce:
+            for ref_dir in (project_dir / "assets", project_dir / "references", project_dir):
+                if ref_dir.exists():
+                    for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+                        refs = list(ref_dir.glob(ext))
+                        if refs:
+                            ref_image = str(refs[0])
+                            break
+                if ref_image:
+                    break
+
+        # 检测可用的图片生成能力
+        has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+        has_calabash = False
+        try:
+            from agent.core.secrets import get_secrets_store
+            secrets = get_secrets_store()
+            has_calabash = bool(secrets.get("ecommerce-image-pipeline", "CALABASH_PHONE"))
+        except Exception:
+            pass
+
+        img_counter = 0
+        for html_file in html_files:
+            content = html_file.read_text(encoding="utf-8")
+            ph_pattern = r'<div\s+class="ph-img([^"]*)"[^>]*>(.*?)</div>'
+            matches = list(_re.finditer(ph_pattern, content, _re.DOTALL))
+            if not matches:
+                continue
+
+            for match in reversed(matches):
+                classes = match.group(1).strip()
+                desc = match.group(2).strip()
+                img_counter += 1
+                img_path = None
+
+                # 策略 1: 电商做图
+                if is_ecommerce and has_calabash and ref_image:
+                    try:
+                        from agent.tools.ecommerce_tools import generate_ecommerce_image
+                        import json
+                        platform_map = {"淘宝": "taobao", "京东": "jd", "小红书": "xiaohongshu"}
+                        ecom_platform = "taobao"
+                        for kw, p in platform_map.items():
+                            if kw in requirement:
+                                ecom_platform = p
+                                break
+                        kind = "detail" if "详情" in desc else "main"
+                        result_json = await generate_ecommerce_image(
+                            platform=ecom_platform, kind=kind,
+                            description=desc or "产品展示图",
+                            reference_image=ref_image,
+                            save_dir=str(assets_dir),
+                        )
+                        result = json.loads(result_json)
+                        if result.get("success") and result.get("images"):
+                            img_path = result["images"][0]["path"]
+                    except Exception as e:
+                        logger.debug("电商做图失败，降级: %s", e)
+
+                # 策略 2: DALL-E 通用生成
+                if not img_path and has_openai:
+                    try:
+                        from agent.tools.media_tools import _image_generate
+                        size = "1792x1024" if "wide" in classes else (
+                            "1024x1792" if "portrait" in classes else "1024x1024"
+                        )
+                        prompt = desc if desc else "modern minimal UI illustration"
+                        result_text = await _image_generate(prompt=prompt, size=size)
+                        if "http" in result_text and "失败" not in result_text:
+                            import httpx
+                            url = _re.search(r'https?://\S+', result_text)
+                            if url:
+                                async with httpx.AsyncClient(timeout=30) as client:
+                                    resp = await client.get(url.group())
+                                    if resp.status_code == 200:
+                                        fname = f"gen_{img_counter}.png"
+                                        fpath = assets_dir / fname
+                                        fpath.write_bytes(resp.content)
+                                        img_path = str(fpath)
+                    except Exception as e:
+                        logger.debug("DALL-E 生成失败，使用 CSS 兜底: %s", e)
+
+                # 替换 HTML
+                if img_path:
+                    rel_path = Path(img_path).relative_to(ui_dir) if Path(img_path).is_relative_to(ui_dir) else f"assets/{Path(img_path).name}"
+                    replacement = f'<img src="{rel_path}" class="ph-img {classes}" alt="{desc}" style="object-fit:cover;width:100%;height:100%;">'
+                    content = content[:match.start()] + replacement + content[match.end():]
+
+            html_file.write_text(content, encoding="utf-8")
+
+    async def _export_ui_designs(self, project_dir: "Path", task) -> None:
+        """导出 UI 设计稿为 PDF + MP4，发送到飞书."""
+        if not project_dir:
+            return
+        ui_dir = project_dir / "ui-designs"
+        if not ui_dir.exists():
+            return
+        html_files = sorted(ui_dir.glob("*.html"))
+        if not html_files:
+            return
+
+        try:
+            from agent.company.design_exporter import DesignExporter
+            pm_role = self._env.roles.get("PM")
+            platform = getattr(pm_role, '_ui_platform', 'mobile') if pm_role else 'mobile'
+            viewport = (1280, 720) if platform == "web" else (390, 844)
+            exporter = DesignExporter(viewport=viewport)
+            results = await exporter.export_all(ui_dir)
+        except Exception as e:
+            logger.warning("UI 设计导出失败: %s", e)
+            return
+
+        if results.get("pdf"):
+            pdf_msg = CompanyMessage(
+                content="UI 设计稿 PDF 已生成。",
+                cause_by="StageFile",
+                sent_from="PM",
+                task_id=task.task_id,
+                metadata={"file_path": str(results["pdf"]), "filename": "UI设计稿.pdf"},
+            )
+            await self._env.publish(pdf_msg)
+
+        if results.get("mp4"):
+            mp4_msg = CompanyMessage(
+                content="UI 设计演示视频已生成。",
+                cause_by="StageFile",
+                sent_from="PM",
+                task_id=task.task_id,
+                metadata={"file_path": str(results["mp4"]), "filename": "UI设计演示.mp4"},
+            )
+            await self._env.publish(mp4_msg)
+
     async def _generate_prototype_report(
         self, page_info: list[dict], screenshots: dict[str, "Path"],
         target_dir: "Path", stage_key: str
@@ -642,6 +798,26 @@ class Company:
             if p.exists():
                 return p
         return None
+
+    def _detect_ui_platform(self, requirement: str) -> str:
+        """根据需求文本检测 UI 平台类型."""
+        text = requirement.lower()
+        if "小程序" in text or "miniprogram" in text or "mini program" in text:
+            return "miniprogram"
+        if any(kw in text for kw in ("移动端", "app", "手机", "ios", "android", "mobile")):
+            return "mobile"
+        return "web"
+
+    def _detect_ui_design_system(self, requirement: str) -> str:
+        """根据需求文本选择设计系统."""
+        text = requirement.lower()
+        if "小程序" in text or "微信" in text or "weui" in text:
+            return "wechat"
+        if "shadcn" in text or "nextjs" in text or "next.js" in text:
+            return "shadcn"
+        if "material" in text or "flutter" in text or "android" in text:
+            return "material"
+        return "default"
 
     @staticmethod
     def _extract_project_description(project_dir: Path) -> str:
@@ -848,6 +1024,12 @@ class Company:
             # 设置所有角色的 workspace，确保 read_file 路径解析正确
             for _r in self._env.roles.values():
                 _r._workspace = str(_pdir)
+            # 设置 UI 设计模板参数
+            _ui_platform = self._detect_ui_platform(requirement)
+            _ui_ds = self._detect_ui_design_system(requirement)
+            for _r in self._env.roles.values():
+                _r._ui_platform = _ui_platform
+                _r._ui_design_system = _ui_ds
             _meta_file = _pdir / ".project.json"
             if _meta_file.exists():
                 try:
@@ -1133,6 +1315,10 @@ class Company:
                         sm.complete("UIDesign")
                         stage_outputs["UIDesign"] = result_msg.content
                         await self._save_and_send_prototypes(result_msg.content, _proj_dir, task, "UIDesign")
+                        # 占位图替换（电商做图 / DALL-E / CSS 兜底）
+                        await self._enhance_placeholder_images(_proj_dir, task)
+                        # PDF + MP4 导出
+                        await self._export_ui_designs(_proj_dir, task)
                         _stage_def = self._pipeline.stage_for_action("WriteUIDesign")
                         if _stage_def and _stage_def.requires_approval:
                             _approved, _feedback = await self._wait_for_approval("UIDesign", task, _proj_dir)
