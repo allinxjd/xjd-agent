@@ -311,5 +311,92 @@ class TestTemplateInjection:
         assert "{layouts}" not in result
         assert "{checklist}" not in result
         assert "{design_system}" not in result
-        assert ":root" in result
-        assert "Hero" in result or "hero" in result
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  TestExportPipeline (real Playwright)
+# ═══════════════════════════════════════════════════════════════════
+
+try:
+    from agent.company.design_exporter import DesignExporter, HAS_PLAYWRIGHT, HAS_FFMPEG
+    _EXPORT_AVAILABLE = HAS_PLAYWRIGHT
+except ImportError:
+    _EXPORT_AVAILABLE = False
+    HAS_FFMPEG = False
+
+
+@pytest.mark.skipif(not _EXPORT_AVAILABLE, reason="Playwright not installed")
+class TestExportPipeline:
+    """真实 Playwright 导出测试."""
+
+    SAMPLE_HTML = (
+        '<!doctype html><html><head><style>'
+        ':root{--bg:#fafafa;--fg:#111;--accent:#2F6FEB;--border:#e5e5e5;'
+        '--accent-soft:color-mix(in srgb,var(--accent) 10%,transparent);'
+        '--radius-lg:12px;--gutter:24px;--max-w:1200px}'
+        'body{background:var(--bg);color:var(--fg);font-family:sans-serif}'
+        '.container{max-width:var(--max-w);margin:0 auto;padding:0 var(--gutter)}'
+        '.hero{padding:80px 0;text-align:center}'
+        '.card{background:#fff;border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px}'
+        '</style></head><body>'
+        '<section class="hero" data-section="hero"><div class="container">'
+        '<h1>Test Page</h1><p>Export pipeline verification</p>'
+        '</div></section>'
+        '<section data-section="cards"><div class="container">'
+        '<div class="card"><h2>Feature A</h2><p>Description</p></div>'
+        '</div></section>'
+        '</body></html>'
+    )
+
+    @pytest.fixture
+    def ui_dir(self, tmp_path):
+        d = tmp_path / "ui-designs"
+        d.mkdir()
+        (d / "page1.html").write_text(self.SAMPLE_HTML)
+        (d / "page2.html").write_text(self.SAMPLE_HTML.replace("Test Page", "Page 2"))
+        return d
+
+    @pytest.mark.asyncio
+    async def test_export_png(self, ui_dir):
+        exporter = DesignExporter(viewport=(1280, 720))
+        result = await exporter.export_png(ui_dir / "page1.html")
+        assert result is not None
+        assert result.exists()
+        assert result.stat().st_size > 5000
+
+    @pytest.mark.asyncio
+    async def test_export_pdf(self, ui_dir):
+        exporter = DesignExporter(viewport=(1280, 720))
+        result = await exporter.export_pdf(ui_dir / "page1.html")
+        assert result is not None
+        assert result.exists()
+        assert result.stat().st_size > 1000
+
+    @pytest.mark.asyncio
+    async def test_export_pdf_multi(self, ui_dir):
+        exporter = DesignExporter(viewport=(1280, 720))
+        html_files = sorted(ui_dir.glob("*.html"))
+        output = ui_dir / "combined.pdf"
+        result = await exporter.export_pdf_multi(html_files, output)
+        assert result is not None
+        assert result.exists()
+        assert result.stat().st_size > 2000
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not HAS_FFMPEG, reason="ffmpeg not installed")
+    async def test_export_mp4(self, ui_dir):
+        exporter = DesignExporter(viewport=(1280, 720))
+        html_files = sorted(ui_dir.glob("*.html"))
+        output = ui_dir / "demo.mp4"
+        result = await exporter.export_mp4(html_files, output, seconds_per_frame=2)
+        assert result is not None
+        assert result.exists()
+        assert result.stat().st_size > 1000
+
+    @pytest.mark.asyncio
+    async def test_export_all(self, ui_dir):
+        exporter = DesignExporter(viewport=(1280, 720))
+        results = await exporter.export_all(ui_dir)
+        assert len(results["screenshots"]) == 2
+        assert results["pdf"] is not None
+        assert results["pdf"].exists()

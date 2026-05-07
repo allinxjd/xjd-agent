@@ -85,7 +85,7 @@ voice = ["faster-whisper>=1.0.0,<2", "sounddevice>=0.4.6,<1", "numpy>=1.24.0,<3"
 tts-premium = ["elevenlabs>=1.0,<2"]
 honcho = ["honcho-ai>=2.0.0,<3"]
 mcp = ["mcp>=1.2.0,<2"]
-browser = ["playwright>=1.40.0,<2"]
+browser = ["playwright>=1.40.0,<2", "pypdf>=4.0,<7"]
 ecommerce = ["websockets>=12.0,<14", "playwright>=1.40.0,<2"]
 rl = ["wandb>=0.15.0,<1"]
 irc = ["irc>=20.0,<21"]
