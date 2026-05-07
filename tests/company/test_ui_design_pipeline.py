@@ -107,12 +107,15 @@ class TestHtmlQualityValidator:
         assert err is None
 
     def test_accent_overuse_detected(self):
-        html = '<section data-section="hero">var(--accent) var(--accent) var(--accent)</section>'
+        # 1 section → limit = 4 + 1*2 = 6, so 8 accents should fail
+        accents = ' '.join(['var(--accent)'] * 8)
+        html = f'<section data-section="hero">{accents}</section>'
         err = _check_accent_overuse(html)
         assert err is not None
 
     def test_accent_within_limit_passes(self):
-        html = '<section data-section="a">var(--accent) var(--accent)</section><section data-section="b">var(--accent)</section>'
+        # 2 sections → limit = 4 + 2*2 = 8, so 5 accents should pass
+        html = '<section data-section="a">var(--accent) var(--accent) var(--accent)</section><section data-section="b">var(--accent) var(--accent)</section>'
         err = _check_accent_overuse(html)
         assert err is None
 

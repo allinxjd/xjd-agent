@@ -69,14 +69,15 @@ _EMOJI_RE = re.compile(
 
 
 def _check_hex_outside_root(content: str) -> Optional[str]:
-    """检查 :root 和 <style> 外是否有 hex 色值."""
+    """检查 body HTML 中是否有 hex 色值（排除 style 块、SVG、HTML 实体）."""
     parts = content.split('</style>')
     if len(parts) > 1:
         body_content = parts[-1]
     else:
         body_content = _extract_body_content(content)
-    # Remove HTML entities (&#10003; etc) and anchor links (#section) before checking
-    cleaned = re.sub(r'&#\d+;', '', body_content)
+    # Remove SVG blocks, HTML entities, and anchor links
+    cleaned = re.sub(r'<svg[^>]*>.*?</svg>', '', body_content, flags=re.DOTALL)
+    cleaned = re.sub(r'&#\d+;', '', cleaned)
     cleaned = re.sub(r'href="#[^"]*"', '', cleaned)
     matches = re.findall(r'#[0-9a-fA-F]{3,8}\b', cleaned)
     if matches:
@@ -112,13 +113,23 @@ def _check_class_whitelist(content: str, platform: str) -> Optional[str]:
 
 
 def _check_accent_overuse(content: str) -> Optional[str]:
-    """检查 accent 使用是否超限."""
-    sections = re.findall(r'data-section', content)
-    section_count = max(len(sections), 1)
-    accent_count = content.count('var(--accent)')
-    limit = section_count * 2
+    """检查 accent 使用是否超限（只检查 body 内容）."""
+    # Only count accent in body, not in <style> definitions
+    parts = content.split('</style>')
+    body = parts[-1] if len(parts) > 1 else _extract_body_content(content)
+
+    # Count logical sections: data-section, page divs, or major containers
+    section_markers = (
+        len(re.findall(r'data-section', body))
+        or len(re.findall(r'class="[^"]*page[^"]*"', body))
+        or len(re.findall(r'<(?:section|main|article)\b', body, re.IGNORECASE))
+    )
+    section_count = max(section_markers, 1)
+    accent_count = body.count('var(--accent)')
+    # Base allowance of 4 + 2 per section
+    limit = 4 + section_count * 2
     if accent_count > limit:
-        return f"accent 使用过多（{accent_count}次，{section_count}个 section 限{limit}次）。请减少 accent 使用"
+        return f"accent 使用过多（{accent_count}次，限{limit}次）。请减少 accent 使用"
     return None
 
 
