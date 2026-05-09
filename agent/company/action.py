@@ -420,8 +420,18 @@ WRITE_UI_DESIGN = Action(
         "# ═══════════════════════════════════════\n"
         "# 工作流程\n"
         "# ═══════════════════════════════════════\n\n"
+        "## Step 0 — 读取原型图（必须第一步执行）\n"
+        "用 read_file 逐个读取 prototypes/ 目录下的所有 HTML 文件。\n"
+        "记录每个原型页面的：\n"
+        "- 页面名称和文件名\n"
+        "- 核心布局结构（table/card/grid/list）\n"
+        "- 关键功能组件（按钮、表单、批量操作栏、筛选器等）\n"
+        "- 数据展示方式（表格行数、卡片列数等）\n\n"
+        "**原型图中有多少个页面，UI 设计就必须输出多少个页面，一个不能少。**\n"
+        "**原型图用 table 布局的，UI 设计必须用 table；原型图有删除按钮的，UI 设计必须有删除按钮。**\n"
+        "**不允许擅自更改原型图的布局结构或删减功能组件。**\n\n"
         "## Step 1 — 规划页面列表\n"
-        "根据 PRD 和原型，列出需要设计的页面（通常 3-6 个）。\n"
+        "基于 Step 0 读取的原型图，列出所有页面（数量必须与原型图一致）。\n"
         "每个页面选择一个最接近的布局原型（从布局库中选）。\n\n"
         "## Step 2 — 复制 seed + 注入 design tokens\n"
         "每个页面从 seed template 开始。将 `:root` 中的 6 个变量替换为\n"
@@ -450,11 +460,15 @@ WRITE_UI_DESIGN = Action(
         "- **不用 emoji 做图标。** 用 SVG 或 seed 中的 class。\n"
         "- **accent 色每页最多 2 次。** 主按钮 + 一个强调元素。\n"
         "- **每个页面是完整独立的 HTML 文件。** 包含完整的 `<!doctype html>` 到 `</html>`。\n"
-        "- **先用 read_file 读取 prototypes/ 了解页面结构。**\n\n"
+        "- **必须先 read_file 读取 prototypes/ 下每个文件，再开始设计。**\n"
+        "- **页面数量必须与 prototypes/ 完全一致。** 原型有 N 个页面就输出 N 个。\n"
+        "- **严禁更改原型图的布局类型。** 原型用 table 就用 table，原型用 card 就用 card。\n"
+        "- **严禁删减原型图的功能组件。** 原型有批量操作/删除/编辑按钮，UI 设计必须保留。\n"
+        "- **每个页面至少 3 条 `<!-- interaction: ... -->` 注释。**\n\n"
         "## PRD 与原型上下文\n{context}"
     ),
     tools_filter=["code", "file"],
-    max_tool_rounds=15,
+    max_tool_rounds=25,
 )
 
 WRITE_DESIGN = Action(
