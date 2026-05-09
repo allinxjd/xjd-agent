@@ -978,6 +978,29 @@ class WebServer:
                         lock.release()
                     return
 
+                # AI Company 待命中：消息转发给 Company，收集回复
+                _company_reply = await self._try_company_forward(user_message)
+                if _company_reply is not None:
+                    result_content = _company_reply
+                    if gw_session:
+                        gw_session.add_message("user", user_message)
+                        gw_session.add_message("assistant", result_content)
+                        await self._session_mgr._persist_session(gw_session)
+                    await _safe_send({
+                        "type": "stream",
+                        "content": result_content,
+                    })
+                    await _safe_send({
+                        "type": "complete",
+                        "content": result_content,
+                        "tool_calls": 1,
+                        "tokens": 0,
+                        "duration_ms": 0,
+                    })
+                    if lock:
+                        lock.release()
+                    return
+
                 result = await asyncio.wait_for(
                     self._engine.run_turn(
                         user_message,
@@ -1102,6 +1125,16 @@ class WebServer:
         if _company_result is not None:
             return web.json_response({
                 "content": _company_result,
+                "tool_calls": 1,
+                "tokens": 0,
+                "duration_ms": 0,
+            })
+
+        # AI Company 待命中：消息转发给 Company
+        _company_reply = await self._try_company_forward(message)
+        if _company_reply is not None:
+            return web.json_response({
+                "content": _company_reply,
                 "tool_calls": 1,
                 "tokens": 0,
                 "duration_ms": 0,
@@ -2570,6 +2603,48 @@ class WebServer:
             result = await company_stop_standby()
             return result.replace("[FINAL_ANSWER]", "")
         return None
+
+    async def _try_company_forward(self, message: str) -> Optional[str]:
+        """如果 Company 在待命，将用户消息注入 Company 并等待回复."""
+        from agent.tools.company_tools import _standby_company
+        if _standby_company is None:
+            return None
+
+        import asyncio
+        from agent.company.message import CompanyMessage
+
+        env = _standby_company._env
+        msg = CompanyMessage(
+            content=message,
+            cause_by="HumanDirective",
+            sent_from="WebUI-User",
+        )
+        await env.publish(msg)
+        logger.info("WebUI→Company: %s", message[:50])
+
+        # 等待 Company 回复（监听 message_log 中新的 ChatReply/QuickTask/ApprovalRequest）
+        log_start = len(env.message_log)
+        reply_causes = ("ChatReply", "QuickTask", "ApprovalRequest", "StageOutput", "StageFile")
+        timeout = 180.0
+        poll_interval = 1.0
+        elapsed = 0.0
+        while elapsed < timeout:
+            await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+            new_msgs = env.message_log[log_start:]
+            for m in new_msgs:
+                if m.cause_by in reply_causes and m.sent_from != "WebUI-User":
+                    # 收集所有连续的回复消息
+                    await asyncio.sleep(2.0)
+                    all_new = env.message_log[log_start:]
+                    replies = [
+                        rm for rm in all_new
+                        if rm.cause_by in reply_causes and rm.sent_from != "WebUI-User"
+                    ]
+                    if replies:
+                        return "\n\n".join(rm.content for rm in replies)
+                    return m.content
+        return "AI 团队正在处理中，请稍后查看飞书群消息。"
 
     async def _company_standby(self, request):
         """POST /api/company/standby — start AI Company standby mode."""

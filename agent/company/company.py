@@ -371,7 +371,8 @@ class Company:
         return False
 
     async def _wait_for_approval(
-        self, stage_key: str, task: "CompanyTask", project_dir: Optional[Path] = None
+        self, stage_key: str, task: "CompanyTask", project_dir: Optional[Path] = None,
+        stage_content: str = "",
     ) -> tuple[bool, str]:
         """等待用户审批。返回 (approved, feedback)."""
         import asyncio as _aio
@@ -385,9 +386,23 @@ class Company:
             "UIDesign": "UI 设计", "Design": "技术方案",
         }
         _display = _stage_names.get(stage_key, stage_key)
+
+        # 先发送阶段产出内容，让用户能看到
+        if stage_content:
+            content_preview = stage_content[:3000]
+            if len(stage_content) > 3000:
+                content_preview += "\n\n... (内容过长已截断，完整文档见项目目录)"
+            content_msg = CompanyMessage(
+                content=f"## {_display}\n\n{content_preview}",
+                cause_by="StageOutput",
+                sent_from="PM",
+                task_id=task.task_id,
+            )
+            await self._env.publish(content_msg)
+
         approval_msg = CompanyMessage(
             content=(
-                f"{_display}已完成，请审阅附件。\n"
+                f"{_display}已完成，请审阅。\n"
                 "回复「确认」继续，或直接说修改意见。"
             ),
             cause_by="ApprovalRequest",
@@ -1265,7 +1280,7 @@ class Company:
                         _stage_def = self._pipeline.stage_for_action("WritePRD")
                         if _stage_def and _stage_def.requires_approval:
                             _proj_dir = self._extract_workspace_from_requirement(requirement)
-                            _approved, _feedback = await self._wait_for_approval("PRD", task, _proj_dir)
+                            _approved, _feedback = await self._wait_for_approval("PRD", task, _proj_dir, stage_content=stage_outputs.get("PRD", ""))
                             if not _approved:
                                 sm.reset("PRD")
                                 _rework = CompanyMessage(
@@ -1397,7 +1412,7 @@ class Company:
                         _stage_def = self._pipeline.stage_for_action("WriteDesign")
                         if _stage_def and _stage_def.requires_approval:
                             _proj_dir = self._extract_workspace_from_requirement(requirement)
-                            _approved, _feedback = await self._wait_for_approval("Design", task, _proj_dir)
+                            _approved, _feedback = await self._wait_for_approval("Design", task, _proj_dir, stage_content=stage_outputs.get("Design", ""))
                             if not _approved:
                                 sm.reset("Design")
                                 _rework = CompanyMessage(
