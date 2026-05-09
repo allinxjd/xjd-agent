@@ -498,8 +498,8 @@ class Company:
 
         subdir = "prototypes" if stage_key == "Prototype" else "ui-designs"
         target_dir = project_dir / subdir
-        # 版本文件夹管理：如果目录已有文件，归档到 vN/
-        if target_dir.is_dir() and any(target_dir.glob("*.html")):
+        # 版本文件夹管理：仅 UIDesign 阶段归档旧版本（Prototype 是增量补充，不归档）
+        if stage_key != "Prototype" and target_dir.is_dir() and any(target_dir.glob("*.html")):
             existing_versions = sorted(
                 (d for d in target_dir.iterdir() if d.is_dir() and d.name.startswith("v")),
                 key=lambda d: int(d.name[1:]) if d.name[1:].isdigit() else 0,
