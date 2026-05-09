@@ -346,6 +346,9 @@ class GatewayServer:
         # 启动定期清理任务 (session locks + expired sessions)
         self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
 
+        # 启动休眠唤醒 watchdog（检测时间跳变，自动重连适配器）
+        self._watchdog_task = asyncio.create_task(self._sleep_watchdog())
+
         # 自动恢复 AI Company 待命模式
         try:
             from agent.core.config import Config as _Cfg
@@ -401,6 +404,30 @@ class GatewayServer:
             except Exception as e:
                 logger.warning("Periodic cleanup error: %s", e)
 
+    async def _sleep_watchdog(self) -> None:
+        """检测系统休眠唤醒（时间跳变 > 60s），自动重连所有适配器."""
+        last_tick = time.monotonic()
+        while self._running:
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                break
+            now = time.monotonic()
+            gap = now - last_tick
+            last_tick = now
+            if gap > 60:
+                logger.warning("Sleep watchdog: wake detected (gap=%.0fs), reconnecting adapters...", gap)
+                await self._reconnect_all_adapters()
+
+    async def _reconnect_all_adapters(self) -> None:
+        """重连所有适配器（休眠恢复用）."""
+        for name in list(self._adapters.keys()):
+            try:
+                await self.restart_adapter(name)
+                logger.info("Watchdog: adapter %s reconnected", name)
+            except Exception as e:
+                logger.error("Watchdog: adapter %s reconnect failed: %s", name, e)
+
     async def _auto_recover_standby(self, cfg: Any) -> None:
         """自动恢复 AI Company 待命模式，最多重试 3 次."""
         from agent.tools.company_tools import company_standby
@@ -430,6 +457,14 @@ class GatewayServer:
             self._cleanup_task.cancel()
             try:
                 await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+
+        # 停止 watchdog
+        if hasattr(self, '_watchdog_task') and self._watchdog_task and not self._watchdog_task.done():
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
             except asyncio.CancelledError:
                 pass
 

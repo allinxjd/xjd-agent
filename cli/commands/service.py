@@ -240,6 +240,8 @@ def _launchd_install(port: int) -> None:
                 <key>SuccessfulExit</key>
                 <false/>
             </dict>
+            <key>ThrottleInterval</key>
+            <integer>10</integer>
             <key>StandardOutPath</key>
             <string>{_e(str(log_path))}</string>
             <key>StandardErrorPath</key>
