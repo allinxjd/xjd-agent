@@ -25,6 +25,7 @@ class CompanyMessage:
     metadata: dict[str, Any] = field(default_factory=dict)
     priority: int = 1
     topic: str = ""
+    source_channel: str = ""
 
     def summary(self, max_len: int = 200) -> str:
         """用于日志和飞书展示的摘要."""

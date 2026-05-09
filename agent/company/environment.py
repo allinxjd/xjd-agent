@@ -24,6 +24,7 @@ class CompanyEnvironment:
         self._feishu_bridge: Any = None
         self._pipeline_user_queue: Optional[list[CompanyMessage]] = None
         self._coordinator: Any = None
+        self._active_source_channel: str = ""
 
     @property
     def chat_bridge(self) -> Optional[ChatBridge]:
@@ -59,6 +60,9 @@ class CompanyEnvironment:
         """
         self._message_log.append(msg)
         logger.info("消息: %s", msg.summary())
+
+        if not msg.source_channel and self._active_source_channel:
+            msg.source_channel = self._active_source_channel
 
         bridge = self._chat_bridge
 

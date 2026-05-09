@@ -34,6 +34,7 @@ class PipelineStateMachine:
                     self._stages_done[s] = True
         self._transitions: list[StageTransition] = []
         self._current_round: int = 0
+        self._on_change: Optional[object] = None
 
     @property
     def stages_done(self) -> dict[str, bool]:
@@ -82,6 +83,8 @@ class PipelineStateMachine:
             from_stage=prev, to_stage=self.current_stage or "DONE",
             trigger="completed", round_num=self._current_round,
         ))
+        if self._on_change:
+            self._on_change(stage, "done")  # type: ignore[operator]
 
     def reset(self, stage: str) -> None:
         """重置阶段为未完成（返工时用）."""
@@ -91,6 +94,8 @@ class PipelineStateMachine:
                 from_stage=stage, to_stage=stage,
                 trigger="rework", round_num=self._current_round,
             ))
+            if self._on_change:
+                self._on_change(stage, "running")  # type: ignore[operator]
 
     def reset_downstream(self, from_stage: str) -> list[str]:
         """重置某阶段之后的所有阶段（级联返工）."""

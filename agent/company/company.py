@@ -211,6 +211,7 @@ class Company:
         self._pipeline_running = False
         self._pipeline_cancel = False
         self._pipeline_user_msgs: list[CompanyMessage] = []
+        self._task_source_channel: str = ""
         self._active_project_name: str = ""
         self._switched_project_dir: Optional[Path] = None
         self._project_ctx: Optional["ProjectContext"] = None
@@ -218,6 +219,11 @@ class Company:
         self._needs_prototype: bool = True
         self._pending_project_name: Optional[dict] = None
         self._task_queue: list[dict] = []
+        self._stages_status: dict[str, str] = {}
+        self._pipeline_start_time: float = 0
+        self._live_stages_done: dict[str, bool] = {}
+        self._live_stage_outputs: dict[str, str] = {}
+        self._live_project_dir: Optional[Path] = None
 
         from agent.company.intent_classifier import IntentClassifier
         from agent.company.message_router import MessageCoordinator
@@ -399,19 +405,24 @@ class Company:
                 task_id=task.task_id,
             )
             await self._env.publish(content_msg)
+            await self._broadcast_company_message(f"## {_display}\n\n{content_preview}", "StageOutput")
 
+        _approval_text = (
+            f"{_display}已完成，请审阅。\n"
+            "回复「确认」继续，或直接说修改意见。"
+        )
         approval_msg = CompanyMessage(
-            content=(
-                f"{_display}已完成，请审阅。\n"
-                "回复「确认」继续，或直接说修改意见。"
-            ),
+            content=_approval_text,
             cause_by="ApprovalRequest",
             sent_from="PM",
             task_id=task.task_id,
         )
         await self._env.publish(approval_msg)
+        await self._broadcast_company_message(_approval_text, "ApprovalRequest")
 
         self._waiting_approval = stage_key
+        self._stages_status[stage_key] = "waiting"
+        await self._broadcast_stage_event(stage_key, "waiting")
         approval_timeout = 24 * 3600
         start = _t.monotonic()
         while _t.monotonic() - start < approval_timeout:
@@ -425,6 +436,57 @@ class Company:
         self._waiting_approval = None
         return (True, "")
 
+    def _on_stage_change(self, stage: str, status: str) -> None:
+        """Callback from PipelineStateMachine on complete/reset."""
+        self._stages_status[stage] = status
+        if status == "done" and self._live_project_dir:
+            self._persist_pipeline_state(
+                self._live_project_dir, self._live_stages_done, self._live_stage_outputs
+            )
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._broadcast_stage_event(stage, status))
+        except RuntimeError:
+            pass
+
+    async def _broadcast_stage_event(self, stage: str, status: str) -> None:
+        try:
+            from web.server import _web_server_instance
+            if _web_server_instance:
+                await _web_server_instance.broadcast_inspector_event({
+                    "event_type": "company_stage",
+                    "category": "company",
+                    "stage": stage,
+                    "status": status,
+                    "project": self._active_project_name,
+                })
+        except Exception:
+            pass
+
+    async def _broadcast_company_message(self, content: str, cause: str, metadata: dict | None = None) -> None:
+        """通过 WebSocket 把 pipeline 产出消息推送到 WebUI 聊天区."""
+        try:
+            from web.server import _web_server_instance
+            if _web_server_instance:
+                msg_data: dict = {
+                    "type": "company_message",
+                    "content": content,
+                    "cause": cause,
+                }
+                if metadata:
+                    from agent.core.config import get_projects_dir
+                    fp = metadata.get("file_path", "")
+                    if fp:
+                        projects_root = str(get_projects_dir().resolve())
+                        if fp.startswith(projects_root):
+                            rel = fp[len(projects_root):].lstrip("/")
+                            msg_data["file_url"] = f"/api/project/files/{rel}"
+                            msg_data["filename"] = metadata.get("filename", "")
+                await _web_server_instance.broadcast_company_message(msg_data)
+        except Exception:
+            pass
+
     async def _save_and_send_prototypes(
         self, content: str, project_dir: Optional[Path], task: "CompanyTask", stage_key: str
     ) -> None:
@@ -436,6 +498,20 @@ class Company:
 
         subdir = "prototypes" if stage_key == "Prototype" else "ui-designs"
         target_dir = project_dir / subdir
+        # 版本文件夹管理：如果目录已有文件，归档到 vN/
+        if target_dir.is_dir() and any(target_dir.glob("*.html")):
+            existing_versions = sorted(
+                (d for d in target_dir.iterdir() if d.is_dir() and d.name.startswith("v")),
+                key=lambda d: int(d.name[1:]) if d.name[1:].isdigit() else 0,
+            )
+            next_ver = (int(existing_versions[-1].name[1:]) + 1) if existing_versions else 1
+            archive_dir = target_dir / f"v{next_ver}"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            import shutil
+            for f in target_dir.iterdir():
+                if f.is_file():
+                    shutil.move(str(f), str(archive_dir / f.name))
+            logger.info("已归档 %s 旧版本到 %s/v%d", subdir, subdir, next_ver)
         target_dir.mkdir(parents=True, exist_ok=True)
 
         # 清理 LLM 工具调用残留的 XML 标签
@@ -479,7 +555,8 @@ class Company:
                 except Exception as e:
                     logger.warning("截图渲染失败: %s", e)
                 report_path = await self._generate_prototype_report(
-                    _disk_page_info, screenshots, target_dir, stage_key
+                    _disk_page_info, screenshots, target_dir, stage_key,
+                    platform=getattr(self._env.roles.get("PM"), '_ui_platform', 'web'),
                 )
                 report_msg = CompanyMessage(
                     content=f"{stage_key} 报告已生成（共 {len(_disk_page_info)} 页），请用浏览器打开查看。",
@@ -489,6 +566,10 @@ class Company:
                     metadata={"file_path": str(report_path), "filename": report_path.name},
                 )
                 await self._env.publish(report_msg)
+                await self._broadcast_company_message(
+                    report_msg.content, "StageFile",
+                    {"file_path": str(report_path), "filename": report_path.name},
+                )
                 return
             notify = CompanyMessage(
                 content=content[:2000],
@@ -541,7 +622,8 @@ class Company:
 
         # 生成专业原型报告 HTML（自包含，截图 base64 嵌入）
         report_path = await self._generate_prototype_report(
-            page_info, screenshots, target_dir, stage_key
+            page_info, screenshots, target_dir, stage_key,
+            platform=getattr(self._env.roles.get("PM"), '_ui_platform', 'web'),
         )
 
         # 发送报告文件到飞书
@@ -553,6 +635,10 @@ class Company:
             metadata={"file_path": str(report_path), "filename": report_path.name},
         )
         await self._env.publish(report_msg)
+        await self._broadcast_company_message(
+            report_msg.content, "StageFile",
+            {"file_path": str(report_path), "filename": report_path.name},
+        )
 
     async def _enhance_placeholder_images(self, project_dir: "Path", task) -> None:
         """替换 .ph-img 占位区为 AI 生成的真实图片."""
@@ -654,6 +740,10 @@ class Company:
                 metadata={"file_path": str(pdf), "filename": f"{label}.pdf"},
             )
             await self._env.publish(pdf_msg)
+            await self._broadcast_company_message(
+                pdf_msg.content, "StageFile",
+                {"file_path": str(pdf), "filename": f"{label}.pdf"},
+            )
 
     async def _export_ui_designs(self, project_dir: "Path", task) -> None:
         """导出 UI 设计稿为 PDF + MP4，发送到飞书."""
@@ -689,16 +779,23 @@ class Company:
                 metadata={"file_path": str(mp4), "filename": "UI设计演示.mp4"},
             )
             await self._env.publish(mp4_msg)
+            await self._broadcast_company_message(
+                mp4_msg.content, "StageFile",
+                {"file_path": str(mp4), "filename": "UI设计演示.mp4"},
+            )
 
     async def _generate_prototype_report(
         self, page_info: list[dict], screenshots: dict[str, "Path"],
-        target_dir: "Path", stage_key: str
+        target_dir: "Path", stage_key: str, platform: str = "mobile"
     ) -> "Path":
         """生成专业原型报告（HTML 格式，自包含，截图 base64 嵌入）。"""
         import base64 as _b64
         from datetime import datetime
         label = "原型图" if stage_key == "Prototype" else "UI 设计稿"
         now = datetime.now().strftime('%Y-%m-%d %H:%M')
+        is_web = platform == "web"
+        img_max_width = "100%" if is_web else "375px"
+        viewport_label = "1280 x 720" if is_web else "375 x 812"
 
         pages_html = []
         for i, info in enumerate(page_info):
@@ -707,9 +804,9 @@ class Company:
                 img_path = screenshots[info["safe_name"]]
                 img_data = img_path.read_bytes()
                 b64 = _b64.b64encode(img_data).decode()
-                img_tag = f'<img src="data:image/png;base64,{b64}" alt="{info["name"]}" style="max-width:375px;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);">'
+                img_tag = f'<img src="data:image/png;base64,{b64}" alt="{info["name"]}" style="max-width:{img_max_width};border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);">'
             else:
-                img_tag = f'<div style="width:375px;height:200px;background:#f3f4f6;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:14px;">请打开 {info["file"].name} 查看</div>'
+                img_tag = f'<div style="width:{img_max_width};height:200px;background:#f3f4f6;border-radius:12px;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:14px;">请打开 {info["file"].name} 查看</div>'
             desc_html = f'<p style="color:#6b7280;font-size:13px;margin:8px 0 0;">{info["desc"]}</p>' if info.get("desc") else ""
             pages_html.append(f'''
         <div style="margin-bottom:32px;">
@@ -741,7 +838,7 @@ class Company:
 <div class="container">
   <div class="header">
     <h1>{label}报告</h1>
-    <div class="meta">生成时间: {now} | 页面数量: {len(page_info)} | 视口: 375 x 812</div>
+    <div class="meta">生成时间: {now} | 页面数量: {len(page_info)} | 视口: {viewport_label}</div>
   </div>
   <div class="flow">
     <div class="flow-title">页面流程</div>
@@ -1031,6 +1128,8 @@ class Company:
         stuck_rounds = 0
         supplement_injected: set[str] = set()
         stage_outputs: dict[str, str] = {}
+        import time as _time_mod
+        self._pipeline_start_time = _time_mod.monotonic()
 
         import re as _resume_re
         pdir_match = _resume_re.search(r'## 项目工作目录\n(.+)\n', requirement)
@@ -1130,6 +1229,11 @@ class Company:
         from agent.company.state_machine import PipelineStateMachine
         sm = PipelineStateMachine(self._pipeline.stage_keys)
         sm._stages_done = stages_done  # 共享引用
+        sm._on_change = self._on_stage_change
+        self._stages_status = {k: ("done" if stages_done[k] else "pending") for k in stages_done}
+        self._live_stages_done = stages_done
+        self._live_stage_outputs = stage_outputs
+        self._live_project_dir = _project_dir
         ctx = ProjectContext.wrap(
             name=self._active_project_name or task.task_id,
             stages_done=stages_done,
@@ -1234,6 +1338,11 @@ class Company:
                     task_id=task.task_id,
                 )
                 await self._env.publish(status_msg)
+                _running_stage = self._pipeline.stage_for_action(_next_action or (_stage_cause if not _stage_name else ""))
+                if _running_stage and _running_stage.stage_key in self._stages_status:
+                    if self._stages_status[_running_stage.stage_key] == "pending":
+                        self._stages_status[_running_stage.stage_key] = "running"
+                        await self._broadcast_stage_event(_running_stage.stage_key, "running")
                 try:
                     result_msgs = await role.run()
                 except Exception as e:
@@ -2194,6 +2303,9 @@ class Company:
         finally:
             remaining = self._env._pipeline_user_queue or []
             self._pipeline_running = False
+            self._stages_status = {}
+            self._task_source_channel = ""
+            self._env._active_source_channel = ""
             self._env._pipeline_user_queue = None
             for m in remaining:
                 for role in self._env.roles.values():
@@ -2426,6 +2538,10 @@ class Company:
             self._store.save_message(m)
 
         user_messages = [m for m in messages if m.sent_from not in self._env.roles]
+
+        if user_messages:
+            self._task_source_channel = user_messages[0].source_channel
+            self._env._active_source_channel = self._task_source_channel
 
         if self._pending_project_name and user_messages:
             import re as _re_pn
@@ -2997,6 +3113,9 @@ class Company:
         finally:
             remaining = self._env._pipeline_user_queue or []
             self._pipeline_running = False
+            self._stages_status = {}
+            self._task_source_channel = ""
+            self._env._active_source_channel = ""
             self._project_ctx = None
             # 保留 _active_project_name，避免 ChatReply 上下文丢失当前项目
             self._env._pipeline_user_queue = None
@@ -3084,8 +3203,10 @@ class Company:
                 kick_content = f"## 继续执行 {stage_key} 阶段\n"
                 if "Design" in stage_outputs:
                     kick_content += stage_outputs["Design"][:1500]
-                elif "PRD" in stage_outputs and stage_key in ("Prototype", "UIDesign", "Design", "Env", "Code"):
+                elif "PRD" in stage_outputs and stage_key in ("Prototype", "Design", "Env", "Code"):
                     kick_content += stage_outputs["PRD"][:1500]
+                elif "PRD" in stage_outputs and stage_key == "UIDesign":
+                    kick_content += stage_outputs["PRD"][:800]
                 else:
                     pdir = _re.search(r'## 项目工作目录\n(.+)\n', requirement)
                     if pdir:
@@ -3100,6 +3221,15 @@ class Company:
                         _tech = self._extract_tech_stack(Path(pdir_match.group(1)))
                         if _tech:
                             kick_content += f"\n{_tech}\n"
+                    # UIDesign 阶段注入已有原型图页面列表
+                    if stage_key == "UIDesign" and stages_done.get("Prototype"):
+                        _proto_dir = Path(pdir_match.group(1)) / "prototypes"
+                        if _proto_dir.is_dir():
+                            _pages = [f.stem for f in sorted(_proto_dir.glob("*.html"))]
+                            if _pages:
+                                kick_content += f"\n## 已完成的原型图页面（在 prototypes/ 目录）\n"
+                                kick_content += "\n".join(f"- prototypes/{p}.html" for p in _pages)
+                                kick_content += "\n\n用 read_file 读取以上原型图文件，基于其页面结构和内容进行高保真 UI 设计。直接开始工作，不要提问。\n"
                 cause_map = {
                     "PRD": "EvaluateRequirement",
                     "Prototype": "WritePRD",

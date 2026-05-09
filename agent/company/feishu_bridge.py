@@ -413,6 +413,9 @@ class FeishuBridge(ChatBridge):
         if msg.cause_by in ("HumanDirective", "StatusUpdate"):
             return
 
+        if msg.source_channel == "webui":
+            return
+
         role_name = msg.sent_from
         adapter = self._adapters.get(role_name)
 
@@ -557,6 +560,7 @@ class FeishuBridge(ChatBridge):
             content=content,
             cause_by="HumanDirective",
             sent_from=username or "Human",
+            source_channel="feishu",
         )
 
         metadata = getattr(platform_msg, "metadata", {}) or {}

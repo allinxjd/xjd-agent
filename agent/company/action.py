@@ -136,6 +136,12 @@ class Action:
         if self.name == "WriteUIDesign":
             logger.info("[Action:WriteUIDesign] context长度=%d, 前200字=%s", len(context), context[:200])
         prompt = self.prompt_template.replace("{context}", context) if self.prompt_template else context
+        if "{prototype_layout}" in prompt:
+            platform = getattr(role, '_ui_platform', 'web')
+            if platform == "web":
+                prompt = prompt.replace("{prototype_layout}", "桌面 Web 布局（外层 max-w-[1200px] mx-auto，响应式设计）")
+            else:
+                prompt = prompt.replace("{prototype_layout}", "移动端优先布局（外层 max-w-[375px] mx-auto）")
         boss_title = getattr(role, '_boss_title', '老板')
         if "{boss_title}" in prompt:
             prompt = prompt.replace("{boss_title}", boss_title)
@@ -368,7 +374,7 @@ WRITE_PROTOTYPE = Action(
         "- 低保真风格：灰色背景色块(bg-gray-200)、线框边框(border)、占位文字\n"
         "- 包含页面间的导航链接（相对路径）\n"
         "- 用 HTML title 属性标注每个区域的功能说明\n"
-        "- 移动端优先布局（外层 max-w-[375px] mx-auto）\n\n"
+        "- {prototype_layout}\n\n"
         "## 文件命名\n"
         "prototypes/index.html — 首页/入口\n"
         "prototypes/<page-name>.html — 各子页面\n\n"

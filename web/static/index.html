@@ -230,6 +230,37 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 }
 .lang-toggle button:hover:not(.active) { color: var(--text-primary); background: var(--bg-hover); }
 
+/* ── Pipeline Progress Bar ── */
+.pipeline-bar {
+  display: none; padding: 12px 20px; background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.pipeline-bar.active { display: block; }
+.pipeline-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--text-secondary); }
+.pipeline-header .project-name { color: var(--text-primary); font-weight: 600; }
+.pipeline-header .elapsed { color: var(--text-tertiary); margin-left: auto; }
+.pipeline-stages { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.pipeline-stage { display: flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 12px; font-size: 12px; }
+.pipeline-stage.done { color: var(--green); }
+.pipeline-stage.running { color: var(--accent); }
+.pipeline-stage.waiting { color: var(--orange); }
+.pipeline-stage.pending { color: var(--text-tertiary); }
+.pipeline-stage .dot { width: 8px; height: 8px; border-radius: 50%; }
+.pipeline-stage.done .dot { background: var(--green); }
+.pipeline-stage.running .dot { background: var(--accent); animation: pulse 1.5s infinite; }
+.pipeline-stage.waiting .dot { background: var(--orange); animation: pulse 1s infinite; }
+.pipeline-stage.pending .dot { background: var(--text-tertiary); opacity: 0.5; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.pipeline-actions { margin-top: 8px; display: flex; gap: 8px; }
+.pipeline-actions button {
+  padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg-tertiary); color: var(--text-primary); font-size: 12px; cursor: pointer;
+}
+.pipeline-actions button:hover { background: var(--bg-hover); }
+.pipeline-actions button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pipeline-actions button.primary:hover { background: var(--accent-hover); }
+.pipeline-actions button.danger { color: var(--red); border-color: var(--red); }
+
 /* ── Messages ── */
 .messages-container {
   flex: 1; overflow-y: auto; scroll-behavior: smooth;
@@ -609,6 +640,20 @@ input:checked + .toggle-slider:before { transform: translateX(18px); }
 
     <!-- Chat Panel (default) -->
     <div class="ws-panel active" id="chatPanel">
+    <!-- Pipeline Progress -->
+    <div class="pipeline-bar" id="pipelineBar">
+      <div class="pipeline-header">
+        <span class="project-name" id="pipelineProject"></span>
+        <span>Pipeline</span>
+        <span class="elapsed" id="pipelineElapsed"></span>
+      </div>
+      <div class="pipeline-stages" id="pipelineStages"></div>
+      <div class="pipeline-actions" id="pipelineActions" style="display:none">
+        <button class="primary" onclick="pipelineAction('confirm')">确认继续</button>
+        <button onclick="pipelineAction('feedback')">提供反馈</button>
+        <button class="danger" onclick="pipelineAction('cancel')">取消</button>
+      </div>
+    </div>
     <!-- Messages -->
     <div class="messages-container" id="messagesContainer">
       <div class="messages-inner" id="messages">
@@ -1515,6 +1560,17 @@ function handleMessage(data) {
       break;
     case 'inspector_event':
       addInspectorEvent(data);
+      if (data.event_type === 'company_stage') updatePipelineStage(data);
+      break;
+    case 'company_message':
+      hideWelcome();
+      if (data.cause === 'StageFile' && data.file_url) {
+        const linkText = data.filename || '查看文件';
+        addBotMsg(data.content + `\n\n[${linkText}](${data.file_url})`);
+      } else {
+        addBotMsg(data.content || '');
+      }
+      addMsgToConv({ role: 'bot', content: data.content || '' });
       break;
     case 'context_activity':
       // 实时追加 activity
@@ -2581,7 +2637,7 @@ async function toggleEcommerce() {
 
 // ── Input handlers ──
 inputEl.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
 });
 inputEl.addEventListener('input', () => {
   inputEl.style.height = 'auto';
@@ -2714,6 +2770,125 @@ async function checkAuthStatus() {
     } else { currentModelNameEl.textContent = t('noModel'); }
   } catch(e) { currentModelNameEl.textContent = t('offline'); }
 })();
+
+// ── Pipeline Progress ──
+let pipelineState = { active: false, stages: [], waiting_approval: null };
+let pipelineTimer = null;
+let pipelineElapsedTimer = null;
+
+const STAGE_LABELS = {
+  PRD: '需求文档', Prototype: '原型图', UIDesign: 'UI设计',
+  Design: '技术方案', Env: '环境搭建', Code: '编写代码',
+  Verify: '验证运行', Review: '代码审查', Test: '测试', Deploy: '部署'
+};
+
+function renderPipeline(state) {
+  pipelineState = state;
+  const bar = $('pipelineBar');
+  if (!state.active && !state.interrupted) { bar.classList.remove('active'); stopPipelineElapsed(); return; }
+  bar.classList.add('active');
+  if (state.interrupted) {
+    const info = state.interrupted;
+    $('pipelineProject').textContent = info.project_name || '';
+    $('pipelineElapsed').textContent = '已中断';
+    const stagesEl = $('pipelineStages');
+    const allStages = [...info.done.map(k => ({key:k, status:'done'})), ...info.pending.map(k => ({key:k, status:'pending'}))];
+    stagesEl.innerHTML = allStages.map(s =>
+      `<span class="pipeline-stage ${s.status}"><span class="dot"></span>${STAGE_LABELS[s.key] || s.key}</span>`
+    ).join('');
+    const actions = $('pipelineActions');
+    actions.style.display = 'flex';
+    actions.innerHTML = '<button class="primary" onclick="pipelineAction(\'resume\')">断点继续</button><button class="danger" onclick="pipelineAction(\'cancel\')">取消</button>';
+    return;
+  }
+  $('pipelineProject').textContent = state.project_name || 'Pipeline';
+  const stagesEl = $('pipelineStages');
+  stagesEl.innerHTML = state.stages.map(s => {
+    const clickable = s.status === 'done' && !state.active ? `onclick="resetFromStage('${s.key}')" style="cursor:pointer;" title="从此阶段重跑"` : '';
+    return `<span class="pipeline-stage ${s.status}" ${clickable}><span class="dot"></span>${STAGE_LABELS[s.key] || s.key}</span>`;
+  }).join('');
+  const actions = $('pipelineActions');
+  if (state.waiting_approval) {
+    actions.style.display = 'flex';
+    actions.innerHTML = '<button class="primary" onclick="pipelineAction(\'confirm\')">确认继续</button><button onclick="pipelineAction(\'feedback\')">提供反馈</button><button class="danger" onclick="pipelineAction(\'cancel\')">取消</button>';
+  } else {
+    actions.style.display = 'none';
+  }
+  startPipelineElapsed(state.elapsed_seconds);
+}
+
+function startPipelineElapsed(initial) {
+  let sec = initial || 0;
+  $('pipelineElapsed').textContent = formatElapsed(sec);
+  if (pipelineElapsedTimer) clearInterval(pipelineElapsedTimer);
+  pipelineElapsedTimer = setInterval(() => {
+    sec++;
+    $('pipelineElapsed').textContent = formatElapsed(sec);
+  }, 1000);
+}
+function stopPipelineElapsed() {
+  if (pipelineElapsedTimer) { clearInterval(pipelineElapsedTimer); pipelineElapsedTimer = null; }
+}
+function formatElapsed(s) { const m = Math.floor(s/60); return m > 0 ? `${m}m ${s%60}s` : `${s}s`; }
+
+function updatePipelineStage(ev) {
+  if (!pipelineState.active) { fetchPipelineStatus(); return; }
+  const s = pipelineState.stages.find(x => x.key === ev.stage);
+  if (s) s.status = ev.status;
+  else pipelineState.stages.push({ key: ev.stage, status: ev.status });
+  if (ev.status === 'waiting') pipelineState.waiting_approval = ev.stage;
+  else if (pipelineState.waiting_approval === ev.stage) pipelineState.waiting_approval = null;
+  if (pipelineState.stages.length && pipelineState.stages.every(x => x.status === 'done')) {
+    pipelineState.active = false;
+  }
+  renderPipeline(pipelineState);
+}
+
+function pipelineAction(action) {
+  if (action === 'confirm') { sendMsg('确认'); }
+  else if (action === 'resume') { sendMsg('继续'); }
+  else if (action === 'cancel') { sendMsg('取消'); }
+  else if (action === 'feedback') {
+    inputEl.focus();
+    inputEl.placeholder = '输入修改意见...';
+  }
+}
+function sendMsg(text) {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'chat', message: text }));
+    addUserMsg(text);
+    addMsgToConv({ role: 'user', content: text });
+    addTyping();
+  }
+}
+
+async function fetchPipelineStatus() {
+  try {
+    const r = await fetch('/api/company/pipeline');
+    const d = await r.json();
+    renderPipeline(d);
+  } catch(e) {}
+}
+
+async function resetFromStage(stageKey) {
+  if (!confirm(`从「${STAGE_LABELS[stageKey] || stageKey}」阶段开始重跑？之后的阶段都会重置。`)) return;
+  try {
+    const r = await fetch('/api/company/pipeline/reset', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({from_stage: stageKey})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      fetchPipelineStatus();
+      sendMsg('继续');
+    } else {
+      alert(d.error || '重置失败');
+    }
+  } catch(e) { alert('请求失败'); }
+}
+
+fetchPipelineStatus();
+pipelineTimer = setInterval(fetchPipelineStatus, 5000);
 </script>
 <script src="/static/workspace.js?v=13"></script>
 

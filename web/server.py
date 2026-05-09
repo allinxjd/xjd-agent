@@ -45,6 +45,9 @@ class WebSession:
     message_count: int = 0
 
 
+_web_server_instance: "WebServer | None" = None
+
+
 class WebServer:
     """Web 前端服务器.
 
@@ -58,6 +61,8 @@ class WebServer:
         agent_engine=None,
         config: Optional[dict] = None,
     ) -> None:
+        global _web_server_instance
+        _web_server_instance = self
         self._engine = agent_engine
         self._config = config or {}
         self._app = None
@@ -212,6 +217,8 @@ class WebServer:
 
         # Workspace file serving
         app.router.add_get("/api/workspace/files/{path:.*}", self._workspace_file)
+        # Project file serving (xjd-projects)
+        app.router.add_get("/api/project/files/{path:.*}", self._project_file)
 
         # Gateway Admin API (channels, voice, ecommerce)
         app.router.add_get("/api/admin/gateway/channels", self._gw_list_channels)
@@ -242,8 +249,10 @@ class WebServer:
 
         # AI Company API
         app.router.add_post("/api/company/standby", self._company_standby)
+        app.router.add_post("/api/company/pipeline/reset", self._company_pipeline_reset)
         app.router.add_post("/api/company/stop", self._company_stop)
         app.router.add_get("/api/company/status", self._company_status)
+        app.router.add_get("/api/company/pipeline", self._company_pipeline_status)
 
         # Skill Admin API
         app.router.add_get("/api/admin/skills", self._skill_list)
@@ -1802,6 +1811,15 @@ class WebServer:
                 except Exception:
                     logger.debug("Canvas broadcast to %s failed", sid, exc_info=True)
 
+    async def broadcast_company_message(self, msg_data: dict) -> None:
+        """广播 pipeline 产出消息到所有 WebUI 客户端聊天区."""
+        for sid, ws in list(self._ws_connections.items()):
+            if ws and not ws.closed:
+                try:
+                    await asyncio.wait_for(ws.send_json(msg_data), timeout=5.0)
+                except Exception:
+                    pass
+
     async def _canvas_list(self, request):
         """GET /api/workspace/canvas/list — 列出持久化的 canvas."""
         from aiohttp import web as _web
@@ -1902,6 +1920,30 @@ class WebServer:
         ct = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
         return _web.Response(body=p.read_bytes(), content_type=ct,
                              headers={"Cache-Control": "public, max-age=3600"})
+
+    async def _project_file(self, request):
+        """GET /api/project/files/{path} — 服务 xjd-projects 目录下的文件."""
+        from aiohttp import web as _web
+        import mimetypes
+        from agent.core.config import get_projects_dir
+        rel = request.match_info.get("path", "")
+        try:
+            p = (get_projects_dir() / rel).resolve()
+            projects_root = get_projects_dir().resolve()
+            if not p.is_relative_to(projects_root) or not p.is_file():
+                return _web.json_response({"error": "not found"}, status=404)
+            if p.stat().st_size > 20 * 1024 * 1024:
+                return _web.json_response({"error": "file too large"}, status=413)
+            ct = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
+            if p.suffix == ".html":
+                ct = "text/html; charset=utf-8"
+            return _web.FileResponse(p, headers={
+                "Content-Type": ct,
+                "Cache-Control": "no-cache",
+            })
+        except Exception as e:
+            logger.error("project_file error: %s", e)
+            return _web.json_response({"error": str(e)}, status=500)
 
     # ─── Gateway Admin API ───
 
@@ -2618,33 +2660,82 @@ class WebServer:
             content=message,
             cause_by="HumanDirective",
             sent_from="WebUI-User",
+            source_channel="webui",
         )
         await env.publish(msg)
         logger.info("WebUI→Company: %s", message[:50])
 
         # 等待 Company 回复（监听 message_log 中新的 ChatReply/QuickTask/ApprovalRequest）
         log_start = len(env.message_log)
+        logger.info("WebUI→Company poll start: log_start=%d", log_start)
         reply_causes = ("ChatReply", "QuickTask", "ApprovalRequest", "StageOutput", "StageFile")
         timeout = 180.0
         poll_interval = 1.0
         elapsed = 0.0
+        last_seen = log_start
+        collected: list = []
+        # 只有收到实质性回复后才开始 settle 计时
+        substantive_causes = ("ApprovalRequest", "StageOutput", "StageFile", "QuickTask")
+        settle_time = 5.0
+        # pipeline 运行中时缩短超时，避免长时间阻塞
+        from agent.tools.company_tools import _standby_company as _sc
+        if _sc and _sc._pipeline_running:
+            timeout = 30.0
+        since_last_reply = 0.0
+        has_substantive = False
         while elapsed < timeout:
             await asyncio.sleep(poll_interval)
             elapsed += poll_interval
-            new_msgs = env.message_log[log_start:]
+            new_msgs = env.message_log[last_seen:]
+            found_new = False
             for m in new_msgs:
-                if m.cause_by in reply_causes and m.sent_from != "WebUI-User":
-                    # 收集所有连续的回复消息
-                    await asyncio.sleep(2.0)
-                    all_new = env.message_log[log_start:]
-                    replies = [
-                        rm for rm in all_new
-                        if rm.cause_by in reply_causes and rm.sent_from != "WebUI-User"
-                    ]
-                    if replies:
-                        return "\n\n".join(rm.content for rm in replies)
-                    return m.content
-        return "AI 团队正在处理中，请稍后查看飞书群消息。"
+                if (m.cause_by in reply_causes
+                        and m.sent_from != "WebUI-User"
+                        and (not m.source_channel or m.source_channel == "webui")):
+                    collected.append(m)
+                    found_new = True
+                    if m.cause_by in substantive_causes:
+                        has_substantive = True
+            last_seen = len(env.message_log)
+            if found_new:
+                since_last_reply = 0.0
+            elif has_substantive:
+                since_last_reply += poll_interval
+                if since_last_reply >= settle_time:
+                    break
+            # 如果收到 ApprovalRequest，立即返回（需要用户交互）
+            if any(m.cause_by == "ApprovalRequest" for m in collected):
+                await asyncio.sleep(1.0)
+                # 再收集一次确保 StageOutput 在 ApprovalRequest 之前的都拿到
+                final_msgs = env.message_log[last_seen:]
+                for m in final_msgs:
+                    if (m.cause_by in reply_causes
+                            and m.sent_from != "WebUI-User"
+                            and (not m.source_channel or m.source_channel == "webui")):
+                        collected.append(m)
+                break
+        if collected:
+            logger.info("WebUI→Company reply: %d msgs, first=%s", len(collected), collected[0].cause_by)
+            from agent.core.config import get_projects_dir
+            projects_root = str(get_projects_dir().resolve())
+            parts = []
+            for m in collected:
+                text = m.content
+                if m.cause_by == "StageFile" and m.metadata.get("file_path"):
+                    fp = m.metadata["file_path"]
+                    if fp.startswith(projects_root):
+                        rel = fp[len(projects_root):].lstrip("/")
+                        url = f"/api/project/files/{rel}"
+                        text += f"\n\n[点击查看文件]({url})"
+                    else:
+                        text += f"\n\n文件路径: `{fp}`"
+                parts.append(text)
+            return "\n\n".join(parts)
+        logger.warning("WebUI→Company timeout: no reply in %.0fs, log has %d msgs since start", timeout, len(env.message_log) - log_start)
+        from agent.tools.company_tools import _standby_company
+        if _standby_company and _standby_company._pipeline_running:
+            return "Pipeline 运行中，请通过顶部进度条查看实时状态。"
+        return "AI 团队正在处理中，请稍后查看进度条。"
 
     async def _company_standby(self, request):
         """POST /api/company/standby — start AI Company standby mode."""
@@ -2683,6 +2774,86 @@ class WebServer:
             "running": running,
             "bot_count": bot_count,
         })
+
+    async def _company_pipeline_status(self, request):
+        """GET /api/company/pipeline — pipeline 实时进度."""
+        from aiohttp import web
+        from agent.tools.company_tools import _standby_company
+        if not _standby_company:
+            return web.json_response({"active": False})
+        c = _standby_company
+        if c._pipeline_running:
+            stages = [{"key": k, "status": v} for k, v in c._stages_status.items()]
+            current = next((s["key"] for s in stages if s["status"] in ("running", "waiting")), None)
+            import time
+            elapsed = time.monotonic() - c._pipeline_start_time if c._pipeline_start_time else 0
+            return web.json_response({
+                "active": True,
+                "project_name": c._active_project_name,
+                "stages": stages,
+                "waiting_approval": c._waiting_approval,
+                "current_stage": current,
+                "elapsed_seconds": int(elapsed),
+            })
+        interrupted = c._detect_interrupted_projects()
+        if interrupted:
+            name, _, done, pending = interrupted[0]
+            return web.json_response({
+                "active": False,
+                "interrupted": {
+                    "project_name": name,
+                    "done": done,
+                    "pending": pending,
+                },
+            })
+        return web.json_response({"active": False})
+
+    async def _company_pipeline_reset(self, request):
+        """POST /api/company/pipeline/reset — 重置 pipeline 到指定阶段重跑."""
+        from aiohttp import web
+        import json as _json
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid json"}, status=400)
+        from_stage = body.get("from_stage")
+        if not from_stage:
+            return web.json_response({"error": "missing from_stage"}, status=400)
+        from agent.tools.company_tools import _standby_company
+        if _standby_company and _standby_company._pipeline_running:
+            return web.json_response({"error": "pipeline is running, stop it first"}, status=409)
+        from agent.core.config import get_projects_dir
+        projects_root = get_projects_dir()
+        # 找到最近的 in_progress 项目
+        project_dir = None
+        if _standby_company:
+            interrupted = _standby_company._detect_interrupted_projects()
+            if interrupted:
+                _, project_dir, _, _ = interrupted[0]
+        if not project_dir:
+            return web.json_response({"error": "no interrupted project found"}, status=404)
+        meta_file = project_dir / ".project.json"
+        if not meta_file.exists():
+            return web.json_response({"error": "project meta not found"}, status=404)
+        meta = _json.loads(meta_file.read_text())
+        stages_done = meta.get("stages_done", {})
+        core_stages = ["PRD", "Prototype", "UIDesign", "Design", "Env", "Code", "Verify", "Review", "Test", "Deploy"]
+        if from_stage not in core_stages:
+            return web.json_response({"error": f"unknown stage: {from_stage}"}, status=400)
+        found = False
+        reset_list = []
+        for s in core_stages:
+            if s == from_stage:
+                found = True
+            if found:
+                stages_done[s] = False
+                meta.get("stage_outputs", {}).pop(s, None)
+                reset_list.append(s)
+        meta["stages_done"] = stages_done
+        meta["status"] = "in_progress"
+        meta_file.write_text(_json.dumps(meta, ensure_ascii=False, indent=2))
+        logger.info("Pipeline reset from stage %s: %s", from_stage, reset_list)
+        return web.json_response({"ok": True, "reset_stages": reset_list})
 
     async def _skill_secrets_list(self, request):
         """GET /api/admin/skill-secrets — 列出所有有 secrets 声明的技能."""
