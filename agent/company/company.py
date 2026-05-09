@@ -219,6 +219,11 @@ class Company:
         self._pending_project_name: Optional[dict] = None
         self._task_queue: list[dict] = []
 
+        from agent.company.intent_classifier import IntentClassifier
+        from agent.company.message_router import MessageCoordinator
+        self._classifier = IntentClassifier(router=router, locale=self._locale)
+        self._coordinator = MessageCoordinator(classifier=self._classifier, env=self._env)
+
         if chat_bridge:
             self._feishu_bridge = chat_bridge  # type: ignore[assignment]
             chat_bridge.set_environment(self._env)
@@ -372,7 +377,7 @@ class Company:
         import asyncio as _aio
         import time as _t
 
-        if stage_key in ("Prototype", "UIDesign"):
+        if False:  # 不再单独发截图，改为 PDF 统一交付
             await self._send_stage_screenshots(stage_key, project_dir, task)
 
         _stage_names = {
@@ -595,45 +600,78 @@ class Company:
 
             html_file.write_text(content, encoding="utf-8")
 
+    async def _export_stage_pdf(self, project_dir: "Path", task, stage_key: str = "UIDesign") -> None:
+        """导出原型图/UI 设计稿为 PDF，发送到飞书."""
+        if not project_dir:
+            return
+        subdir = "prototypes" if stage_key == "Prototype" else "ui-designs"
+        target_dir = project_dir / subdir
+        if not target_dir.exists():
+            return
+        html_files = sorted(
+            f for f in target_dir.glob("*.html")
+            if not f.stem.endswith("-report") and "report" not in f.stem
+        )
+        if not html_files:
+            return
+
+        _labels = {"Prototype": "产品原型图", "UIDesign": "UI设计稿"}
+        label = _labels.get(stage_key, "设计稿")
+
+        try:
+            from agent.company.design_exporter import DesignExporter
+            pm_role = self._env.roles.get("PM")
+            platform = getattr(pm_role, '_ui_platform', 'web') if pm_role else 'web'
+            viewport = (1280, 720) if platform == "web" else (390, 844)
+            exporter = DesignExporter(viewport=viewport)
+            pdf_path = target_dir / f"{subdir}.pdf"
+            pdf = await exporter.export_pdf_multi(html_files, pdf_path)
+        except Exception as e:
+            logger.warning("%s PDF 导出失败: %s", label, e)
+            return
+
+        if pdf:
+            pdf_msg = CompanyMessage(
+                content=f"{label} PDF 已生成（共 {len(html_files)} 页）。",
+                cause_by="StageFile",
+                sent_from="PM",
+                task_id=task.task_id,
+                metadata={"file_path": str(pdf), "filename": f"{label}.pdf"},
+            )
+            await self._env.publish(pdf_msg)
+
     async def _export_ui_designs(self, project_dir: "Path", task) -> None:
         """导出 UI 设计稿为 PDF + MP4，发送到飞书."""
+        await self._export_stage_pdf(project_dir, task, "UIDesign")
+        # MP4 导出
         if not project_dir:
             return
         ui_dir = project_dir / "ui-designs"
         if not ui_dir.exists():
             return
-        html_files = sorted(ui_dir.glob("*.html"))
+        html_files = sorted(
+            f for f in ui_dir.glob("*.html")
+            if not f.stem.endswith("-report") and "report" not in f.stem
+        )
         if not html_files:
             return
-
         try:
             from agent.company.design_exporter import DesignExporter
             pm_role = self._env.roles.get("PM")
-            platform = getattr(pm_role, '_ui_platform', 'mobile') if pm_role else 'mobile'
+            platform = getattr(pm_role, '_ui_platform', 'web') if pm_role else 'web'
             viewport = (1280, 720) if platform == "web" else (390, 844)
             exporter = DesignExporter(viewport=viewport)
-            results = await exporter.export_all(ui_dir)
+            mp4 = await exporter.export_mp4(html_files, ui_dir / "ui-design.mp4")
         except Exception as e:
-            logger.warning("UI 设计导出失败: %s", e)
+            logger.warning("MP4 导出失败: %s", e)
             return
-
-        if results.get("pdf"):
-            pdf_msg = CompanyMessage(
-                content="UI 设计稿 PDF 已生成。",
-                cause_by="StageFile",
-                sent_from="PM",
-                task_id=task.task_id,
-                metadata={"file_path": str(results["pdf"]), "filename": "UI设计稿.pdf"},
-            )
-            await self._env.publish(pdf_msg)
-
-        if results.get("mp4"):
+        if mp4:
             mp4_msg = CompanyMessage(
                 content="UI 设计演示视频已生成。",
                 cause_by="StageFile",
                 sent_from="PM",
                 task_id=task.task_id,
-                metadata={"file_path": str(results["mp4"]), "filename": "UI设计演示.mp4"},
+                metadata={"file_path": str(mp4), "filename": "UI设计演示.mp4"},
             )
             await self._env.publish(mp4_msg)
 
@@ -746,12 +784,30 @@ class Company:
                 return p
         return None
 
-    def _detect_ui_platform(self, requirement: str) -> str:
-        """根据需求文本检测 UI 平台类型."""
+    def _detect_ui_platform(self, requirement: str, project_dir: Optional[Path] = None) -> str:
+        """根据项目文件结构和需求文本检测 UI 平台类型.
+
+        优先级：项目实际文件 > 需求文本关键词。
+        """
+        # 优先看项目目录的实际文件结构
+        if project_dir and project_dir.exists():
+            has_html = any(project_dir.rglob("*.html"))
+            has_templates = (project_dir / "templates").exists()
+            has_static = (project_dir / "static").exists()
+            # Flask/Django/纯静态 web 项目
+            if has_html or has_templates or has_static:
+                return "web"
+            # 小程序项目特征
+            if (project_dir / "app.json").exists() or (project_dir / "project.config.json").exists():
+                return "miniprogram"
+            # React Native / Flutter 移动端
+            if (project_dir / "android").exists() or (project_dir / "ios").exists():
+                return "mobile"
+
         text = requirement.lower()
         if "小程序" in text or "miniprogram" in text or "mini program" in text:
             return "miniprogram"
-        if any(kw in text for kw in ("移动端", "app", "手机", "ios", "android", "mobile")):
+        if any(kw in text for kw in ("移动端app", "手机app", "ios", "android", "react native", "flutter")):
             return "mobile"
         return "web"
 
@@ -957,7 +1013,7 @@ class Company:
             stages_done["Prototype"] = True
             stages_done["UIDesign"] = True
             logger.info("纯后端/CLI 项目，跳过 Prototype 和 UIDesign 阶段")
-        idle_rounds = 0
+        stuck_rounds = 0
         supplement_injected: set[str] = set()
         stage_outputs: dict[str, str] = {}
 
@@ -972,7 +1028,7 @@ class Company:
             for _r in self._env.roles.values():
                 _r._workspace = str(_pdir)
             # 设置 UI 设计模板参数
-            _ui_platform = self._detect_ui_platform(requirement)
+            _ui_platform = self._detect_ui_platform(requirement, _pdir)
             _ui_ds = self._detect_ui_design_system(requirement)
             for _r in self._env.roles.values():
                 _r._ui_platform = _ui_platform
@@ -997,6 +1053,12 @@ class Company:
                                     stages_done[_stage_key] = False
                                     stage_outputs.pop(_stage_key, None)
                                     logger.info("断点恢复: %s 无有效产出，重置为未完成", _stage_key)
+                            else:
+                                # stages_done=False 但有 output 且磁盘验证通过 → 恢复为完成
+                                _output = stage_outputs.get(_stage_key, "")
+                                if _output and validate_checkpoint_output(_stage_key, _output, _pdir):
+                                    stages_done[_stage_key] = True
+                                    logger.info("断点恢复: %s 磁盘验证通过，恢复为已完成", _stage_key)
                         _port = _meta.get("port")
                         if _port:
                             _port_file = _pdir / ".port"
@@ -1008,9 +1070,14 @@ class Company:
                         if stage_outputs.get("PRD"):
                             _is_clarify = any(s in stage_outputs["PRD"] for s in _clarify_signals)
                             if not _is_clarify:
+                                # 如果 UIDesign 还未完成，PRD 只发给 PM（不广播给 Developer）
+                                _prd_send_to = None
+                                if not stages_done.get("UIDesign"):
+                                    _prd_send_to = "PM"
                                 await self._env.publish(CompanyMessage(
                                     content=stage_outputs["PRD"],
                                     cause_by="WritePRD", sent_from="PM",
+                                    send_to=_prd_send_to,
                                     task_id=task.task_id,
                                 ))
                             else:
@@ -1109,10 +1176,9 @@ class Company:
                     logger.info("所有角色空闲且所有阶段完成，结束 (round %d)", round_num)
                     break
                 kicked = self._kick_next_stage(stages_done, stage_outputs, requirement, task)
-                if not kicked:
-                    logger.info("所有角色空闲，无法继续，结束 (round %d)", round_num)
-                    break
-                logger.info("返工后主动触发下一阶段")
+                if kicked:
+                    logger.info("返工后主动触发下一阶段")
+                    stuck_rounds = 0
 
             logger.info("=== Round %d === stages=%s", round_num, sm.summary())
             round_had_work = False
@@ -1135,6 +1201,9 @@ class Company:
             _done_count = ctx.done_count
             for role in self._env.roles.values():
                 if not role.has_pending:
+                    continue
+                # 阶段门控：如果前置阶段未完成，阻止后续角色执行
+                if role.name == "Developer" and not stages_done.get("UIDesign", True):
                     continue
                 # 用 role 即将执行的 action name 确定阶段名（比 inbox cause_by 更准确）
                 _next_action = role.actions[role._state + 1].name if (role.actions and role._state + 1 < len(role.actions)) else ""
@@ -1190,7 +1259,9 @@ class Company:
                             break
                         sm.complete("PRD")
                         stage_outputs["PRD"] = result_msg.content
-                        await self._env.publish(result_msg)
+                        # 如果还需要走 Prototype/UIDesign，暂不广播 PRD 给 Developer
+                        if stages_done.get("Prototype", True) and stages_done.get("UIDesign", True):
+                            await self._env.publish(result_msg)
                         _stage_def = self._pipeline.stage_for_action("WritePRD")
                         if _stage_def and _stage_def.requires_approval:
                             _proj_dir = self._extract_workspace_from_requirement(requirement)
@@ -1203,6 +1274,14 @@ class Company:
                                 )
                                 await self._env.publish(_rework)
                                 break
+                        # PRD 完成后，如果 Prototype 未完成，主动触发 PM 执行 WritePrototype
+                        if not stages_done.get("Prototype"):
+                            _proto_kick = CompanyMessage(
+                                content=f"## PRD 已完成，请继续执行原型图设计\n{result_msg.content[:2000]}",
+                                cause_by="WritePRD", sent_from="Human", send_to="PM", task_id=task.task_id,
+                            )
+                            await self._env.publish(_proto_kick)
+                            break
                     elif result_msg.cause_by == "WritePrototype":
                         from agent.company.stage_handler import STAGE_CONFIGS, handle_validation
                         _cfg = STAGE_CONFIGS["WritePrototype"]
@@ -1227,6 +1306,7 @@ class Company:
                         sm.complete("Prototype")
                         stage_outputs["Prototype"] = result_msg.content
                         await self._save_and_send_prototypes(result_msg.content, _proj_dir, task, "Prototype")
+                        await self._export_stage_pdf(_proj_dir, task, "Prototype")
                         _stage_def = self._pipeline.stage_for_action("WritePrototype")
                         if _stage_def and _stage_def.requires_approval:
                             _approved, _feedback = await self._wait_for_approval("Prototype", task, _proj_dir)
@@ -1238,6 +1318,14 @@ class Company:
                                 )
                                 await self._env.publish(_rework)
                                 break
+                        # Prototype 完成后，如果 UIDesign 未完成，主动触发 PM 执行 WriteUIDesign
+                        if not stages_done.get("UIDesign"):
+                            _ui_kick = CompanyMessage(
+                                content=f"## 原型图已完成，请继续执行 UI 设计\n{result_msg.content[:2000]}",
+                                cause_by="WritePrototype", sent_from="Human", send_to="PM", task_id=task.task_id,
+                            )
+                            await self._env.publish(_ui_kick)
+                            break
                     elif result_msg.cause_by == "WriteUIDesign":
                         from agent.company.stage_handler import STAGE_CONFIGS, handle_validation
                         _cfg = STAGE_CONFIGS["WriteUIDesign"]
@@ -1251,6 +1339,13 @@ class Company:
                                 cause_by="ChatReply", sent_from="PM", task_id=task.task_id,
                             )
                             await self._env.publish(_skip_msg)
+                            # UIDesign skipped，把 PRD 广播给 Developer
+                            if "PRD" in stage_outputs:
+                                _prd_fwd = CompanyMessage(
+                                    content=stage_outputs["PRD"],
+                                    cause_by="WritePRD", sent_from="PM", task_id=task.task_id,
+                                )
+                                await self._env.publish(_prd_fwd)
                             break
                         elif _sr.action == "rework":
                             _rework = CompanyMessage(
@@ -1277,6 +1372,13 @@ class Company:
                                 )
                                 await self._env.publish(_rework)
                                 break
+                        # UIDesign 完成，现在把 PRD 广播给 Developer 推进后续阶段
+                        if "PRD" in stage_outputs:
+                            _prd_forward = CompanyMessage(
+                                content=stage_outputs["PRD"],
+                                cause_by="WritePRD", sent_from="PM", task_id=task.task_id,
+                            )
+                            await self._env.publish(_prd_forward)
                     elif result_msg.cause_by == "WriteDesign":
                         from agent.company.stage_handler import STAGE_CONFIGS, handle_validation
                         _cfg = STAGE_CONFIGS["WriteDesign"]
@@ -1319,6 +1421,8 @@ class Company:
                                 pipeline_deadline=pipeline_deadline,
                                 sm=sm,
                             )
+                            # 模块 pipeline 完成后，主动触发 Test/Deploy
+                            self._kick_next_stage(stages_done, stage_outputs, requirement, task)
                         else:
                             logger.info("Design 未包含模块拆分，使用传统单体 pipeline")
                     elif result_msg.cause_by == "SetupEnv":
@@ -1634,13 +1738,22 @@ class Company:
                         await self._env.publish(result_msg)
 
             if not round_had_work:
-                idle_rounds += 1
-                logger.info("本轮无实际工作产出 (连续空转 %d 轮)", idle_rounds)
-                if idle_rounds >= self._config.idle_rounds_to_stop:
-                    logger.info("连续 %d 轮无工作产出，pipeline 结束", idle_rounds)
+                if ctx.is_complete:
+                    logger.info("所有阶段完成，pipeline 结束 (round %d)", round_num)
                     break
+                kicked = self._kick_next_stage(stages_done, stage_outputs, requirement, task)
+                if not kicked:
+                    stuck_rounds += 1
+                    logger.info("本轮无工作产出且无法推进 (stuck %d 轮)", stuck_rounds)
+                    if stuck_rounds >= 5:
+                        await self._emit_stuck_warning(ctx, task, stuck_rounds)
+                    if stuck_rounds >= 15:
+                        logger.warning("Pipeline stuck %d 轮，强制结束", stuck_rounds)
+                        break
+                else:
+                    stuck_rounds = 0
             else:
-                idle_rounds = 0
+                stuck_rounds = 0
                 if _project_dir:
                     self._persist_pipeline_state(_project_dir, stages_done, stage_outputs)
         else:
@@ -1789,6 +1902,11 @@ class Company:
         Returns True for strong match, "weak" for ambiguous match needing
         confirmation, False for no match.
         """
+        # 疑问句不触发任务意图
+        question_signals = ["吗？", "吗?", "吗 ", "呢？", "呢?", "了吗", "没有？", "没有?", "怎么样", "如何"]
+        if any(s in text for s in question_signals):
+            return False
+
         anti_keywords = self._locale.get("keywords.task_anti_keywords") or [
             "加油", "加班", "加薪", "加入群", "加入团队",
             "增加信心", "修改密码", "修改头像",
@@ -1815,6 +1933,7 @@ class Company:
         weak = self._locale.get("keywords.weak_task_triggers") or [
             "加入", "加个", "加一个", "增加", "添加", "新增",
             "改一下", "改个", "修改", "优化一下", "优化个",
+            "重构", "翻新", "改版", "升级", "迭代",
             "支持一下", "支持个", "接入",
             "开发", "开发个",
             "没问题了", "就这样吧", "可以开始了", "确认", "就按这个来",
@@ -1879,7 +1998,7 @@ class Company:
         projects_root = Path.home() / "xjd-projects"
         if not projects_root.exists():
             return results
-        core_stages = ["PRD", "Design", "Env", "Code", "Verify", "Review", "Test", "Deploy"]
+        core_stages = ["PRD", "Prototype", "UIDesign", "Design", "Env", "Code", "Verify", "Review", "Test", "Deploy"]
         for d in sorted(projects_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
             if not d.is_dir():
                 continue
@@ -2109,6 +2228,7 @@ class Company:
         from datetime import datetime
         from agent.company.action import CHAT_REPLY
 
+        logger.debug("_process_standby_messages: pipeline_running=%s", self._pipeline_running)
         if self._pipeline_running:
             queue = self._env._pipeline_user_queue or []
             if queue:
@@ -2146,13 +2266,6 @@ class Company:
                     self._pipeline_user_msgs.extend(collected)
                     return
 
-                _confirm_only_prefixes = (
-                    "开干", "可以", "没问题", "OK", "ok", "好的", "行",
-                    "确认", "就这样", "可以开始", "开始吧", "动手吧",
-                    "好", "嗯", "对", "是的", "没问题了", "就按这个",
-                    "可以，开干", "好，开干", "行，开干",
-                )
-
                 _new_project_signals = (
                     "新项目", "新产品", "做一个新", "另一个项目", "探讨一下一个新",
                     "探讨一个新", "讨论一个新",
@@ -2175,13 +2288,30 @@ class Company:
                     return
 
                 req_msgs = []
+                supplement_msgs = []
+                chat_msgs = []
                 for m in collected:
-                    intent = self._detect_task_intent(m.content)
-                    text = m.content.strip()
-                    is_confirm = len(text) <= 15 and text.startswith(_confirm_only_prefixes)
-                    if intent is True and not is_confirm:
+                    decision = await self._coordinator.route_user_message(
+                        m, pipeline_state="running", waiting_approval=False
+                    )
+                    if decision.action == "cancel_pipeline":
+                        self._pipeline_cancel = True
+                        notify = CompanyMessage(
+                            content="收到，当前项目已暂停。",
+                            cause_by="ChatReply", sent_from="PM",
+                        )
+                        await self._env.publish(notify)
+                        return
+                    elif decision.action == "queue_new_task":
                         req_msgs.append(m)
-                chat_msgs = [m for m in collected if m not in req_msgs]
+                    elif decision.action == "inject_supplement":
+                        supplement_msgs.append(m)
+                    elif decision.action == "answer_question":
+                        chat_msgs.append(m)
+                    elif decision.action == "route_approval":
+                        self._pipeline_user_msgs.append(m)
+                    else:
+                        chat_msgs.append(m)
 
                 if has_new_project and not req_msgs:
                     for m in collected:
@@ -2197,29 +2327,7 @@ class Company:
                     return
 
                 if req_msgs:
-                    new_project_keywords = (
-                        "做一个新", "另一个项目", "下一个任务", "新项目", "再做一个",
-                        "做完这个再", "排队", "下一个", "另外一个",
-                    )
-                    new_project_msgs = []
-                    supplement_msgs = []
                     for m in req_msgs:
-                        if any(kw in m.content for kw in new_project_keywords):
-                            new_project_msgs.append(m)
-                        else:
-                            supplement_msgs.append(m)
-
-                    if supplement_msgs:
-                        self._pipeline_user_msgs.extend(supplement_msgs)
-                        summary = "、".join(m.content[:30] for m in supplement_msgs)
-                        ack = CompanyMessage(
-                            content=f"收到，补充需求已记录，会纳入当前开发：\n{summary}",
-                            cause_by="ChatReply",
-                            sent_from="PM",
-                        )
-                        await self._env.publish(ack)
-
-                    for m in new_project_msgs:
                         self._task_queue.append({"raw_message": m.content})
                         pos = len(self._task_queue)
                         queue_ack = CompanyMessage(
@@ -2228,6 +2336,16 @@ class Company:
                             sent_from="PM",
                         )
                         await self._env.publish(queue_ack)
+
+                if supplement_msgs:
+                    self._pipeline_user_msgs.extend(supplement_msgs)
+                    summary = "、".join(m.content[:30] for m in supplement_msgs)
+                    ack = CompanyMessage(
+                        content=f"收到，补充需求已记录，会纳入当前开发：\n{summary}",
+                        cause_by="ChatReply",
+                        sent_from="PM",
+                    )
+                    await self._env.publish(ack)
 
                 if chat_msgs:
                     for cm in chat_msgs:
@@ -2361,6 +2479,9 @@ class Company:
         has_strong = any(i is True for _, i in intents)
         has_weak = any(i == "weak" for _, i in intents)
         has_task_intent = has_strong or has_weak
+        logger.info("task_intent 检测: strong=%s weak=%s task_intent=%s msgs=%s",
+                    has_strong, has_weak, has_task_intent,
+                    [m.content[:30] for m in user_messages])
 
         # 断点恢复检测：优先于 task_intent 评估，避免 resume 关键词被当作新任务
         resume_keywords = ["继续", "接着来", "断点恢复", "继续开发", "接着开发", "恢复", "接着做", "继续做"]
@@ -2402,7 +2523,7 @@ class Company:
                 import json as _rj2
                 _rm = _rj2.loads((resume_dir / ".project.json").read_text())
                 _sd = _rm.get("stages_done", {})
-                core = ["PRD", "Design", "Env", "Code", "Verify", "Review", "Test", "Deploy"]
+                core = ["PRD", "Prototype", "UIDesign", "Design", "Env", "Code", "Verify", "Review", "Test", "Deploy"]
                 done_list = [s for s in core if _sd.get(s)]
                 pending_list = [s for s in core if not _sd.get(s)]
                 name_parts = resume_dir.name.split("-", 1)
@@ -2446,6 +2567,73 @@ class Company:
                 self._pipeline_running = True
                 self._env._pipeline_user_queue = []
                 asyncio.create_task(self._run_pipeline_task(enriched, resume_dir))
+                return
+
+            # 预检：如果用户消息中直接提到了已有项目名，跳过 LLM evaluate 直接走迭代
+            _pre_match_project = self._find_project_by_name(task_context)
+            if not _pre_match_project:
+                _hist_text = " ".join(c for _, c in self._standby_history[-10:])
+                _pre_match_project = self._find_project_by_name(_hist_text)
+            if _pre_match_project:
+                import json as _json_pre
+                _pre_meta = {}
+                _pre_meta_path = _pre_match_project / ".project.json"
+                if _pre_meta_path.exists():
+                    try:
+                        _pre_meta = _json_pre.loads(_pre_meta_path.read_text())
+                    except Exception:
+                        pass
+                _pre_name = _pre_meta.get("name", _pre_match_project.name.split("-", 1)[-1])
+                logger.info("预检匹配到已有项目 %s，跳过 EvaluateRequirement", _pre_match_project.name)
+                confirm_msg = CompanyMessage(
+                    content="需求已确认，开始安排开发。",
+                    cause_by="ChatReply",
+                    sent_from=pm_role.name,
+                )
+                await self._env.publish(confirm_msg)
+                self._standby_history.append((pm_role.name, confirm_msg.content))
+                project_name = _pre_name
+                existing_project = _pre_match_project
+                needs_prototype = True
+                from pathlib import Path as _PPath2
+                _pdir2 = _pre_match_project
+                _has_html2 = (
+                    any(_pdir2.rglob("*.html"))
+                    or (_pdir2 / "ui-designs").exists()
+                    or (_pdir2 / "prototypes").exists()
+                )
+                if not _has_html2:
+                    needs_prototype = False
+                env_context = ""
+                from agent.company.secret_extractor import extract_secrets, write_env_file
+                secrets = extract_secrets(self._standby_history)
+                if secrets:
+                    env_context = "## 环境变量\n" + "\n".join(f"- {k}" for k in secrets.keys())
+                if secrets:
+                    env_file = write_env_file(_pre_match_project, secrets)
+                    if env_file:
+                        logger.info("已写入 %d 个密钥到 %s", len(secrets), env_file)
+                existing_code = self._collect_project_files(
+                    _pre_match_project,
+                    max_chars=self._config.max_project_chars,
+                    max_files=self._config.max_project_files,
+                )
+                full_context_iter = f"## 对话上下文\n" + "\n".join(
+                    f"[{s}]: {c}" for s, c in self._standby_history[-10:]
+                ) + f"\n\n## 用户最新需求\n{task_context}"
+                enriched = (
+                    f"## 项目工作目录\n{_pre_match_project}\n"
+                    f"这是一个已有项目，你需要在现有代码基础上修改，不要从头重写。\n"
+                    f"所有文件操作必须在此目录下。\n\n"
+                    f"## 现有代码\n{existing_code}\n\n"
+                    f"{env_context}\n\n"
+                    f"{full_context_iter}"
+                )
+                logger.info("迭代开发模式（预检匹配）：使用已有项目 %s", _pre_match_project)
+                self._pipeline_running = True
+                self._needs_prototype = needs_prototype
+                self._env._pipeline_user_queue = []
+                asyncio.create_task(self._run_pipeline_task(enriched, _pre_match_project))
                 return
 
             history_context = "\n".join(
@@ -2566,6 +2754,19 @@ class Company:
                     f"{env_context}\n\n"
                     f"{full_context}"
                 )
+
+            # 迭代模式：如果项目目录已有 HTML 文件，强制走 UI 设计流程
+            if existing_project and not needs_prototype:
+                from pathlib import Path as _PPath
+                _pdir = _PPath(project_dir) if not isinstance(project_dir, Path) else project_dir
+                _has_html = (
+                    any(_pdir.rglob("*.html"))
+                    or (_pdir / "ui-designs").exists()
+                    or (_pdir / "prototypes").exists()
+                )
+                if _has_html:
+                    needs_prototype = True
+                    logger.info("迭代模式：项目已有 HTML 文件，强制启用 UI 设计流程")
 
             self._pipeline_running = True
             self._needs_prototype = needs_prototype
@@ -2920,6 +3121,17 @@ class Company:
                 logger.info("主动触发 %s 执行 %s 阶段", role_name, stage_key)
                 return True
         return False
+
+    async def _emit_stuck_warning(self, ctx, task, stuck_rounds: int) -> None:
+        """Pipeline 卡住时发出警告（不终止）."""
+        current = ctx.current_stage if hasattr(ctx, "current_stage") else "unknown"
+        warn_msg = CompanyMessage(
+            content=f"流水线在 {current} 阶段已连续 {stuck_rounds} 轮无进展，正在尝试恢复...",
+            cause_by="ChatReply",
+            sent_from="PM",
+            task_id=task.task_id if task else "",
+        )
+        await self._env.publish(warn_msg)
 
     def _check_rework(self, role_name: str, content: str, rework_round: int = 0) -> Optional[str]:
         """检查角色输出是否需要返工。rework_round 用于后续轮次降低敏感度."""

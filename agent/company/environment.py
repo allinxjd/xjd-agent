@@ -23,6 +23,7 @@ class CompanyEnvironment:
         self._chat_bridge: Optional[ChatBridge] = None
         self._feishu_bridge: Any = None
         self._pipeline_user_queue: Optional[list[CompanyMessage]] = None
+        self._coordinator: Any = None
 
     @property
     def chat_bridge(self) -> Optional[ChatBridge]:

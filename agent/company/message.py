@@ -23,6 +23,8 @@ class CompanyMessage:
     msg_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     timestamp: float = field(default_factory=time.time)
     metadata: dict[str, Any] = field(default_factory=dict)
+    priority: int = 1
+    topic: str = ""
 
     def summary(self, max_len: int = 200) -> str:
         """用于日志和飞书展示的摘要."""

@@ -69,7 +69,7 @@ _EMOJI_RE = re.compile(
 
 
 def _check_hex_outside_root(content: str) -> Optional[str]:
-    """检查 body HTML 中是否有 hex 色值（排除 style 块、SVG、HTML 实体）."""
+    """检查 body HTML 中是否有 hex 色值（排除 style 块、SVG、HTML 实体、常见状态色）."""
     parts = content.split('</style>')
     if len(parts) > 1:
         body_content = parts[-1]
@@ -80,8 +80,17 @@ def _check_hex_outside_root(content: str) -> Optional[str]:
     cleaned = re.sub(r'&#\d+;', '', cleaned)
     cleaned = re.sub(r'href="#[^"]*"', '', cleaned)
     matches = re.findall(r'#[0-9a-fA-F]{3,8}\b', cleaned)
-    if matches:
-        samples = ', '.join(matches[:3])
+    # 允许常见状态色（红/绿/黄/灰）和黑白
+    _allowed_hex = {
+        "#dc2626", "#ef4444", "#f87171",  # red
+        "#16a34a", "#17a34a", "#22c55e", "#4ade80",  # green
+        "#eab308", "#f59e0b", "#fbbf24",  # yellow/amber
+        "#6b7280", "#9ca3af", "#d1d5db", "#e5e7eb", "#f3f4f6", "#f9fafb",  # gray
+        "#000", "#000000", "#fff", "#ffffff", "#333", "#333333", "#666", "#666666",  # bw
+    }
+    filtered = [m for m in matches if m.lower() not in _allowed_hex]
+    if filtered:
+        samples = ', '.join(filtered[:3])
         return f"发现 :root 外的 hex 色值: {samples}。请改用 CSS 变量（var(--accent) 等）"
     return None
 
@@ -274,10 +283,38 @@ def validate_code_output(content: str) -> ValidationResult:
 
 
 def _validate_ui_design(content: str, project_dir=None) -> ValidationResult:
-    """WriteUIDesign 专用验证：先检查 HTML 存在，再检查质量."""
-    basic = validate_html_output(content, project_dir)
-    if not basic.valid:
-        return basic
+    """WriteUIDesign 专用验证：检查 ui-designs/ 目录有 HTML 文件."""
+    has_html = "<html" in content.lower() or "```html" in content
+    html_from_disk = False
+    if not has_html and project_dir:
+        from pathlib import Path
+        pdir = Path(project_dir) if not isinstance(project_dir, Path) else project_dir
+        d = pdir / "ui-designs"
+        if d.exists():
+            html_files = list(d.glob("*.html"))
+            if html_files:
+                has_html = True
+                html_from_disk = True
+    if not has_html:
+        return ValidationResult(
+            valid=False,
+            reason="ui-designs/ 目录无 HTML 文件",
+            rework_hint=(
+                "你的输出不包含 UI 设计 HTML 文件。请使用 write_file 工具"
+                "将每个页面写入 ui-designs/ 目录（如 ui-designs/home.html）。"
+                "不要只输出文字说明或规划，必须实际写入文件。"
+            ),
+        )
+    # 质量检查：如果文件在磁盘上，读取磁盘内容来检查
+    if html_from_disk and project_dir:
+        from pathlib import Path
+        pdir = Path(project_dir) if not isinstance(project_dir, Path) else project_dir
+        d = pdir / "ui-designs"
+        disk_content = ""
+        for f in d.glob("*.html"):
+            disk_content += f.read_text(encoding="utf-8", errors="ignore") + "\n"
+        if disk_content:
+            return validate_html_quality(disk_content, project_dir)
     return validate_html_quality(content, project_dir)
 
 

@@ -133,6 +133,8 @@ class Action:
     async def run(self, context: str, role: CompanyRole) -> str:
         from agent.core.engine import AgentEngine
 
+        if self.name == "WriteUIDesign":
+            logger.info("[Action:WriteUIDesign] context长度=%d, 前200字=%s", len(context), context[:200])
         prompt = self.prompt_template.replace("{context}", context) if self.prompt_template else context
         boss_title = getattr(role, '_boss_title', '老板')
         if "{boss_title}" in prompt:
@@ -140,6 +142,10 @@ class Action:
         # UI 设计模板系统注入
         if "{seed_template}" in prompt:
             prompt = self._inject_ui_templates(prompt, role)
+            logger.info("[Action:%s] UI模板注入后 prompt 长度=%d, platform=%s, ds=%s",
+                        self.name, len(prompt),
+                        getattr(role, '_ui_platform', 'UNSET'),
+                        getattr(role, '_ui_design_system', 'UNSET'))
         if "{chat_style}" in prompt:
             locale = getattr(role, '_locale', None)
             chat_style = ""
@@ -249,8 +255,14 @@ class Action:
                 term_tool.handler = _term_counting_fn
 
         try:
+            if self.name == "WriteUIDesign":
+                logger.info("[Action:WriteUIDesign] 最终prompt长度=%d, 含seed=%s, 含layouts=%s",
+                            len(prompt), "seed.html" not in prompt and "[文件未找到" not in prompt,
+                            "layouts" in prompt[:100] or "布局库" in prompt)
             result = await engine.run_turn(prompt)
             content = result.content if hasattr(result, "content") else str(result)
+            if self.name == "WriteUIDesign":
+                logger.info("[Action:WriteUIDesign] LLM返回长度=%d, 前300字=%s", len(content), content[:300])
         except Exception as e:
             logger.error("[Action:%s] 执行失败: %s", self.name, e)
             return f"[错误] {self.name} 执行失败: {e}"
@@ -366,6 +378,8 @@ WRITE_PROTOTYPE = Action(
         "- 不需要写 JS 交互逻辑，只展示页面结构和布局\n\n"
         "## PRD\n{context}"
     ),
+    tools_filter=["code", "file"],
+    max_tool_rounds=15,
 )
 
 WRITE_UI_DESIGN = Action(
@@ -413,6 +427,7 @@ WRITE_UI_DESIGN = Action(
         "用 write_file 工具将每个页面写入 `ui-designs/` 目录。\n"
         "文件名用英文小写+连字符（如 `home.html`, `product-detail.html`）。\n\n"
         "## 硬性规则\n"
+        "- **不要确认、不要提问、不要输出规划文字。直接用 write_file 写入文件。**\n"
         "- **不写 CSS。** 所有样式来自 seed 的 class。唯一允许的 inline style 是间距调整。\n"
         "- **不引入外部 CDN。** 不加 Tailwind、不加 Bootstrap、不加 Google Fonts。\n"
         "- **不用 emoji 做图标。** 用 SVG 或 seed 中的 class。\n"
@@ -421,6 +436,8 @@ WRITE_UI_DESIGN = Action(
         "- **先用 read_file 读取 prototypes/ 了解页面结构。**\n\n"
         "## PRD 与原型上下文\n{context}"
     ),
+    tools_filter=["code", "file"],
+    max_tool_rounds=15,
 )
 
 WRITE_DESIGN = Action(

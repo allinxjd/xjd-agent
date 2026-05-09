@@ -94,7 +94,7 @@ class DesignExporter:
             return None
 
         try:
-            from pypdf import PdfMerger
+            from pypdf import PdfWriter, PdfReader
         except ImportError:
             logger.info("pypdf 未安装，降级为单文件 PDF（仅首页）")
             return await self.export_pdf(html_paths[0], output)
@@ -110,11 +110,13 @@ class DesignExporter:
             if not tmp_pdfs:
                 return None
 
-            merger = PdfMerger()
+            writer = PdfWriter()
             for pdf in tmp_pdfs:
-                merger.append(str(pdf))
-            merger.write(str(output))
-            merger.close()
+                reader = PdfReader(str(pdf))
+                for page in reader.pages:
+                    writer.add_page(page)
+            with open(str(output), "wb") as f:
+                writer.write(f)
             return output
         except Exception as e:
             logger.warning("多页 PDF 合并失败: %s", e)
@@ -192,7 +194,10 @@ class DesignExporter:
 
         Returns dict with keys: "screenshots", "pdf", "mp4"
         """
-        html_files = sorted(ui_dir.glob("*.html"))
+        html_files = sorted(
+            f for f in ui_dir.glob("*.html")
+            if not f.stem.endswith("-report") and "report" not in f.stem
+        )
         if not html_files:
             logger.info("ui-designs/ 目录无 HTML 文件，跳过导出")
             return {"screenshots": [], "pdf": None, "mp4": None}
