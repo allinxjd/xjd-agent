@@ -2020,14 +2020,20 @@ class Company:
                 pending_str = "/".join(pending)
                 notify = CompanyMessage(
                     content=(
-                        f"上次「{proj_name}」项目的流水线被中断"
-                        f"（已完成：{done_str}，未完成：{pending_str}）。\n"
-                        f"回复「继续」即可从断点恢复，不会重复已完成的阶段。"
+                        f"正在自动恢复「{proj_name}」项目，"
+                        f"跳过已完成的 {done_str}，继续执行 {pending_str}。"
                     ),
                     cause_by="ChatReply",
                     sent_from="PM",
                 )
                 await self._env.publish(notify)
+            # 自动触发断点恢复，无需用户确认
+            resume_msg = CompanyMessage(
+                content="继续",
+                cause_by="HumanDirective",
+                sent_from="WebUI-User",
+            )
+            await self._env.publish(resume_msg)
 
         try:
             while not self._standby_stop.is_set():
