@@ -1158,6 +1158,10 @@ class Company:
                         for k in stages_done:
                             if _saved_stages.get(k, False):
                                 stages_done[k] = True
+                        # 恢复模块级 key（Code_xxx, Verify_xxx, Review_xxx）
+                        for k, v in _saved_stages.items():
+                            if k not in stages_done and v:
+                                stages_done[k] = True
                         stage_outputs.update(_meta.get("stage_outputs", {}))
                         # 验证各阶段是否真正产出了有效内容
                         for _stage_key in list(stages_done.keys()):
@@ -1210,6 +1214,24 @@ class Company:
                                 logger.info("断点恢复: Design 内容为澄清提问，重置为未完成")
                                 stage_outputs.pop("Design", None)
                                 stages_done["Design"] = False
+                        # 断点恢复时重新推送 Prototype PDF 到 WebUI
+                        if stages_done.get("Prototype") and _pdir:
+                            _proto_pdf = _pdir / "prototypes" / "prototypes.pdf"
+                            if _proto_pdf.exists():
+                                await self._broadcast_company_message(
+                                    "产品原型图 PDF 已生成（共 8 页）。",
+                                    "StageFile",
+                                    {"file_path": str(_proto_pdf), "filename": "产品原型图.pdf"},
+                                )
+                        # 断点恢复时重新推送 UIDesign PDF 到 WebUI
+                        if stages_done.get("UIDesign") and _pdir:
+                            _ui_pdf = _pdir / "ui-designs" / "ui-designs.pdf"
+                            if _ui_pdf.exists():
+                                await self._broadcast_company_message(
+                                    "UI设计稿 PDF 已生成。",
+                                    "StageFile",
+                                    {"file_path": str(_ui_pdf), "filename": "UI设计稿.pdf"},
+                                )
                 except Exception as e:
                     logger.warning("读取断点信息失败: %s", e)
 
@@ -3154,6 +3176,7 @@ class Company:
                 sent_from="PM",
             )
             await self._env.publish(done_msg)
+            await self._broadcast_company_message(msg_text, "PipelineComplete")
 
             if self._task_queue:
                 next_task = self._task_queue.pop(0)
@@ -3537,12 +3560,18 @@ class Company:
                     stages_done[review_key] = True
 
             logger.info("模块 %s 完成 (%d/%d)", mod_name, i + 1, len(modules))
+            # 每个模块完成后持久化，断点恢复时跳过已完成模块
+            _mod_proj_dir = self._extract_workspace_from_requirement(requirement)
+            if _mod_proj_dir:
+                self._persist_pipeline_state(_mod_proj_dir, stages_done, stage_outputs)
 
         if sm:
+            sm.complete("Env")
             sm.complete("Code")
             sm.complete("Verify")
             sm.complete("Review")
         else:
+            stages_done["Env"] = True
             stages_done["Code"] = True
             stages_done["Verify"] = True
             stages_done["Review"] = True
