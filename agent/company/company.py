@@ -3271,12 +3271,18 @@ class Company:
                     "Test": "FixComplete",
                     "Deploy": "FixComplete",
                 }
-                # 设置 PM 的 action 指针到正确位置
+                # 设置角色的 action 指针到正确位置
                 action_name_map = {
                     "PRD": "WritePRD",
                     "Prototype": "WritePrototype",
                     "UIDesign": "WriteUIDesign",
                     "Design": "WriteDesign",
+                    "Env": "SetupEnv",
+                    "Code": "WriteCode",
+                    "Verify": "VerifyRun",
+                    "Review": "CodeReview",
+                    "Test": "RunTest",
+                    "Deploy": "ExecuteDeploy",
                 }
                 target_action = action_name_map.get(stage_key)
                 if target_action and role.actions:
