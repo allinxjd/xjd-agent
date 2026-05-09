@@ -3273,6 +3273,17 @@ class Company:
                         _tech = self._extract_tech_stack(Path(pdir_match.group(1)))
                         if _tech:
                             kick_content += f"\n{_tech}\n"
+                    # Code/Verify 阶段注入 UI 设计图参考
+                    if stage_key in ("Code", "Verify"):
+                        _ui_dir = Path(pdir_match.group(1)) / "ui-designs"
+                        if _ui_dir.is_dir():
+                            _ui_files = sorted(_ui_dir.glob("*.html"))
+                            if _ui_files:
+                                kick_content += (
+                                    f"\n## UI 设计图参考（前端必须严格还原）\n"
+                                    f"ui-designs/ 目录下有 {len(_ui_files)} 个设计稿，"
+                                    f"用 read_file 读取后严格按设计稿实现。\n"
+                                )
                     # UIDesign 阶段注入已有原型图页面列表
                     if stage_key == "UIDesign" and stages_done.get("Prototype"):
                         _proto_dir = Path(pdir_match.group(1)) / "prototypes"
@@ -3465,11 +3476,27 @@ class Company:
 
             # WriteCode for this module
             if not stages_done.get(code_key, False):
+                # 注入 UI 设计图参考（前端模块必须严格还原设计稿）
+                _ui_ref = ""
+                _proj_dir_m = self._extract_workspace_from_requirement(requirement)
+                if _proj_dir_m:
+                    _ui_dir = _proj_dir_m / "ui-designs"
+                    if _ui_dir.is_dir():
+                        _ui_files = sorted(_ui_dir.glob("*.html"))
+                        if _ui_files:
+                            _ui_ref = (
+                                f"\n## UI 设计图参考（必须严格还原）\n"
+                                f"项目 ui-designs/ 目录下有 {len(_ui_files)} 个设计稿：\n"
+                                + "\n".join(f"- {f.name}" for f in _ui_files) + "\n"
+                                f"前端页面必须用 read_file 读取对应的 UI 设计稿，"
+                                f"严格按照设计稿的布局、配色、组件结构实现。\n"
+                            )
                 module_context = (
                     f"## 当前任务：只编写模块 [{mod_name}] 的代码\n"
                     f"文件列表: {', '.join(mod_files)}\n"
                     f"模块说明: {mod_desc}\n"
-                    f"进度: 模块 {i+1}/{len(modules)}\n\n"
+                    f"进度: 模块 {i+1}/{len(modules)}\n"
+                    f"{_ui_ref}\n"
                     f"{requirement}"
                 )
                 write_ok = False
