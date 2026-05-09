@@ -12,7 +12,7 @@ class TestActionDefinitions:
         expected = {
             "UserRequirement", "EvaluateRequirement", "WritePRD",
             "WritePrototype", "WriteUIDesign", "WriteDesign",
-            "SetupEnv", "WriteCode", "VerifyRun", "CodeReview", "FixCode",
+            "SetupEnv", "WriteCode", "VerifyRun", "CodeReview", "CodeReviewFollowup", "FixCode",
             "WriteTest", "RunTest",
             "DeployPlan", "ExecuteDeploy", "ChatReply", "QuickTask",
         }

@@ -108,7 +108,7 @@ class PipelineConfig:
 class CompanyConfig:
     """Company 可配置参数."""
 
-    max_rework: int = 3
+    max_rework: int = 2
     max_rounds: int = 20
     max_minutes: int = 180
     max_project_chars: int = 30000
@@ -1832,6 +1832,29 @@ class Company:
                         sm.reset("Verify")
                         sm.reset("Review")
                         sm.reset("Test")
+
+                        # 返工后用 followup review 替代全量审查
+                        reviewer_role = self._env.roles.get("Reviewer")
+                        if reviewer_role and role.name == "Reviewer":
+                            followup_context = (
+                                f"## 返工复审（第 {role_rework + 1} 轮）\n"
+                                f"Developer 已根据你的反馈修复了代码。\n\n"
+                                f"## 上一轮你指出的问题\n{result_msg.content[:2000]}\n\n"
+                                f"## 复审要求\n"
+                                f"- 只验证上述问题是否已修复，只读取相关文件\n"
+                                f"- 不要全量审查，不要提新的 style 建议\n"
+                                f"- 只有未修复或引入安全漏洞才 REJECTED\n"
+                                f"- 其他情况 APPROVED\n"
+                            )
+                            followup_msg = CompanyMessage(
+                                content=followup_context,
+                                cause_by="VerifyRun",
+                                sent_from="Developer",
+                                task_id=task.task_id,
+                            )
+                            reviewer_role.put_message(followup_msg)
+                            reviewer_role._state = -1
+                            sm.complete("Verify")
 
                         rework_status = CompanyMessage(
                             content=f"{role.name} 发现问题，{rework_target} 正在修复（第 {role_rework + 1} 次，patch 模式）",

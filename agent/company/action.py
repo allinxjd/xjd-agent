@@ -604,6 +604,25 @@ CODE_REVIEW = Action(
     max_tool_rounds=10,
 )
 
+CODE_REVIEW_FOLLOWUP = Action(
+    name="CodeReviewFollowup",
+    description="返工后复审（只验证修复，不全量审查）",
+    prompt_template=(
+        "你是代码审查员，正在进行返工后的复审。\n\n"
+        "## 重要：这是复审，不是全量审查\n"
+        "- 只验证上一轮指出的问题是否已正确修复\n"
+        "- 只读取上一轮反馈中提到的文件\n"
+        "- 不要审查其他文件，不要提出新的 style 建议\n"
+        "- 只有以下情况才 REJECTED：\n"
+        "  1. 上一轮的问题完全没有修复\n"
+        "  2. 修复引入了安全漏洞或会导致崩溃的 bug\n"
+        "- 其他情况一律 APPROVED（可附带非阻塞建议）\n\n"
+        "{context}"
+    ),
+    tools_filter=["code", "file"],
+    max_tool_rounds=5,
+)
+
 WRITE_TEST = Action(
     name="WriteTest",
     description="编写并运行测试（SOP：读源码→写测试→跑测试→修复→汇报）",
@@ -839,7 +858,7 @@ ALL_ACTIONS: dict[str, Action] = {
     a.name: a for a in [
         USER_REQUIREMENT, EVALUATE_REQUIREMENT, WRITE_PRD,
         WRITE_PROTOTYPE, WRITE_UI_DESIGN, WRITE_DESIGN,
-        SETUP_ENV, WRITE_CODE, VERIFY_RUN, CODE_REVIEW, FIX_CODE,
+        SETUP_ENV, WRITE_CODE, VERIFY_RUN, CODE_REVIEW, CODE_REVIEW_FOLLOWUP, FIX_CODE,
         WRITE_TEST, RUN_TEST,
         DEPLOY_PLAN, EXECUTE_DEPLOY, CHAT_REPLY, QUICK_TASK,
     ]
