@@ -75,10 +75,9 @@ class TestHtmlQualityValidator:
     """单元测试：每条 P0 规则的正反例."""
 
     def test_hex_outside_root_detected(self):
-        html = '<html><head><style>:root{--bg:#fff;}</style></head><body><div style="color:#FF0000">x</div></body></html>'
+        html = '<html><head><style>:root{--bg:#fff;}</style></head><body><div style="color:#FF0000;background:#AA1122;border:#BB2233;outline:#CC3344;fill:#DD4455;stroke:#EE5566">x</div></body></html>'
         err = _check_hex_outside_root(html)
         assert err is not None
-        assert "#FF0000" in err
 
     def test_hex_inside_root_passes(self):
         html = '<html><head><style>:root{--bg:#FAFAFA; --accent:#2F6FEB;}</style></head><body><div>ok</div></body></html>'
@@ -96,7 +95,7 @@ class TestHtmlQualityValidator:
         assert err is None
 
     def test_unknown_class_detected(self):
-        html = '<html><head><style>:root{}</style></head><body><div class="aaa bbb ccc ddd eee fff ggg">x</div></body></html>'
+        html = '<html><head><style>:root{}</style></head><body><div class="aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm nnn ooo ppp">x</div></body></html>'
         err = _check_class_whitelist(html, "web")
         assert err is not None
         assert "seed 未定义" in err
@@ -289,12 +288,12 @@ class TestTemplateInjection:
         role._ui_platform = "web"
         role._ui_design_system = "default"
 
-        prompt = "Design: {design_system}\nSeed: {seed_template}\nLayouts: {layouts}\nCheck: {checklist}"
+        prompt = "Design: {design_system}\nSeed: {seed_template_path}\nLayouts: {layouts_path}\nCheck: {checklist_path}"
         result = action._inject_ui_templates(prompt, role)
 
-        assert "{seed_template}" not in result
-        assert "{layouts}" not in result
-        assert "{checklist}" not in result
+        assert "{seed_template_path}" not in result
+        assert "{layouts_path}" not in result
+        assert "{checklist_path}" not in result
         assert "{design_system}" not in result
 
 

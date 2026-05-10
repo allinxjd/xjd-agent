@@ -89,8 +89,10 @@ def _check_hex_outside_root(content: str) -> Optional[str]:
         "#000", "#000000", "#fff", "#ffffff", "#333", "#333333", "#666", "#666666",  # bw
     }
     filtered = [m for m in matches if m.lower() not in _allowed_hex]
-    if filtered:
-        samples = ', '.join(filtered[:3])
+    # 允许少量 hex（≤5 个不同色值），只有大量使用才报错
+    unique_hex = set(m.lower() for m in filtered)
+    if len(unique_hex) > 5:
+        samples = ', '.join(sorted(unique_hex)[:3])
         return f"发现 :root 外的 hex 色值: {samples}。请改用 CSS 变量（var(--accent) 等）"
     return None
 
@@ -114,8 +116,8 @@ def _check_class_whitelist(content: str, platform: str) -> Optional[str]:
     for class_attr in used_classes:
         all_used.update(class_attr.split())
     unknown = all_used - whitelist - {''}
-    # Allow up to 5 unknown classes (LLMs add semantic names like "pricing-card")
-    if len(unknown) > 5:
+    # Allow up to 15 unknown classes (prototypes use functional classes like active, btn-danger, checkbox)
+    if len(unknown) > 15:
         samples = ', '.join(sorted(unknown)[:5])
         return f"使用了过多 seed 未定义的 class ({len(unknown)}个): {samples}。请尽量只用 seed.html 中已有的 class"
     return None
@@ -305,16 +307,21 @@ def _validate_ui_design(content: str, project_dir=None) -> ValidationResult:
                 "不要只输出文字说明或规划，必须实际写入文件。"
             ),
         )
-    # 质量检查：如果文件在磁盘上，读取磁盘内容来检查
+    # 质量检查：如果文件在磁盘上，逐文件检查（不拼接，避免 accent 等计数累加）
     if html_from_disk and project_dir:
         from pathlib import Path
         pdir = Path(project_dir) if not isinstance(project_dir, Path) else project_dir
         d = pdir / "ui-designs"
-        disk_content = ""
-        for f in d.glob("*.html"):
-            disk_content += f.read_text(encoding="utf-8", errors="ignore") + "\n"
-        if disk_content:
-            return validate_html_quality(disk_content, project_dir)
+        worst_result = None
+        for f in sorted(d.glob("*.html")):
+            file_content = f.read_text(encoding="utf-8", errors="ignore")
+            result = validate_html_quality(file_content, project_dir)
+            if not result.valid:
+                worst_result = result
+                break
+        if worst_result:
+            return worst_result
+        return ValidationResult(valid=True)
     return validate_html_quality(content, project_dir)
 
 

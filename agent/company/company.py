@@ -1346,6 +1346,11 @@ class Company:
                 # 阶段门控：如果前置阶段未完成，阻止后续角色执行
                 if role.name == "Developer" and not stages_done.get("UIDesign", True):
                     continue
+                # PM 门控：UIDesign 未完成时不能执行 WriteDesign
+                if role.name == "PM" and not stages_done.get("UIDesign"):
+                    _next_action = role.actions[role._state + 1].name if (role.actions and role._state + 1 < len(role.actions)) else ""
+                    if _next_action == "WriteDesign":
+                        continue
                 # 用 role 即将执行的 action name 确定阶段名（比 inbox cause_by 更准确）
                 _next_action = role.actions[role._state + 1].name if (role.actions and role._state + 1 < len(role.actions)) else ""
                 _stage_name = _STAGE_LABELS.get(_next_action, "")
@@ -1476,6 +1481,15 @@ class Company:
                         from agent.company.stage_handler import STAGE_CONFIGS, handle_validation
                         _cfg = STAGE_CONFIGS["WriteUIDesign"]
                         _proj_dir = self._extract_workspace_from_requirement(requirement)
+                        # Action 执行失败（API错误等）不计入验证次数，直接重试
+                        if result_msg.content.startswith("[错误]"):
+                            logger.warning("WriteUIDesign 执行失败（非质量问题），重试: %s", result_msg.content[:200])
+                            _retry_msg = CompanyMessage(
+                                content=f"## 上次执行出错，请重试\n{result_msg.content}\n\n请重新执行 UI 设计。",
+                                cause_by="WriteUIDesign", sent_from="Human", send_to="PM", task_id=task.task_id,
+                            )
+                            await self._env.publish(_retry_msg)
+                            break
                         _sr = handle_validation(_cfg, result_msg.content, ctx, project_dir=_proj_dir)
                         if _sr.action == "skip":
                             sm.complete("UIDesign")

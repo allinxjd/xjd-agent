@@ -124,9 +124,9 @@ class Action:
             except Exception:
                 return f"[文件未找到: {p.name}]"
 
-        prompt = prompt.replace("{seed_template}", _read(seed_path))
-        prompt = prompt.replace("{layouts}", _read(layouts_path))
-        prompt = prompt.replace("{checklist}", _read(checklist_path))
+        prompt = prompt.replace("{seed_template_path}", str(seed_path))
+        prompt = prompt.replace("{layouts_path}", str(layouts_path))
+        prompt = prompt.replace("{checklist_path}", str(checklist_path))
         prompt = prompt.replace("{design_system}", _read(ds_path))
         return prompt
 
@@ -146,7 +146,7 @@ class Action:
         if "{boss_title}" in prompt:
             prompt = prompt.replace("{boss_title}", boss_title)
         # UI 设计模板系统注入
-        if "{seed_template}" in prompt:
+        if "{seed_template_path}" in prompt:
             prompt = self._inject_ui_templates(prompt, role)
             logger.info("[Action:%s] UI模板注入后 prompt 长度=%d, platform=%s, ds=%s",
                         self.name, len(prompt),
@@ -262,9 +262,9 @@ class Action:
 
         try:
             if self.name == "WriteUIDesign":
-                logger.info("[Action:WriteUIDesign] 最终prompt长度=%d, 含seed=%s, 含layouts=%s",
-                            len(prompt), "seed.html" not in prompt and "[文件未找到" not in prompt,
-                            "layouts" in prompt[:100] or "布局库" in prompt)
+                logger.info("[Action:WriteUIDesign] 最终prompt长度=%d, seed_path=%s, layouts_path=%s",
+                            len(prompt), "seed_template_path" not in prompt,
+                            "layouts_path" not in prompt)
             result = await engine.run_turn(prompt)
             content = result.content if hasattr(result, "content") else str(result)
             if self.name == "WriteUIDesign":
@@ -404,41 +404,40 @@ WRITE_UI_DESIGN = Action(
         "# ═══════════════════════════════════════\n\n"
         "{design_system}\n\n"
         "# ═══════════════════════════════════════\n"
-        "# Seed Template（CSS Class 系统）\n"
+        "# 模板文件（用 read_file 按需读取）\n"
         "# ═══════════════════════════════════════\n\n"
-        "以下是完整的 seed template。所有 CSS class 已定义好，你只需使用这些 class。\n"
-        "**绝对不要**自己写 `<style>` 块或 inline style（除了调整间距 margin/padding）。\n\n"
-        "```html\n{seed_template}\n```\n\n"
-        "# ═══════════════════════════════════════\n"
-        "# 布局库（Layouts）\n"
-        "# ═══════════════════════════════════════\n\n"
-        "{layouts}\n\n"
-        "# ═══════════════════════════════════════\n"
-        "# 质量自检清单\n"
-        "# ═══════════════════════════════════════\n\n"
-        "{checklist}\n\n"
+        "以下文件包含 CSS class 系统和布局库，在 Step 2 时用 read_file 读取：\n"
+        "- **Seed Template**: `{seed_template_path}` — 所有 CSS class 定义\n"
+        "- **布局库**: `{layouts_path}` — 可用的布局片段\n"
+        "- **质量自检清单**: `{checklist_path}`\n\n"
+        "**绝对不要**自己写 `<style>` 块或 inline style（除了调整间距 margin/padding）。\n"
+        "**不引入外部 CDN。** 不加 Tailwind、不加 Bootstrap、不加 Google Fonts。\n\n"
         "# ═══════════════════════════════════════\n"
         "# 工作流程\n"
         "# ═══════════════════════════════════════\n\n"
-        "## Step 0 — 读取原型图（必须第一步执行）\n"
-        "用 read_file 逐个读取 prototypes/ 目录下的所有 HTML 文件。\n"
-        "记录每个原型页面的：\n"
+        "## Step 0 — 读取原型图（逐页处理，避免 context 过长）\n"
+        "用 read_file 读取 prototypes/ 目录下的第一个 HTML 文件，记录：\n"
         "- 页面名称和文件名\n"
         "- 核心布局结构（table/card/grid/list）\n"
         "- 关键功能组件（按钮、表单、批量操作栏、筛选器等）\n"
         "- 数据展示方式（表格行数、卡片列数等）\n\n"
+        "然后立即为该页面生成 UI 设计并 write_file 写入。\n"
+        "写完后再 read_file 下一个原型文件，重复此过程。\n"
+        "**逐页处理：读一个原型 → 写一个 UI 设计 → 读下一个。**\n\n"
+        "**跳过以下文件（不是页面原型）：prototype-report.html、任何超过 50KB 的文件。**\n"
         "**原型图中有多少个页面，UI 设计就必须输出多少个页面，一个不能少。**\n"
         "**原型图用 table 布局的，UI 设计必须用 table；原型图有删除按钮的，UI 设计必须有删除按钮。**\n"
         "**不允许擅自更改原型图的布局结构或删减功能组件。**\n\n"
-        "## Step 1 — 规划页面列表\n"
-        "基于 Step 0 读取的原型图，列出所有页面（数量必须与原型图一致）。\n"
-        "每个页面选择一个最接近的布局原型（从布局库中选）。\n\n"
-        "## Step 2 — 复制 seed + 注入 design tokens\n"
+        "## Step 1 — 确认页面列表\n"
+        "先用 read_file 列出 prototypes/ 目录内容，确认总共有多少个页面。\n"
+        "然后按顺序逐个处理每个页面（Step 0 的循环）。\n\n"
+        "## Step 2 — 读取 seed template + 注入 design tokens\n"
+        "用 read_file 读取 seed template 文件（路径见上方）。\n"
         "每个页面从 seed template 开始。将 `:root` 中的 6 个变量替换为\n"
         "上方 Design System 定义的色值。替换 `<title>` 和导航文字。\n\n"
-        "## Step 3 — 粘贴布局 + 填入内容\n"
-        "从布局库中复制对应的 HTML 片段，粘贴到 seed 的内容区域。\n"
-        "将所有 `[REPLACE]` 占位符替换为 PRD 中的真实内容。\n"
+        "## Step 3 — 填入内容\n"
+        "根据当前原型页面的结构，直接在 seed 的内容区域填入对应的 HTML。\n"
+        "**严格按照原型图的布局和组件结构**，不要自由发挥。\n"
         "**不要用占位文字**——如果某个位置没有真实内容，删掉那个元素。\n\n"
         "## Step 3.5 — 交互设计\n"
         "为每个页面补充交互状态和行为：\n"
@@ -468,7 +467,7 @@ WRITE_UI_DESIGN = Action(
         "## PRD 与原型上下文\n{context}"
     ),
     tools_filter=["code", "file"],
-    max_tool_rounds=25,
+    max_tool_rounds=30,
 )
 
 WRITE_DESIGN = Action(

@@ -416,6 +416,10 @@ class FeishuBridge(ChatBridge):
         if msg.source_channel == "webui":
             return
 
+        # 过滤内部重做/验证消息（不发给用户）
+        if msg.sent_from == "Human" and msg.content.startswith("## 系统提示"):
+            return
+
         role_name = msg.sent_from
         adapter = self._adapters.get(role_name)
 
