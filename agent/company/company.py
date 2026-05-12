@@ -935,6 +935,17 @@ class Company:
             return "material"
         return "default"
 
+    def _detect_ui_output_format(self, project_dir: Optional[Path]) -> str:
+        """检测项目是否配置了 openui-lang 输出格式."""
+        if project_dir and (project_dir / ".project.json").exists():
+            try:
+                import json as _json
+                meta = _json.loads((project_dir / ".project.json").read_text())
+                return meta.get("ui_output_format", "html")
+            except Exception:
+                pass
+        return "html"
+
     @staticmethod
     def _extract_project_description(project_dir: Path) -> str:
         """Extract project description from entry file docstrings or pyproject.toml."""
@@ -1145,9 +1156,11 @@ class Company:
             # 设置 UI 设计模板参数
             _ui_platform = self._detect_ui_platform(requirement, _pdir)
             _ui_ds = self._detect_ui_design_system(requirement)
+            _ui_format = self._detect_ui_output_format(_pdir)
             for _r in self._env.roles.values():
                 _r._ui_platform = _ui_platform
                 _r._ui_design_system = _ui_ds
+                _r._ui_output_format = _ui_format
             _meta_file = _pdir / ".project.json"
             if _meta_file.exists():
                 try:

@@ -135,7 +135,13 @@ class Action:
 
         if self.name == "WriteUIDesign":
             logger.info("[Action:WriteUIDesign] context长度=%d, 前200字=%s", len(context), context[:200])
-        prompt = self.prompt_template.replace("{context}", context) if self.prompt_template else context
+            # openui-lang format switch
+            if getattr(role, '_ui_output_format', 'html') == 'openui-lang':
+                prompt = WRITE_UI_DESIGN_OPENUI.prompt_template.replace("{context}", context)
+            else:
+                prompt = self.prompt_template.replace("{context}", context) if self.prompt_template else context
+        else:
+            prompt = self.prompt_template.replace("{context}", context) if self.prompt_template else context
         if "{prototype_layout}" in prompt:
             platform = getattr(role, '_ui_platform', 'web')
             if platform == "web":
@@ -152,6 +158,10 @@ class Action:
                         self.name, len(prompt),
                         getattr(role, '_ui_platform', 'UNSET'),
                         getattr(role, '_ui_design_system', 'UNSET'))
+        if "{openui_spec_path}" in prompt:
+            from pathlib import Path as _P
+            spec_path = _P(__file__).parent / "templates" / "ui" / "openui_spec.md"
+            prompt = prompt.replace("{openui_spec_path}", str(spec_path))
         if "{chat_style}" in prompt:
             locale = getattr(role, '_locale', None)
             chat_style = ""
@@ -468,6 +478,42 @@ WRITE_UI_DESIGN = Action(
     ),
     tools_filter=["code", "file"],
     max_tool_rounds=30,
+)
+
+WRITE_UI_DESIGN_OPENUI = Action(
+    name="WriteUIDesignOpenUI",
+    description="使用 openui-lang 格式生成 UI 设计（token 高效模式）",
+    prompt_template=(
+        "你的任务：基于 PRD 和原型图，使用 openui-lang 声明式语言生成 UI 设计。\n"
+        "openui-lang 比 HTML 节省 67% token，适合快速迭代。\n\n"
+        "# ═══════════════════════════════════════\n"
+        "# OpenUI-Lang 规范\n"
+        "# ═══════════════════════════════════════\n\n"
+        "用 read_file 读取规范文件：`{openui_spec_path}`\n\n"
+        "# ═══════════════════════════════════════\n"
+        "# 工作流程\n"
+        "# ═══════════════════════════════════════\n\n"
+        "## Step 1 — 读取原型图\n"
+        "用 read_file 读取 prototypes/ 目录下的所有 HTML 文件。\n"
+        "记录每个页面的核心结构和组件。\n\n"
+        "## Step 2 — 读取 openui-lang 规范\n"
+        "用 read_file 读取上方的规范文件，了解可用组件和语法。\n\n"
+        "## Step 3 — 逐页生成 openui-lang\n"
+        "为每个原型页面生成对应的 openui-lang 文件。\n"
+        "严格保留原型图的布局结构和功能组件。\n\n"
+        "## Step 4 — 输出\n"
+        "用 write_file 将每个页面写入 `ui-designs/` 目录。\n"
+        "文件扩展名用 `.openui`（如 `home.openui`, `product-detail.openui`）。\n\n"
+        "## 硬性规则\n"
+        "- 直接用 write_file 写入文件，不要确认或提问\n"
+        "- 输出纯 openui-lang 代码，不要 markdown 包裹\n"
+        "- 页面数量必须与 prototypes/ 完全一致\n"
+        "- 严禁更改原型图的布局类型或删减功能组件\n"
+        "- 使用中文文本内容\n\n"
+        "## PRD 与原型上下文\n{context}"
+    ),
+    tools_filter=["code", "file"],
+    max_tool_rounds=20,
 )
 
 WRITE_DESIGN = Action(

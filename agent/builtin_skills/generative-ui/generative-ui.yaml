@@ -1,0 +1,19 @@
+skill_id: generative-ui
+name: 生成式 UI
+description: 使用 openui-lang 声明式语言生成可交互的 UI 组件代码
+trigger: 生成UI、generative ui、openui、ui组件、界面生成、generate ui
+category: development
+steps:
+  - description: 分析用户的 UI 需求（页面类型、组件、交互）
+  - description: 确定 UI 风格和组件组合方案
+  - description: 使用 openui-lang 语法生成完整的 UI 代码
+  - description: 输出可直接渲染的 openui-lang 源码
+tags: [ui, frontend, openui, generative, design, component]
+examples:
+  - 生成一个登录表单
+  - 帮我设计一个定价页面
+  - generate a dashboard with stats cards
+  - 生成一个用户列表管理界面
+version: 1
+use_count: 0
+success_rate: 1.0
