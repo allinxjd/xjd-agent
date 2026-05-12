@@ -33,7 +33,8 @@ class TestActionDefinitions:
     def test_code_review_has_file_tools(self):
         cr = ALL_ACTIONS["CodeReview"]
         assert "file" in cr.tools_filter
-        assert cr.max_tool_rounds == 10
+        assert "terminal" in cr.tools_filter
+        assert cr.max_tool_rounds == 15
 
     def test_write_test_has_terminal(self):
         wt = ALL_ACTIONS["WriteTest"]
@@ -50,7 +51,7 @@ class TestActionDefinitions:
         assert "terminal" in vr.tools_filter
         assert "code" in vr.tools_filter
         assert "file" in vr.tools_filter
-        assert vr.max_tool_rounds == 15
+        assert vr.max_tool_rounds == 25
 
     def test_setup_env_has_tools_and_rounds(self):
         se = ALL_ACTIONS["SetupEnv"]

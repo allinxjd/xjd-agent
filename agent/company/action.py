@@ -597,7 +597,7 @@ WRITE_CODE = Action(
 
 CODE_REVIEW = Action(
     name="CodeReview",
-    description="代码审查（SOP：读代码→对照设计→质量审查→报告）",
+    description="代码审查（SOP：读代码→对照设计→UI对照→质量审查→路由验证→报告）",
     prompt_template=(
         "你是资深代码审查员。按以下 SOP 执行审查：\n\n"
         "## Step 1: 读取源码\n"
@@ -608,23 +608,48 @@ CODE_REVIEW = Action(
         "1. 技术选型是否与设计方案一致（框架、库必须完全匹配）\n"
         "2. 设计方案中的每个文件是否都已创建\n"
         "3. 核心接口/函数签名是否与设计方案匹配\n"
-        "4. 如果项目有 ui-designs/ 目录，用 read_file 读取设计稿，检查前端页面是否还原了设计图的布局和结构\n"
-        "如果代码使用了设计方案中未指定的框架，必须 REJECTED。\n"
-        "如果前端页面与 UI 设计图严重不符（布局错乱、缺少关键组件），必须 REJECTED。\n\n"
+        "如果代码使用了设计方案中未指定的框架，必须 REJECTED。\n\n"
+        "## Step 2.5: UI 设计稿强制对照（如有 ui-designs/ 目录，此步骤为必做项）\n"
+        "如果项目有 ui-designs/ 目录：\n"
+        "1. 用 read_file 读取 ui-designs/ 下的【每一个】HTML 文件\n"
+        "2. 用 read_file 读取对应的实现文件（templates/ 或 src/ 下同名模板）\n"
+        "3. 逐项对照以下清单（每项必须明确标注 PASS 或 FAIL）：\n"
+        "   - 导航栏：链接数量、链接文本、链接顺序是否与设计稿一致\n"
+        "   - 页面结构：主要 section 数量和排列顺序是否一致\n"
+        "   - 组件完整性：设计稿中的表单/卡片/列表/按钮是否都已实现\n"
+        "   - 文本内容：标题、描述文字是否与设计稿一致（允许合理缩写）\n"
+        "   - 无多余 emoji：如果设计稿中某处无 emoji 但实现中加了 emoji，标记 FAIL\n"
+        "   - 布局一致性：grid/flex 布局方式是否与设计稿匹配\n"
+        "4. 判定规则：\n"
+        "   - 任何一项属于「缺少导航项」「缺少整个 section」「布局结构错误」→ 必须 REJECTED\n"
+        "   - 仅「文本微调」「颜色细微差异」→ 可以 APPROVED 但需备注\n\n"
         "## Step 3: 代码质量审查\n"
         "检查：\n"
         "1. 安全漏洞（注入、XSS、硬编码密钥等）\n"
         "2. 逻辑正确性（边界条件、错误处理）\n"
         "3. 是否过度工程（不需要的抽象、未要求的功能）\n\n"
+        "## Step 3.5: 路由可达性验证\n"
+        "如果是 web 服务且服务正在运行：\n"
+        "- 用 terminal 执行 curl 测试每个页面路由，确认返回 200\n"
+        "- 如果有路由返回 404/500，必须 REJECTED\n"
+        "如果服务未运行或无 terminal 工具：\n"
+        "- 检查代码中所有路由是否都有对应的 handler 函数\n"
+        "- 检查蓝图/路由器是否正确注册到 app（注意 Python 包 vs 文件优先级）\n"
+        "- 如果发现路由注册缺失，必须 REJECTED\n\n"
         "## Step 4: 输出审查报告\n"
-        "简洁专业的审查报告：\n"
-        "- 总结不超过 5 行，只说关键发现\n"
-        "- 没问题就一句话带过，有问题才展开\n"
-        "- 最后一行必须是：APPROVED 或 REJECTED + 原因\n\n"
+        "格式：\n"
+        "### UI 设计稿对照结果\n"
+        "[逐项清单结果，每项标注 PASS/FAIL]\n\n"
+        "### 代码质量\n"
+        "[问题列表或「无问题」]\n\n"
+        "### 路由验证\n"
+        "[路由测试结果]\n\n"
+        "### 结论\n"
+        "最后一行必须是：APPROVED 或 REJECTED + 具体原因\n\n"
         "## 代码变更\n{context}"
     ),
-    tools_filter=["code", "file"],
-    max_tool_rounds=10,
+    tools_filter=["code", "file", "terminal"],
+    max_tool_rounds=15,
 )
 
 CODE_REVIEW_FOLLOWUP = Action(
@@ -725,16 +750,42 @@ VERIFY_RUN = Action(
         "- sleep 3 后 curl localhost:端口 验证\n"
         "- 如果启动失败，查看日志修复后重试（最多重试 3 次）\n"
         "- 如果不是 web 服务（如 CLI 工具、脚本），跳过启动，只做语法检查\n\n"
+        "## 第四点五步：全路由验证（仅 web 服务启动成功后执行）\n"
+        "如果服务已启动成功：\n"
+        "- 在项目源码中搜索所有路由定义：\n"
+        "  - Python: grep -rn '@app.route\\|@bp.route\\|@.*\\.route\\|add_url_rule' src/ *.py\n"
+        "  - Node/Express: grep -rn 'router.get\\|router.post\\|app.get\\|app.post' src/\n"
+        "- 对每个发现的 GET 路由路径，执行：\n"
+        "  curl -s -o /dev/null -w '%{http_code}' http://localhost:端口/路径\n"
+        "- GET 路由期望返回 200 或 302（重定向也算通过）\n"
+        "- POST/PUT/DELETE 路由跳过（需要 body）\n"
+        "- 如果任何 GET 路由返回 404 或 500：\n"
+        "  1. 检查蓝图/路由器是否正确注册到 app\n"
+        "  2. 检查是否有同名文件和包冲突（Python 中包优先于同名 .py 文件）\n"
+        "  3. 尝试修复后重新验证\n"
+        "- 如果修复后仍有路由返回 404/500，标记为 VERIFY_FAIL\n\n"
+        "## 第四点六步：UI 设计稿对照检查（如有 ui-designs/ 目录）\n"
+        "如果项目目录下有 ui-designs/ 目录：\n"
+        "- 用 read_file 读取每个 ui-designs/*.html 文件\n"
+        "- 用 read_file 读取对应的实现文件（templates/ 或 src/ 下同名 HTML/模板文件）\n"
+        "- 对比以下结构元素：\n"
+        "  1. 导航栏链接数量和文本是否一致\n"
+        "  2. 页面主要 section 的 id/class 是否存在\n"
+        "  3. 关键组件（表单、卡片、列表）是否都已实现\n"
+        "  4. 设计稿中无 emoji 但实现中有 emoji → 标记为不一致\n"
+        "- 输出对照报告（简洁，每个文件 1-2 行），标注「一致」或「不一致 + 原因」\n"
+        "- 此步骤不影响 VERIFY_PASS/FAIL 判定，仅作为信息提供给 Reviewer\n\n"
         "## 第五步：汇报结果\n"
         "简洁汇报，不要贴完整日志，只说结论和关键信息。\n"
+        "如果有 UI 设计稿对照报告，附在结论之前。\n"
         "最后一行必须是以下之一：\n"
-        "- VERIFY_PASS — 服务已启动，curl 验证通过\n"
+        "- VERIFY_PASS — 服务已启动，所有 GET 路由验证通过\n"
         "- VERIFY_PASS_NO_SERVER — 不是 web 服务，语法检查通过\n"
-        "- VERIFY_FAIL — 无法修复的问题，说明原因\n\n"
+        "- VERIFY_FAIL — 无法修复的问题（含路由返回 404/500），说明原因\n\n"
         "{context}"
     ),
     tools_filter=["code", "file", "terminal"],
-    max_tool_rounds=15,
+    max_tool_rounds=25,
 )
 
 DEPLOY_PLAN = Action(

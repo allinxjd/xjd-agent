@@ -42,6 +42,6 @@ def create_reviewer(locale: Optional[CompanyLocale] = None) -> CompanyRole:
         model_override=locale.get("roles.reviewer.model", None) if locale else None,
         watch_actions=["WriteDesign", "WriteCode", "VerifyRun"],
         actions=[CODE_REVIEW],
-        tools_filter=[],
+        tools_filter=["code", "file", "terminal"],
         karpathy_constraints=karpathy,
     )

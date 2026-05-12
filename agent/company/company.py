@@ -110,7 +110,7 @@ class CompanyConfig:
 
     max_rework: int = 2
     max_rounds: int = 20
-    max_minutes: int = 180
+    max_minutes: int = 240
     max_project_chars: int = 30000
     max_project_files: int = 100
     max_active_projects: int = 10
@@ -210,6 +210,7 @@ class Company:
         self._shared_memory = CompanyMemory(memory_manager)
         self._pipeline_running = False
         self._pipeline_cancel = False
+        self._pending_module_resume = False
         self._pipeline_user_msgs: list[CompanyMessage] = []
         self._task_source_channel: str = ""
         self._active_project_name: str = ""
@@ -1266,6 +1267,25 @@ class Company:
         )
         self._project_ctx = ctx
 
+        # 模块 pipeline 断点恢复：直接调用 _run_module_pipeline，跳过已完成模块
+        if getattr(self, '_pending_module_resume', False) and "Design" in stage_outputs:
+            self._pending_module_resume = False
+            modules = self._parse_modules(stage_outputs["Design"])
+            if modules:
+                logger.info("断点恢复: 启动模块 pipeline（%d 模块，已完成模块将跳过）", len(modules))
+                await self._run_module_pipeline(
+                    modules=modules,
+                    requirement=requirement,
+                    stage_outputs=stage_outputs,
+                    stages_done=stages_done,
+                    rework_counts=rework_counts,
+                    task=task,
+                    pipeline_deadline=pipeline_deadline,
+                    sm=sm,
+                )
+                if stages_done.get("Code"):
+                    self._kick_next_stage(stages_done, stage_outputs, requirement, task)
+
         for round_num in range(1, max_rounds + 1):
             sm.set_round(round_num)
             if self._pipeline_cancel:
@@ -1351,6 +1371,9 @@ class Company:
                     _next_action = role.actions[role._state + 1].name if (role.actions and role._state + 1 < len(role.actions)) else ""
                     if _next_action == "WriteDesign":
                         continue
+                # DevOps 门控：Test 未完成时不能执行 Deploy
+                if role.name == "DevOps" and not stages_done.get("Test"):
+                    continue
                 # 用 role 即将执行的 action name 确定阶段名（比 inbox cause_by 更准确）
                 _next_action = role.actions[role._state + 1].name if (role.actions and role._state + 1 < len(role.actions)) else ""
                 _stage_name = _STAGE_LABELS.get(_next_action, "")
@@ -1581,8 +1604,9 @@ class Company:
                                 pipeline_deadline=pipeline_deadline,
                                 sm=sm,
                             )
-                            # 模块 pipeline 完成后，主动触发 Test/Deploy
-                            self._kick_next_stage(stages_done, stage_outputs, requirement, task)
+                            # 模块 pipeline 完成后才触发 Test/Deploy；超时返回时 Code 未标记完成
+                            if stages_done.get("Code"):
+                                self._kick_next_stage(stages_done, stage_outputs, requirement, task)
                         else:
                             logger.info("Design 未包含模块拆分，使用传统单体 pipeline")
                     elif result_msg.cause_by == "SetupEnv":
@@ -1791,6 +1815,11 @@ class Company:
                         or (result_msg.cause_by == "ExecuteDeploy" and stages_done.get("Deploy"))
                     )
                     rework_target = self._check_rework(role.name, result_msg.content, rework_round=rework_counts.get(role.name, 0)) if not stage_just_completed else None
+                    # Test 失败但 _check_rework 返回 None（非 critical 降级）→ 强制通过
+                    if role.name == "QA" and result_msg.cause_by == "RunTest" and not stages_done.get("Test") and not rework_target:
+                        logger.info("QA 测试未通过但非 critical，强制通过 Test 阶段")
+                        sm.complete("Test")
+                        stage_just_completed = True
                     role_rework = rework_counts.get(role.name, 0)
                     if rework_target and role_rework < max_rework:
                         # --- StuckDetector: 检测连续相似反馈 ---
@@ -1843,9 +1872,13 @@ class Company:
                             await self._env.publish(fix_msg)
                             self._store.save_message(fix_msg)
 
-                        sm.reset("Verify")
-                        sm.reset("Review")
-                        sm.reset("Test")
+                        # QA 返工只重跑 Test；Reviewer 返工重跑 Verify+Review+Test
+                        if role.name == "QA":
+                            sm.reset("Test")
+                        else:
+                            sm.reset("Verify")
+                            sm.reset("Review")
+                            sm.reset("Test")
 
                         # 返工后用 followup review 替代全量审查
                         reviewer_role = self._env.roles.get("Reviewer")
@@ -2048,29 +2081,22 @@ class Company:
 
         interrupted = self._detect_interrupted_projects()
         if interrupted:
-            # 设置最近中断项目为当前活跃项目，防止 PM 丢失上下文
-            first_proj_name, first_proj_dir, _, _ = interrupted[0]
+            first_proj_name, first_proj_dir, done, pending = interrupted[0]
             self._active_project_name = first_proj_name
             self._switched_project_dir = first_proj_dir
-            for proj_name, proj_dir, done, pending in interrupted:
-                done_str = "/".join(done) if done else "无"
-                pending_str = "/".join(pending)
-                notify = CompanyMessage(
-                    content=(
-                        f"正在自动恢复「{proj_name}」项目，"
-                        f"跳过已完成的 {done_str}，继续执行 {pending_str}。"
-                    ),
-                    cause_by="ChatReply",
-                    sent_from="PM",
-                )
-                await self._env.publish(notify)
-            # 自动触发断点恢复，无需用户确认
-            resume_msg = CompanyMessage(
-                content="继续",
-                cause_by="HumanDirective",
-                sent_from="WebUI-User",
+            done_str = "/".join(done) if done else "无"
+            pending_str = "/".join(pending)
+            notify = CompanyMessage(
+                content=(
+                    f"正在自动恢复「{first_proj_name}」项目，"
+                    f"跳过已完成的 {done_str}，继续执行 {pending_str}。"
+                ),
+                cause_by="ChatReply",
+                sent_from="PM",
             )
-            await self._env.publish(resume_msg)
+            await self._env.publish(notify)
+            logger.info("自动恢复: 直接启动 pipeline，项目=%s，pending=%s", first_proj_name, pending_str)
+            asyncio.create_task(self._auto_resume_pipeline(first_proj_dir))
 
         try:
             while not self._standby_stop.is_set():
@@ -2211,6 +2237,43 @@ class Company:
             display_name = name_parts[1] if len(name_parts) > 1 else d.name
             results.append((display_name, d, done, pending))
         return results[:3]
+
+    async def _auto_resume_pipeline(self, project_dir: Path) -> None:
+        """Gateway 重启后直接恢复 pipeline，不经过消息路由."""
+        import asyncio
+        import json as _arj
+        from agent.company.local_env import detect_local_env, format_env_for_context
+
+        try:
+            meta = _arj.loads((project_dir / ".project.json").read_text())
+        except Exception as e:
+            logger.error("自动恢复: 读取 .project.json 失败: %s", e)
+            return
+
+        original_req = meta.get("requirement", "")
+        _resume_cmds = ["继续", "接着", "恢复", "断点", "推进", "开发"]
+        if not original_req or len(original_req) < 20 or any(k in original_req for k in _resume_cmds):
+            _desc = self._extract_project_description(project_dir)
+            if _desc:
+                original_req = _desc
+
+        env_context = format_env_for_context(detect_local_env())
+        existing_code = self._collect_project_files(
+            project_dir,
+            max_chars=self._config.max_project_chars,
+            max_files=self._config.max_project_files,
+        )
+        enriched = (
+            f"## 项目工作目录\n{project_dir}\n"
+            f"这是一个已有项目，断点恢复模式。\n\n"
+            f"{self._extract_tech_stack(project_dir)}\n"
+            f"## 现有代码\n{existing_code}\n\n"
+            f"{env_context}\n\n"
+            f"## 用户需求\n{original_req}"
+        )
+        self._pipeline_running = True
+        self._env._pipeline_user_queue = []
+        asyncio.create_task(self._run_pipeline_task(enriched, project_dir))
 
     def _find_latest_project_dir(self) -> Optional[Path]:
         """找到最近的项目工作目录。如果用户手动切换了项目，优先返回切换目标。"""
@@ -3266,6 +3329,15 @@ class Company:
                 role = self._env.roles.get(role_name)
                 if not role:
                     continue
+                # 模块 pipeline 恢复：Design 已完成但 Code 未完成且有模块级 key
+                if stage_key == "Code" and stages_done.get("Design") and "Design" in stage_outputs:
+                    _has_module_keys = any(
+                        k.startswith("Code_") for k, v in stages_done.items() if v
+                    )
+                    if _has_module_keys:
+                        self._pending_module_resume = True
+                        logger.info("断点恢复: 标记模块 pipeline 待恢复（已完成模块将跳过）")
+                        return True
                 kick_content = f"## 继续执行 {stage_key} 阶段\n"
                 if "Design" in stage_outputs:
                     kick_content += stage_outputs["Design"][:1500]
@@ -3287,17 +3359,26 @@ class Company:
                         _tech = self._extract_tech_stack(Path(pdir_match.group(1)))
                         if _tech:
                             kick_content += f"\n{_tech}\n"
-                    # Code/Verify 阶段注入 UI 设计图参考
-                    if stage_key in ("Code", "Verify"):
+                    # Code/Verify/Review 阶段注入 UI 设计图参考
+                    if stage_key in ("Code", "Verify", "Review"):
                         _ui_dir = Path(pdir_match.group(1)) / "ui-designs"
                         if _ui_dir.is_dir():
                             _ui_files = sorted(_ui_dir.glob("*.html"))
                             if _ui_files:
-                                kick_content += (
-                                    f"\n## UI 设计图参考（前端必须严格还原）\n"
-                                    f"ui-designs/ 目录下有 {len(_ui_files)} 个设计稿，"
-                                    f"用 read_file 读取后严格按设计稿实现。\n"
-                                )
+                                if stage_key == "Review":
+                                    kick_content += (
+                                        f"\n## UI 设计图参考（审查时必须逐文件对照）\n"
+                                        f"ui-designs/ 目录下有 {len(_ui_files)} 个设计稿：\n"
+                                        + "\n".join(f"- {f.name}" for f in _ui_files) + "\n"
+                                        f"你必须用 read_file 读取每个设计稿和对应实现文件，逐项对照。\n"
+                                        f"缺少导航项、缺少 section、布局结构不匹配 → 必须 REJECTED。\n"
+                                    )
+                                else:
+                                    kick_content += (
+                                        f"\n## UI 设计图参考（前端必须严格还原）\n"
+                                        f"ui-designs/ 目录下有 {len(_ui_files)} 个设计稿，"
+                                        f"用 read_file 读取后严格按设计稿实现。\n"
+                                    )
                     # UIDesign 阶段注入已有原型图页面列表
                     if stage_key == "UIDesign" and stages_done.get("Prototype"):
                         _proto_dir = Path(pdir_match.group(1)) / "prototypes"
@@ -3374,13 +3455,12 @@ class Company:
             if not self._is_test_passed(content):
                 fail_indicators = ["失败", "FAIL", "fail", "不通过", "未通过"]
                 if any(ind in content for ind in fail_indicators):
-                    if rework_round >= 2:
-                        critical = ["crash", "崩溃", "无法启动", "ImportError", "SyntaxError",
-                                    "500", "服务器错误", "TypeError", "NameError"]
-                        if not any(c.lower() in content.lower() for c in critical):
-                            logger.info("QA 第%d轮反馈非 critical，降级为建议，不触发返工", rework_round + 1)
-                            return None
-                    return rework_target
+                    critical = ["crash", "崩溃", "无法启动", "ImportError", "SyntaxError",
+                                "500", "服务器错误", "TypeError", "NameError"]
+                    if any(c.lower() in content.lower() for c in critical) and rework_round < 1:
+                        return rework_target
+                    logger.info("QA 测试失败但非 critical 或已返工过，不再触发返工")
+                    return None
         return None
 
     def _is_feedback_similar(self, prev: str, curr: str, threshold: float = 0.6) -> bool:
@@ -3478,7 +3558,11 @@ class Company:
 
             if _time.monotonic() > pipeline_deadline:
                 logger.warning("模块 pipeline 超时，已完成 %d/%d 模块", i, len(modules))
-                break
+                # 持久化当前进度后退出，不标记主阶段为完成
+                _mod_proj_dir = self._extract_workspace_from_requirement(requirement)
+                if _mod_proj_dir:
+                    self._persist_pipeline_state(_mod_proj_dir, stages_done, stage_outputs)
+                return  # 直接返回，不标记 Code/Verify/Review 完成
 
             progress_msg = CompanyMessage(
                 content=f"开始开发模块 {i+1}/{len(modules)}: {mod_name} — {mod_desc}",
@@ -3860,7 +3944,8 @@ class Company:
         try:
             meta = json.loads(meta_file.read_text())
             meta["status"] = status
-            meta["completed_at"] = datetime.now().isoformat()
+            if status != "in_progress":
+                meta["completed_at"] = datetime.now().isoformat()
             stages_done = getattr(self, '_last_stages_done', None)
             if stages_done:
                 meta["stages_done"] = stages_done

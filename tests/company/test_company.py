@@ -153,7 +153,12 @@ class TestCheckRework:
         assert self.c._check_rework("Reviewer", "打回重做") == "Developer"
 
     def test_qa_fail(self):
-        assert self.c._check_rework("QA", "3 个测试失败") == "Developer"
+        # Non-critical failures no longer trigger rework (force pass instead)
+        assert self.c._check_rework("QA", "3 个测试失败") is None
+
+    def test_qa_critical_fail(self):
+        # Critical errors still trigger one rework
+        assert self.c._check_rework("QA", "ImportError: 无法启动，3 个测试失败") == "Developer"
 
     def test_qa_pass(self):
         assert self.c._check_rework("QA", "全部通过") is None
@@ -457,7 +462,8 @@ class TestPipelineConfig:
         ])
         cfg = CompanyConfig(pipeline=pc)
         c = Company(router=_FakeRouter(), config=cfg)
-        assert c._check_rework("QA", "3 个测试失败") == "Developer"
+        assert c._check_rework("QA", "3 个测试失败") is None  # non-critical → force pass
+        assert c._check_rework("QA", "ImportError: 模块缺失，测试失败") == "Developer"  # critical → rework
         assert c._check_rework("Reviewer", "REJECTED") is None
 
 
