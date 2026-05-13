@@ -89,6 +89,7 @@ class EventType(str, Enum):
     MENTION = "mention"
     TYPING = "typing"
     STATUS = "status"
+    CUSTOM = "custom"
 
 @dataclass
 class PlatformUser:

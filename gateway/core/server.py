@@ -968,6 +968,9 @@ class GatewayServer:
                 logger.info("Auto-accepting friend request")
                 # TODO: 调用平台 API 接受好友
 
+        if event.event_type == EventType.CUSTOM:
+            await self._handle_custom_event(event)
+
         # 广播事件到 WebSocket
         await self._broadcast_ws({
             "type": "event",
@@ -976,6 +979,38 @@ class GatewayServer:
             "data": event.data,
             "timestamp": time.time(),
         })
+
+    async def _handle_custom_event(self, event: PlatformEvent) -> None:
+        """处理自定义事件 (如转人工通知)."""
+        data = event.data or {}
+        if data.get("type") == "transfer_to_human":
+            notify_contact = data.get("notify_contact", "")
+            if not notify_contact:
+                logger.warning("转人工通知: 未配置 notify_contact")
+                return
+            external_userid = data.get("external_userid", "")
+            content = data.get("content", "")
+            notify_text = (
+                f"[微信客服转人工]\n"
+                f"用户: {external_userid}\n"
+                f"消息: {content}\n"
+                f"请尽快在企业微信客服工作台回复。"
+            )
+            # 通过 wechat_clawbot 发送通知到个人微信
+            clawbot = self._adapters.get("wechat_clawbot")
+            if clawbot and clawbot._running:
+                msg = OutgoingMessage(
+                    chat_id=notify_contact,
+                    content=notify_text,
+                    message_type=MessageType.TEXT,
+                )
+                try:
+                    await clawbot.send_message(msg)
+                    logger.info("转人工通知已发送到: %s", notify_contact)
+                except Exception as e:
+                    logger.error("转人工通知发送失败: %s", e)
+            else:
+                logger.warning("转人工通知: wechat_clawbot 未在线，无法发送个人微信通知")
 
     # ── WebSocket 控制面 ──────────────────────────────────────
 
