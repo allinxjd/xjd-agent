@@ -943,12 +943,14 @@ class GatewayServer:
                     logger.debug("Ecommerce image delivery failed", exc_info=True)
 
         # 调用 engine（传入 session 消息，不操作全局 messages）
+        _is_wechat_kf = (platform_name == "wechat_kf")
         result = await self._engine.run_turn(
             user_content,
             session_messages=session_msgs,
             on_tool_result=on_tool_result,
             deadline=time.time() + 300.0,
-            skip_grounding=(platform_name == "wechat_kf"),
+            skip_grounding=_is_wechat_kf,
+            skip_skill_match=_is_wechat_kf,
         )
 
         # 记录 assistant 回复到 session

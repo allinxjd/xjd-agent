@@ -10,6 +10,7 @@ API 文档: https://developer.work.weixin.qq.com/document/path/94739
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import logging
@@ -61,6 +62,10 @@ class WeChatKFAdapter(BasePlatformAdapter):
         self._crypto: Optional[WXBizMsgCrypt] = None
         # 最新的 cursor，用于拉取消息
         self._next_cursor: str = ""
+        # 防止并发 sync_msg
+        self._sync_lock: Optional[asyncio.Lock] = None
+        # 消息去重 (msgid → timestamp)
+        self._seen_msgids: dict[str, float] = {}
         # 知识库缓存
         self._knowledge: Optional[dict] = None
         self._knowledge_mtime: float = 0
@@ -173,25 +178,36 @@ class WeChatKFAdapter(BasePlatformAdapter):
     async def _sync_messages(self, token_val: str = "") -> None:
         """调用 sync_msg 接口拉取新消息."""
         import httpx
-        access_token = await self._get_token()
-        url = f"https://qyapi.weixin.qq.com/cgi-bin/kf/sync_msg?access_token={access_token}"
-        payload: dict[str, Any] = {"limit": 100}
-        if self._next_cursor:
-            payload["cursor"] = self._next_cursor
-        if token_val:
-            payload["token"] = token_val
-        if self._open_kfid:
-            payload["open_kfid"] = self._open_kfid
-        async with httpx.AsyncClient(trust_env=False) as client:
-            resp = await client.post(url, json=payload)
-            data = resp.json()
-        if data.get("errcode") != 0:
-            logger.error("sync_msg 失败: %s", data)
-            return
-        self._next_cursor = data.get("next_cursor", "")
-        msg_list = data.get("msg_list", [])
-        for msg in msg_list:
-            await self._process_kf_message(msg)
+        if self._sync_lock is None:
+            self._sync_lock = asyncio.Lock()
+        async with self._sync_lock:
+            access_token = await self._get_token()
+            url = f"https://qyapi.weixin.qq.com/cgi-bin/kf/sync_msg?access_token={access_token}"
+            payload: dict[str, Any] = {"limit": 100}
+            if self._next_cursor:
+                payload["cursor"] = self._next_cursor
+            if token_val:
+                payload["token"] = token_val
+            if self._open_kfid:
+                payload["open_kfid"] = self._open_kfid
+            async with httpx.AsyncClient(trust_env=False) as client:
+                resp = await client.post(url, json=payload)
+                data = resp.json()
+            if data.get("errcode") != 0:
+                logger.error("sync_msg 失败: %s", data)
+                return
+            self._next_cursor = data.get("next_cursor", "")
+            msg_list = data.get("msg_list", [])
+            # 清理过期的去重记录 (保留 5 分钟内的)
+            now = time.time()
+            self._seen_msgids = {k: v for k, v in self._seen_msgids.items() if now - v < 300}
+            for msg in msg_list:
+                msgid = msg.get("msgid", "")
+                if msgid and msgid in self._seen_msgids:
+                    continue
+                if msgid:
+                    self._seen_msgids[msgid] = now
+                await self._process_kf_message(msg)
 
     # ── 知识库 + 欢迎语 ──
 

@@ -350,6 +350,7 @@ class AgentEngine:
         skill_id: Optional[str] = None,
         deadline: Optional[float] = None,
         skip_grounding: bool = False,
+        skip_skill_match: bool = False,
     ) -> TurnResult:
         """执行一轮对话 (包含完整的 tool calling loop).
 
@@ -387,7 +388,7 @@ class AgentEngine:
 
         # 注入学习上下文 (记忆 + 技能匹配)
         injected = None
-        if self._learning_loop and not forced_skill:
+        if self._learning_loop and not forced_skill and not skip_skill_match:
             try:
                 injected = await self._learning_loop.inject_context(
                     user_message=user_message,
