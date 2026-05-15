@@ -135,6 +135,7 @@ async def company_run(
     """
     from agent.tools.registry import ToolRegistry
     from agent.tools.builtin import register_builtin_tools
+    from agent.tools.wechat_kf_tools import register_wechat_kf_tools
     from agent.company import Company, CompanyConfig
     from agent.company.roles import create_default_team
 
@@ -144,6 +145,7 @@ async def company_run(
 
     registry = ToolRegistry()
     register_builtin_tools(registry)
+    register_wechat_kf_tools(registry)
 
     feishu_chat_id = ""
     feishu_bots = None
@@ -193,6 +195,7 @@ async def company_standby(is_recovery: bool = False) -> str:
     import asyncio
     from agent.tools.registry import ToolRegistry
     from agent.tools.builtin import register_builtin_tools
+    from agent.tools.wechat_kf_tools import register_wechat_kf_tools
     from agent.company import Company, CompanyConfig
     from agent.company.roles import create_default_team
 
@@ -207,6 +210,7 @@ async def company_standby(is_recovery: bool = False) -> str:
 
     registry = ToolRegistry()
     register_builtin_tools(registry)
+    register_wechat_kf_tools(registry)
 
     feishu_chat_id, feishu_bots = _load_feishu_config(config)
     if not feishu_chat_id or not feishu_bots:
