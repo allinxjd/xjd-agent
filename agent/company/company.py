@@ -2336,15 +2336,6 @@ class Company:
         self._store.save_message(result_msg)
         await self._env.publish(result_msg)
 
-        import re as _re
-        url_m = _re.search(r'http://[\w.\-]+:\d+', result_msg.content)
-        if url_m:
-            try:
-                import webbrowser
-                webbrowser.open(url_m.group(0))
-            except Exception:
-                pass
-
     async def _run_quick_task(self, role_name: str, messages: list[CompanyMessage]) -> None:
         """异步执行 QuickTask，完成后清理 _pipeline_running 状态."""
         try:

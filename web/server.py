@@ -304,6 +304,9 @@ class WebServer:
         url = f"http://{host if host != '0.0.0.0' else 'localhost'}:{port}"
         logger.info("Web server started at %s", url)
 
+        import webbrowser
+        webbrowser.open(url)
+
     async def stop(self):
         """优雅关闭服务器."""
         # Drain background tasks
