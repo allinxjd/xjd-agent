@@ -142,24 +142,6 @@ PLATFORM_SCHEMAS: dict[str, dict] = {
              "help": "浏览器登录后自动获取"},
         ],
     },
-    "wechat_kf": {
-        "name": "微信客服",
-        "name_en": "WeChat Customer Service",
-        "icon": "wechat",
-        "fields": [
-            {"key": "corp_id", "label": "Corp ID", "label_zh": "企业 ID", "type": "text", "required": True},
-            {"key": "kf_secret", "label": "KF Secret", "label_zh": "客服 Secret", "type": "password", "required": True,
-             "help": "企业微信后台「微信客服」应用的 Secret"},
-            {"key": "open_kfid", "label": "Open KFID", "label_zh": "客服账号 ID", "type": "text", "required": True,
-             "help": "创建客服账号后获取的 open_kfid"},
-            {"key": "token", "label": "Callback Token", "label_zh": "回调 Token", "type": "text", "required": True},
-            {"key": "encoding_aes_key", "label": "EncodingAESKey", "label_zh": "加密密钥", "type": "password", "required": True},
-            {"key": "webhook_port", "label": "Webhook Port", "label_zh": "回调端口", "type": "text", "required": False,
-             "help": "默认 9003"},
-            {"key": "notify_contact", "label": "Notify Contact", "label_zh": "转人工通知联系人", "type": "text", "required": False,
-             "help": "转人工时通知的个人微信联系人 ID（需 wechat_clawbot 在线）"},
-        ],
-    },
 }
 
 # 适配器类映射 (平台名 → 模块路径, 类名)

@@ -10,10 +10,12 @@ API 文档: https://developer.work.weixin.qq.com/document/path/94739
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import time
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any, Optional
 
 from gateway.platforms.base import (
@@ -42,7 +44,7 @@ class WeChatKFAdapter(BasePlatformAdapter):
     """微信客服适配器 — 处理小程序客服消息，支持智能回复 + 转人工通知."""
 
     def __init__(self, config: dict[str, Any]) -> None:
-        super().__init__(PlatformType.WECHAT, config)
+        super().__init__(PlatformType.WECHAT_KF, config)
         self._corp_id = config.get("corp_id", "")
         self._corp_secret = config.get("corp_secret", "")
         self._kf_secret = config.get("kf_secret", "")
@@ -59,6 +61,9 @@ class WeChatKFAdapter(BasePlatformAdapter):
         self._crypto: Optional[WXBizMsgCrypt] = None
         # 最新的 cursor，用于拉取消息
         self._next_cursor: str = ""
+        # 知识库缓存
+        self._knowledge: Optional[dict] = None
+        self._knowledge_mtime: float = 0
 
     @property
     def name(self) -> str:
@@ -81,7 +86,7 @@ class WeChatKFAdapter(BasePlatformAdapter):
             return self._access_token
         import httpx
         secret = self._kf_secret or self._corp_secret
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(trust_env=False) as client:
             resp = await client.get(
                 "https://qyapi.weixin.qq.com/cgi-bin/gettoken",
                 params={"corpid": self._corp_id, "corpsecret": secret},
@@ -177,7 +182,7 @@ class WeChatKFAdapter(BasePlatformAdapter):
             payload["token"] = token_val
         if self._open_kfid:
             payload["open_kfid"] = self._open_kfid
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(trust_env=False) as client:
             resp = await client.post(url, json=payload)
             data = resp.json()
         if data.get("errcode") != 0:
@@ -187,6 +192,45 @@ class WeChatKFAdapter(BasePlatformAdapter):
         msg_list = data.get("msg_list", [])
         for msg in msg_list:
             await self._process_kf_message(msg)
+
+    # ── 知识库 + 欢迎语 ──
+
+    def _get_knowledge_path(self) -> Path:
+        """知识库文件路径."""
+        return Path(__file__).parent.parent.parent / "agent" / "builtin_skills" / "wechat-kf" / "cs_knowledge.json"
+
+    def _load_knowledge(self) -> dict:
+        """加载知识库（带文件修改时间缓存）."""
+        kb_path = self._get_knowledge_path()
+        if not kb_path.exists():
+            return {}
+        try:
+            mtime = kb_path.stat().st_mtime
+            if self._knowledge and mtime == self._knowledge_mtime:
+                return self._knowledge
+            self._knowledge = json.loads(kb_path.read_text(encoding="utf-8"))
+            self._knowledge_mtime = mtime
+            return self._knowledge
+        except Exception as e:
+            logger.warning("加载知识库失败: %s", e)
+            return self._knowledge or {}
+
+    def _is_business_hours(self) -> bool:
+        """判断当前是否在工作时间内."""
+        kb = self._load_knowledge()
+        hours = kb.get("business_hours", {})
+        start = hours.get("start", 9)
+        end = hours.get("end", 22)
+        now = datetime.datetime.now()
+        return start <= now.hour < end
+
+    def _get_greeting(self) -> str:
+        """获取欢迎语（区分工作时间/非工作时间）."""
+        kb = self._load_knowledge()
+        templates = kb.get("templates", {})
+        if self._is_business_hours():
+            return templates.get("greeting", "您好！请问有什么可以帮您？")
+        return templates.get("outside_hours", "当前非工作时间，您的消息我们已收到，工作时间会尽快回复。")
 
     async def _process_kf_message(self, msg: dict) -> None:
         """处理单条客服消息."""
@@ -207,7 +251,9 @@ class WeChatKFAdapter(BasePlatformAdapter):
         elif msgtype == "event":
             event_type = msg.get("event", {}).get("event_type", "")
             if event_type == "enter_session":
-                content = "[用户进入会话]"
+                greeting = self._get_greeting()
+                await self._send_kf_text(external_userid, open_kfid, greeting)
+                return
             else:
                 return
         else:
@@ -226,11 +272,11 @@ class WeChatKFAdapter(BasePlatformAdapter):
         chat = PlatformChat(
             chat_id=f"{open_kfid}:{external_userid}",
             chat_type=ChatType.PRIVATE,
-            platform=PlatformType.WECHAT,
+            platform=PlatformType.WECHAT_KF,
         )
         platform_msg = PlatformMessage(
             message_id=msg.get("msgid", ""),
-            platform=PlatformType.WECHAT,
+            platform=PlatformType.WECHAT_KF,
             chat=chat,
             sender=sender,
             message_type=msg_type,
@@ -242,22 +288,24 @@ class WeChatKFAdapter(BasePlatformAdapter):
 
     def _should_transfer(self, content: str) -> bool:
         """检测是否包含转人工关键词."""
+        kb = self._load_knowledge()
+        keywords = kb.get("transfer_keywords", self._transfer_keywords)
         content_lower = content.lower()
-        return any(kw in content_lower for kw in self._transfer_keywords)
+        return any(kw in content_lower for kw in keywords)
 
     async def _handle_transfer(
         self, external_userid: str, open_kfid: str, content: str
     ) -> None:
         """转人工：回复用户 + 通知人工客服."""
-        # 回复用户
-        await self._send_kf_text(
-            external_userid, open_kfid,
-            "好的，正在为您转接人工客服，请稍候。工作时间内会尽快回复您。"
+        kb = self._load_knowledge()
+        transfer_msg = kb.get("templates", {}).get(
+            "transfer", "好的，正在为您转接人工客服，请稍候。工作时间内会尽快回复您。"
         )
+        await self._send_kf_text(external_userid, open_kfid, transfer_msg)
         # 通知人工（通过 gateway 事件，由 wechat_clawbot 发送到个人微信）
         event = PlatformEvent(
             event_type=EventType.CUSTOM,
-            platform=PlatformType.WECHAT,
+            platform=PlatformType.WECHAT_KF,
             data={
                 "type": "transfer_to_human",
                 "external_userid": external_userid,
@@ -298,7 +346,7 @@ class WeChatKFAdapter(BasePlatformAdapter):
             "msgtype": "text",
             "text": {"content": content},
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(trust_env=False) as client:
             resp = await client.post(url, json=payload)
             data = resp.json()
         if data.get("errcode") != 0:
@@ -319,7 +367,7 @@ class WeChatKFAdapter(BasePlatformAdapter):
             "msgtype": "image",
             "image": {"media_id": media_id},
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(trust_env=False) as client:
             resp = await client.post(url, json=payload)
             data = resp.json()
         if data.get("errcode") != 0:

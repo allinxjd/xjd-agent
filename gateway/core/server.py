@@ -885,6 +885,12 @@ class GatewayServer:
         platform_ctx = f"[来源: {platform_name} | 会话类型: {chat_type} | 发送者: {sender_name}]"
         user_content = f"{platform_ctx}\n{user_text_with_file}"
 
+        # 微信客服模式：注入客服 system prompt + FAQ 上下文
+        if platform_name == "wechat_kf":
+            kf_context = self._get_wechat_kf_context(message.content)
+            if kf_context:
+                user_content = f"{kf_context}\n\n{user_content}"
+
         # 记录完整用户消息到 session（含文件路径注入）
         session.add_message("user", user_content)
 
@@ -953,6 +959,44 @@ class GatewayServer:
         await self._session_manager._persist_session(session)
 
         return result.content
+
+    # ── 微信客服上下文注入 ──
+
+    def _get_wechat_kf_context(self, user_message: str) -> str:
+        """为微信客服消息构建 system prompt + FAQ 上下文."""
+        from pathlib import Path
+        kb_path = Path(__file__).parent.parent / "platforms" / ".." / ".." / "agent" / "builtin_skills" / "wechat-kf" / "cs_knowledge.json"
+        kb_path = kb_path.resolve()
+        if not kb_path.exists():
+            return ""
+        try:
+            mtime = kb_path.stat().st_mtime
+            cache = getattr(self, "_wechat_kf_kb_cache", None)
+            if cache and cache[0] == mtime:
+                kb = cache[1]
+            else:
+                kb = json.loads(kb_path.read_text(encoding="utf-8"))
+                self._wechat_kf_kb_cache = (mtime, kb)
+        except Exception:
+            return ""
+
+        parts = []
+        system_prompt = kb.get("system_prompt", "")
+        if system_prompt:
+            parts.append(f"[客服指令]\n{system_prompt}")
+
+        # 简单关键词匹配 FAQ
+        faq_list = kb.get("faq", [])
+        matched = []
+        msg_lower = user_message.lower()
+        for item in faq_list:
+            q = item.get("q", "")
+            if q and q in msg_lower:
+                matched.append(f"Q: {q}\nA: {item.get('a', '')}")
+        if matched:
+            parts.append("[参考知识库]\n" + "\n---\n".join(matched))
+
+        return "\n\n".join(parts)
 
     async def _handle_platform_event(self, event: PlatformEvent) -> None:
         """处理平台事件 (好友请求、群变更等)."""

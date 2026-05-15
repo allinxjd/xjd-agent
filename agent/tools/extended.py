@@ -30,6 +30,7 @@ _SUB_MODULES = [
     ("agent.tools.canvas_tools", "register_canvas_tools"),
     ("agent.tools.ecommerce_tools", "register_ecommerce_tools"),
     ("agent.tools.ecommerce_ops_tools", "register_ecommerce_ops_tools"),
+    ("agent.tools.wechat_kf_tools", "register_wechat_kf_tools"),
     ("agent.tools.misc_tools", "register_misc_tools"),
 ]
 
