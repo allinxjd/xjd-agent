@@ -136,6 +136,7 @@ class WeChatKFAdapter(BasePlatformAdapter):
         self._seen_callbacks: dict[str, float] = {}
         self._rate_limited_users: dict[str, float] = {}
         self._transfer_sessions: dict[str, dict] = {}
+        self._boot_time: float = time.time()
         self._knowledge: Optional[dict] = None
         self._knowledge_mtime: float = 0
         self._last_send_time: dict[str, float] = {}
@@ -288,6 +289,10 @@ class WeChatKFAdapter(BasePlatformAdapter):
             for msg in msg_list:
                 msgid = msg.get("msgid", "")
                 if msgid and msgid in self._seen_msgids:
+                    continue
+                # Skip messages sent before this boot (avoid replaying old messages)
+                send_time = msg.get("send_time", 0)
+                if send_time and send_time < self._boot_time - 5:
                     continue
                 if msgid:
                     self._seen_msgids[msgid] = now
@@ -519,14 +524,14 @@ class WeChatKFAdapter(BasePlatformAdapter):
             asyncio.ensure_future(self._extract_faq_from_session(session))
 
     async def _resume_bot_service(self, external_userid: str, open_kfid: str) -> bool:
-        """将会话从人工/待接入状态转回 bot 接待."""
+        """将会话从人工/待接入状态转回 bot 接待（状态0=未处理，bot可重新接管）."""
         import httpx
         token = await self._get_token()
         url = f"https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/trans?access_token={token}"
         payload = {
             "open_kfid": open_kfid,
             "external_userid": external_userid,
-            "service_state": 3,
+            "service_state": 0,
         }
         try:
             async with httpx.AsyncClient(trust_env=False) as client:
@@ -670,6 +675,17 @@ class WeChatKFAdapter(BasePlatformAdapter):
             if errcode == 95001:
                 self._rate_limited_users[external_userid] = time.time() + 30
                 logger.warning("微信客服发送限流(95001), user=%s, cooldown 30s", external_userid)
+            elif errcode == 95018:
+                # 会话不在 bot 接待状态，尝试恢复并重试一次
+                logger.warning("微信客服95018(session invalid), 尝试恢复bot接待: user=%s", external_userid)
+                resumed = await self._resume_bot_service(external_userid, open_kfid)
+                if resumed:
+                    async with httpx.AsyncClient(trust_env=False) as client2:
+                        resp2 = await client2.post(url, json=payload)
+                        data2 = resp2.json()
+                    if data2.get("errcode") == 0:
+                        return data2.get("msgid", "")
+                    logger.error("恢复后重试仍失败: %s", data2)
             else:
                 logger.error("微信客服发送消息失败: %s", data)
             return ""
