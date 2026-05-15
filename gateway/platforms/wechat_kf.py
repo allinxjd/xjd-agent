@@ -420,12 +420,14 @@ class WeChatKFAdapter(BasePlatformAdapter):
     async def _handle_transfer(
         self, external_userid: str, open_kfid: str, content: str
     ) -> None:
-        """转人工：回复用户 + 通知人工客服 + 开始记录学习."""
+        """转人工：调用微信API转接 + 回复用户 + 开始记录学习."""
         kb = self._load_knowledge()
         transfer_msg = kb.get("templates", {}).get(
             "transfer", "好的，正在为您转接人工客服，请稍候。工作时间内会尽快回复您。"
         )
         await self._send_kf_text(external_userid, open_kfid, transfer_msg)
+        # 调用微信客服 API 转接到人工客服池 (service_state: 2=待接入)
+        await self._transfer_service_state(external_userid, open_kfid)
         # 初始化转人工学习会话
         self._transfer_sessions[external_userid] = {
             "started_at": time.time(),
@@ -448,6 +450,29 @@ class WeChatKFAdapter(BasePlatformAdapter):
         )
         await self._dispatch_event(event)
         logger.info("转人工: user=%s, content=%s", external_userid, content)
+
+    async def _transfer_service_state(self, external_userid: str, open_kfid: str) -> bool:
+        """调用微信客服 API 将会话转到人工客服池."""
+        import httpx
+        token = await self._get_token()
+        url = f"https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/trans?access_token={token}"
+        payload = {
+            "open_kfid": open_kfid,
+            "external_userid": external_userid,
+            "service_state": 2,
+        }
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                resp = await client.post(url, json=payload)
+                data = resp.json()
+            if data.get("errcode") != 0:
+                logger.error("转人工API失败: %s", data)
+                return False
+            logger.info("转人工API成功: user=%s", external_userid)
+            return True
+        except Exception as e:
+            logger.error("转人工API异常: %s", e)
+            return False
 
     # ── 学习系统 ──
 
