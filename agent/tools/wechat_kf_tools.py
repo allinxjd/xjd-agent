@@ -22,11 +22,11 @@ def _secrets_to_config() -> tuple[dict[str, Any], str]:
     store = get_secrets_store()
     secrets = store.get_all("wechat-kf")
 
-    corp_id = secrets.get("WECHAT_KF_CORP_ID", "")
-    kf_secret = secrets.get("WECHAT_KF_SECRET", "")
-    open_kfid = secrets.get("WECHAT_KF_OPEN_KFID", "")
-    token = secrets.get("WECHAT_KF_TOKEN", "")
-    encoding_aes_key = secrets.get("WECHAT_KF_ENCODING_AES_KEY", "")
+    corp_id = secrets.get("WECHAT_KF_CORP_ID", "").strip()
+    kf_secret = secrets.get("WECHAT_KF_SECRET", "").strip()
+    open_kfid = secrets.get("WECHAT_KF_OPEN_KFID", "").strip()
+    token = secrets.get("WECHAT_KF_TOKEN", "").strip()
+    encoding_aes_key = secrets.get("WECHAT_KF_ENCODING_AES_KEY", "").strip()
 
     missing = []
     if not corp_id:
