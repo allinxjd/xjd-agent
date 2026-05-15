@@ -996,7 +996,8 @@ class GatewayServer:
             deadline=time.time() + 300.0,
             skip_grounding=_is_wechat_kf,
             skip_skill_match=_is_wechat_kf,
-            max_rounds=2 if _is_wechat_kf else None,
+            max_rounds=1 if _is_wechat_kf else None,
+            disable_tools=_is_wechat_kf,
         )
 
         # 记录 assistant 回复到 session

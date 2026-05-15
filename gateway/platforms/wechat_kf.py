@@ -134,6 +134,7 @@ class WeChatKFAdapter(BasePlatformAdapter):
         self._sync_lock: Optional[asyncio.Lock] = None
         self._seen_msgids: dict[str, float] = {}
         self._seen_callbacks: dict[str, float] = {}
+        self._rate_limited_users: dict[str, float] = {}
         self._knowledge: Optional[dict] = None
         self._knowledge_mtime: float = 0
         self._last_send_time: dict[str, float] = {}
@@ -442,9 +443,14 @@ class WeChatKFAdapter(BasePlatformAdapter):
     ) -> str:
         """通过微信客服 API 发送文本消息."""
         import httpx
-        # 限流：同一用户两次发送间隔至少 250ms
-        key = f"{open_kfid}:{external_userid}"
+        # Skip if user is in rate-limit cooldown (30s)
         now = time.time()
+        cooldown_until = self._rate_limited_users.get(external_userid, 0)
+        if now < cooldown_until:
+            logger.debug("Skipping send to rate-limited user %s", external_userid)
+            return ""
+        # Throttle: min 250ms between sends to same user
+        key = f"{open_kfid}:{external_userid}"
         last = self._last_send_time.get(key, 0)
         wait = self._send_interval - (now - last)
         if wait > 0:
@@ -464,7 +470,8 @@ class WeChatKFAdapter(BasePlatformAdapter):
         if data.get("errcode") != 0:
             errcode = data.get("errcode")
             if errcode == 95001:
-                logger.warning("微信客服发送限流(95001), user=%s", external_userid)
+                self._rate_limited_users[external_userid] = time.time() + 30
+                logger.warning("微信客服发送限流(95001), user=%s, cooldown 30s", external_userid)
             else:
                 logger.error("微信客服发送消息失败: %s", data)
             return ""

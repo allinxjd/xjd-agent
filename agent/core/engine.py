@@ -352,6 +352,7 @@ class AgentEngine:
         skip_grounding: bool = False,
         skip_skill_match: bool = False,
         max_rounds: Optional[int] = None,
+        disable_tools: bool = False,
     ) -> TurnResult:
         """执行一轮对话 (包含完整的 tool calling loop).
 
@@ -449,10 +450,14 @@ class AgentEngine:
 
         # 工具作用域: 一次性计算本轮工具列表 (局部变量, 并发安全)
         scoped_names = None
-        if not self._active_skill:
+        if disable_tools:
+            turn_tools = None
+        elif not self._active_skill:
             from agent.tools.tool_selector import select_tool_names_for_message
             scoped_names = select_tool_names_for_message(user_message)
-        turn_tools = self._resolve_scoped_tools(self._active_skill, scoped_names) or None
+            turn_tools = self._resolve_scoped_tools(self._active_skill, scoped_names) or None
+        else:
+            turn_tools = self._resolve_scoped_tools(self._active_skill, scoped_names) or None
 
         # 技能匹配时强制调用工具的轮次数 (防止模型跳过工具直接编造数据)
         # 技能有 tools 声明 → 前 N 轮都强制 tool_choice="required"
