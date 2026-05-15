@@ -375,15 +375,12 @@ class WeChatKFAdapter(BasePlatformAdapter):
             return
         # 清理超时的转人工会话 (30分钟)
         self._cleanup_transfer_sessions()
-        # 用户在转人工状态中
+        # 用户在转人工状态中 — 记录消息但不自动回复，等待人工介入或超时
         if external_userid in self._transfer_sessions:
-            if self._should_transfer(content):
-                self._transfer_sessions[external_userid]["customer_messages"].append(
-                    {"content": content, "time": time.time()}
-                )
-                return
-            else:
-                await self._end_transfer_session(external_userid)
+            self._transfer_sessions[external_userid]["customer_messages"].append(
+                {"content": content, "time": time.time()}
+            )
+            return
         # 检查是否需要转人工
         if self._should_transfer(content):
             await self._handle_transfer(external_userid, open_kfid, content)
@@ -664,6 +661,9 @@ class WeChatKFAdapter(BasePlatformAdapter):
         if not appid:
             return ""
         thumb = thumb_media_id or kb.get("business_context", {}).get("thumb_media_id", "")
+        if not thumb:
+            logger.debug("跳过小程序卡片: thumb_media_id 未配置")
+            return ""
         token = await self._get_token()
         url = f"https://qyapi.weixin.qq.com/cgi-bin/kf/send_msg?access_token={token}"
         payload: dict[str, Any] = {
