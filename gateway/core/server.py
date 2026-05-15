@@ -817,6 +817,11 @@ class GatewayServer:
                 if reply_text:
                     adapter = self._adapters.get(platform)
                     if adapter and adapter.is_running:
+                        # 微信客服：提取小程序卡片标记
+                        _kf_cards: list[dict] = []
+                        if platform.startswith("wechat_kf"):
+                            reply_text, _kf_cards = self._extract_kf_cards(reply_text, platform)
+
                         if audio_data:
                             # 语音回复 (带文本 fallback)
                             try:
@@ -836,6 +841,21 @@ class GatewayServer:
                                 ), timeout=30.0)
                             except (asyncio.TimeoutError, Exception) as e:
                                 logger.error("Adapter send_text failed: %s", e)
+
+                        # 微信客服：发送小程序卡片
+                        if _kf_cards and hasattr(adapter, '_send_kf_miniprogram'):
+                            ext_userid = message.metadata.get("external_userid", "")
+                            open_kfid = message.metadata.get("open_kfid", "")
+                            if ext_userid and open_kfid:
+                                for card in _kf_cards:
+                                    try:
+                                        await adapter._send_kf_miniprogram(
+                                            ext_userid, open_kfid,
+                                            title=card["title"],
+                                            page_path=card["page_path"],
+                                        )
+                                    except Exception as e:
+                                        logger.warning("Send miniprogram card failed: %s", e)
                         self._stats.total_messages_sent += 1
                         self._stats.platform_stats[platform]["sent"] += 1
                         self._emit_inspector({
@@ -1048,18 +1068,60 @@ class GatewayServer:
         if system_prompt:
             parts.append(f"[客服指令]\n{system_prompt}")
 
-        # 简单关键词匹配 FAQ
+        # 业务上下文注入
+        biz = kb.get("business_context", {})
+        if biz:
+            biz_lines = [f"服务: {biz.get('name', '')}", f"说明: {biz.get('description', '')}"]
+            products = biz.get("products", [])
+            if products:
+                biz_lines.append("套餐:")
+                for p in products:
+                    biz_lines.append(f"  - {p['name']}({p.get('price', '')}): {p.get('description', '')}")
+            parts.append("[业务信息]\n" + "\n".join(biz_lines))
+
+        # 模糊关键词匹配 FAQ
         faq_list = kb.get("faq", [])
         matched = []
         msg_lower = user_message.lower()
+        msg_chars = set(msg_lower)
         for item in faq_list:
             q = item.get("q", "")
-            if q and q in msg_lower:
+            if not q:
+                continue
+            if q in msg_lower or msg_lower in q:
+                matched.append(f"Q: {q}\nA: {item.get('a', '')}")
+            elif len(q) >= 2 and sum(1 for c in q if c in msg_lower) >= len(q) * 0.6:
                 matched.append(f"Q: {q}\nA: {item.get('a', '')}")
         if matched:
-            parts.append("[参考知识库]\n" + "\n---\n".join(matched))
+            parts.append("[参考知识库]\n" + "\n---\n".join(matched[:5]))
 
         return "\n\n".join(parts)
+
+    def _extract_kf_cards(self, reply_text: str, platform_name: str) -> tuple[str, list[dict]]:
+        """Extract [推荐:产品名] markers from reply, return cleaned text + card list."""
+        import re
+        pattern = re.compile(r"\[推荐[:：](.+?)\]")
+        markers = pattern.findall(reply_text)
+        if not markers:
+            return reply_text, []
+
+        # Load product catalog from KB
+        instance_id = platform_name.split(":", 1)[1] if ":" in platform_name else ""
+        cache_key = f"_wechat_kf_kb_cache_{instance_id}"
+        cache = getattr(self, cache_key, None)
+        kb = cache[1] if cache else {}
+        products = kb.get("business_context", {}).get("products", [])
+
+        cards: list[dict] = []
+        for name in markers:
+            name = name.strip()
+            for p in products:
+                if name in p.get("name", "") or p.get("name", "") in name:
+                    cards.append({"title": p["name"], "page_path": p.get("page_path", "")})
+                    break
+
+        cleaned = pattern.sub("", reply_text).strip()
+        return cleaned, cards
 
     async def _handle_platform_event(self, event: PlatformEvent) -> None:
         """处理平台事件 (好友请求、群变更等)."""

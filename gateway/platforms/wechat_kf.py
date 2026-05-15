@@ -135,6 +135,7 @@ class WeChatKFAdapter(BasePlatformAdapter):
         self._seen_msgids: dict[str, float] = {}
         self._seen_callbacks: dict[str, float] = {}
         self._rate_limited_users: dict[str, float] = {}
+        self._transfer_sessions: dict[str, dict] = {}
         self._knowledge: Optional[dict] = None
         self._knowledge_mtime: float = 0
         self._last_send_time: dict[str, float] = {}
@@ -340,6 +341,9 @@ class WeChatKFAdapter(BasePlatformAdapter):
         """处理单条客服消息."""
         origin = msg.get("origin", 0)
         # origin: 3=微信客户发送, 4=系统, 5=客服发送
+        if origin == 5:
+            await self._record_agent_reply(msg)
+            return
         if origin != 3:
             return
         msgtype = msg.get("msgtype", "")
@@ -364,6 +368,17 @@ class WeChatKFAdapter(BasePlatformAdapter):
             content = f"[{msgtype}消息]"
         if not content:
             return
+        # 清理超时的转人工会话 (30分钟)
+        self._cleanup_transfer_sessions()
+        # 用户在转人工状态中
+        if external_userid in self._transfer_sessions:
+            if self._should_transfer(content):
+                self._transfer_sessions[external_userid]["customer_messages"].append(
+                    {"content": content, "time": time.time()}
+                )
+                return
+            else:
+                await self._end_transfer_session(external_userid)
         # 检查是否需要转人工
         if self._should_transfer(content):
             await self._handle_transfer(external_userid, open_kfid, content)
@@ -387,7 +402,11 @@ class WeChatKFAdapter(BasePlatformAdapter):
             content=content.strip(),
             timestamp=msg.get("send_time", time.time()),
             raw=msg,
-            metadata={"instance_id": self._instance_id} if self._instance_id else {},
+            metadata={
+                "instance_id": self._instance_id,
+                "external_userid": external_userid,
+                "open_kfid": open_kfid,
+            },
         )
         await self._dispatch_message(platform_msg)
 
@@ -401,12 +420,19 @@ class WeChatKFAdapter(BasePlatformAdapter):
     async def _handle_transfer(
         self, external_userid: str, open_kfid: str, content: str
     ) -> None:
-        """转人工：回复用户 + 通知人工客服."""
+        """转人工：回复用户 + 通知人工客服 + 开始记录学习."""
         kb = self._load_knowledge()
         transfer_msg = kb.get("templates", {}).get(
             "transfer", "好的，正在为您转接人工客服，请稍候。工作时间内会尽快回复您。"
         )
         await self._send_kf_text(external_userid, open_kfid, transfer_msg)
+        # 初始化转人工学习会话
+        self._transfer_sessions[external_userid] = {
+            "started_at": time.time(),
+            "open_kfid": open_kfid,
+            "customer_messages": [{"content": content, "time": time.time()}],
+            "agent_replies": [],
+        }
         # 通知人工（通过 gateway 事件，由 wechat_clawbot 发送到个人微信）
         event = PlatformEvent(
             event_type=EventType.CUSTOM,
@@ -422,6 +448,114 @@ class WeChatKFAdapter(BasePlatformAdapter):
         )
         await self._dispatch_event(event)
         logger.info("转人工: user=%s, content=%s", external_userid, content)
+
+    # ── 学习系统 ──
+
+    async def _record_agent_reply(self, msg: dict) -> None:
+        """记录人工客服回复用于学习."""
+        external_userid = msg.get("external_userid", "")
+        content = msg.get("text", {}).get("content", "") if msg.get("msgtype") == "text" else ""
+        if not content or not external_userid:
+            return
+        session = self._transfer_sessions.get(external_userid)
+        if not session:
+            return
+        session["agent_replies"].append({"content": content, "time": time.time()})
+        logger.debug("Learning: recorded agent reply for user %s", external_userid)
+
+    def _cleanup_transfer_sessions(self) -> None:
+        """清理超时的转人工会话."""
+        kb = self._load_knowledge()
+        timeout = kb.get("learning", {}).get("transfer_session_timeout", 1800)
+        now = time.time()
+        expired = [uid for uid, s in self._transfer_sessions.items() if now - s["started_at"] > timeout]
+        for uid in expired:
+            session = self._transfer_sessions.pop(uid)
+            if session.get("agent_replies"):
+                asyncio.ensure_future(self._extract_faq_from_session(session))
+
+    async def _end_transfer_session(self, external_userid: str) -> None:
+        """转人工会话结束，触发 FAQ 提取."""
+        session = self._transfer_sessions.pop(external_userid, None)
+        if not session or not session.get("agent_replies"):
+            return
+        asyncio.ensure_future(self._extract_faq_from_session(session))
+
+    async def _extract_faq_from_session(self, session: dict) -> None:
+        """用 AI 从人工对话中提取 FAQ."""
+        try:
+            customer_msgs = [m["content"] for m in session.get("customer_messages", []) if m.get("content")]
+            agent_msgs = [m["content"] for m in session.get("agent_replies", []) if m.get("content")]
+            if not customer_msgs or not agent_msgs:
+                return
+            from gateway.core.server import get_gateway_server
+            gw = get_gateway_server()
+            if not gw or not hasattr(gw, '_engine') or not hasattr(gw._engine, '_router'):
+                return
+            router = gw._engine._router
+            prompt = (
+                "从以下客服对话中提取FAQ条目。只提取有通用价值的问答，跳过个人化问题。\n\n"
+                f"客户问题: {'; '.join(customer_msgs[:5])}\n"
+                f"客服回复: {'; '.join(agent_msgs[:5])}\n\n"
+                '返回JSON数组: [{"q": "问题关键词(2-6字)", "a": "简洁回答(一句话)", "category": "分类"}]\n'
+                "如果没有通用价值的问答，返回空数组 []"
+            )
+            from agent.providers.base import Message
+            result = await router.complete([Message(role="user", content=prompt)], temperature=0.3)
+            if not result or not result.content:
+                return
+            new_faqs = self._parse_faq_result(result.content)
+            if new_faqs:
+                await self._merge_faq_to_kb(new_faqs)
+                logger.info("Learning: extracted %d FAQ from transfer session", len(new_faqs))
+        except Exception as e:
+            logger.warning("FAQ extraction failed: %s", e)
+
+    def _parse_faq_result(self, text: str) -> list[dict]:
+        """解析模型返回的 FAQ JSON."""
+        import re
+        match = re.search(r'\[.*\]', text, re.DOTALL)
+        if not match:
+            return []
+        try:
+            items = json.loads(match.group())
+            valid = []
+            for item in items:
+                if isinstance(item, dict) and item.get("q") and item.get("a"):
+                    valid.append({
+                        "q": item["q"].strip(),
+                        "a": item["a"].strip(),
+                        "category": item.get("category", "learned"),
+                        "source": "auto_learned",
+                    })
+            return valid
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    async def _merge_faq_to_kb(self, new_faqs: list[dict]) -> None:
+        """将新 FAQ 合并到知识库（去重）."""
+        kb = self._load_knowledge()
+        existing_faq = kb.get("faq", [])
+        existing_questions = {item.get("q", "").lower() for item in existing_faq}
+        max_count = kb.get("learning", {}).get("max_faq_count", 200)
+        added = 0
+        for faq in new_faqs:
+            if faq["q"].lower() in existing_questions:
+                continue
+            if len(existing_faq) >= max_count:
+                break
+            existing_faq.append(faq)
+            existing_questions.add(faq["q"].lower())
+            added += 1
+        if added > 0:
+            kb["faq"] = existing_faq
+            kb_path = self._get_knowledge_path()
+            try:
+                kb_path.write_text(json.dumps(kb, ensure_ascii=False, indent=2), encoding="utf-8")
+                self._knowledge = kb
+                self._knowledge_mtime = kb_path.stat().st_mtime
+            except OSError as e:
+                logger.warning("Failed to save learned FAQ: %s", e)
 
     # ── 发送消息 ──
 
@@ -495,5 +629,38 @@ class WeChatKFAdapter(BasePlatformAdapter):
             data = resp.json()
         if data.get("errcode") != 0:
             logger.error("微信客服发送图片失败: %s", data)
+            return ""
+        return data.get("msgid", "")
+
+    async def _send_kf_miniprogram(
+        self, external_userid: str, open_kfid: str,
+        title: str, page_path: str, thumb_media_id: str = "",
+    ) -> str:
+        """通过微信客服 API 发送小程序卡片."""
+        import httpx
+        kb = self._load_knowledge()
+        appid = kb.get("business_context", {}).get("miniapp_appid", "")
+        if not appid:
+            return ""
+        thumb = thumb_media_id or kb.get("business_context", {}).get("thumb_media_id", "")
+        token = await self._get_token()
+        url = f"https://qyapi.weixin.qq.com/cgi-bin/kf/send_msg?access_token={token}"
+        payload: dict[str, Any] = {
+            "touser": external_userid,
+            "open_kfid": open_kfid,
+            "msgtype": "miniprogram",
+            "miniprogram": {
+                "appid": appid,
+                "title": title,
+                "pagepath": page_path,
+            },
+        }
+        if thumb:
+            payload["miniprogram"]["thumb_media_id"] = thumb
+        async with httpx.AsyncClient(trust_env=False) as client:
+            resp = await client.post(url, json=payload)
+            data = resp.json()
+        if data.get("errcode") != 0:
+            logger.error("微信客服发送小程序卡片失败: %s", data)
             return ""
         return data.get("msgid", "")
