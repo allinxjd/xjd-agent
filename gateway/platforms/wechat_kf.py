@@ -421,20 +421,27 @@ class WeChatKFAdapter(BasePlatformAdapter):
         self, external_userid: str, open_kfid: str, content: str
     ) -> None:
         """转人工：调用微信API转接 + 回复用户 + 开始记录学习."""
+        # 已在转人工状态，不重复处理
+        if external_userid in self._transfer_sessions:
+            self._transfer_sessions[external_userid]["customer_messages"].append(
+                {"content": content, "time": time.time()}
+            )
+            return
         kb = self._load_knowledge()
         transfer_msg = kb.get("templates", {}).get(
             "transfer", "好的，正在为您转接人工客服，请稍候。工作时间内会尽快回复您。"
         )
+        # 先发转接提示（此时 session 还在 bot 状态，可以发）
         await self._send_kf_text(external_userid, open_kfid, transfer_msg)
-        # 调用微信客服 API 转接到人工客服池 (service_state: 2=待接入)
-        await self._transfer_service_state(external_userid, open_kfid)
-        # 初始化转人工学习会话
+        # 标记为转人工状态（防止后续消息再触发转接或发送）
         self._transfer_sessions[external_userid] = {
             "started_at": time.time(),
             "open_kfid": open_kfid,
             "customer_messages": [{"content": content, "time": time.time()}],
             "agent_replies": [],
         }
+        # 调用微信客服 API 转接到人工客服池 (service_state: 2=待接入)
+        await self._transfer_service_state(external_userid, open_kfid)
         # 通知人工（通过 gateway 事件，由 wechat_clawbot 发送到个人微信）
         event = PlatformEvent(
             event_type=EventType.CUSTOM,
@@ -500,11 +507,39 @@ class WeChatKFAdapter(BasePlatformAdapter):
                 asyncio.ensure_future(self._extract_faq_from_session(session))
 
     async def _end_transfer_session(self, external_userid: str) -> None:
-        """转人工会话结束，触发 FAQ 提取."""
+        """转人工会话结束：转回 bot 接待 + 触发 FAQ 提取."""
         session = self._transfer_sessions.pop(external_userid, None)
-        if not session or not session.get("agent_replies"):
+        if not session:
             return
-        asyncio.ensure_future(self._extract_faq_from_session(session))
+        # 将会话转回 bot 接待状态 (service_state=3)
+        open_kfid = session.get("open_kfid", "")
+        if open_kfid:
+            await self._resume_bot_service(external_userid, open_kfid)
+        if session.get("agent_replies"):
+            asyncio.ensure_future(self._extract_faq_from_session(session))
+
+    async def _resume_bot_service(self, external_userid: str, open_kfid: str) -> bool:
+        """将会话从人工/待接入状态转回 bot 接待."""
+        import httpx
+        token = await self._get_token()
+        url = f"https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/trans?access_token={token}"
+        payload = {
+            "open_kfid": open_kfid,
+            "external_userid": external_userid,
+            "service_state": 3,
+        }
+        try:
+            async with httpx.AsyncClient(trust_env=False) as client:
+                resp = await client.post(url, json=payload)
+                data = resp.json()
+            if data.get("errcode") != 0:
+                logger.error("转回bot接待失败: %s", data)
+                return False
+            logger.info("转回bot接待成功: user=%s", external_userid)
+            return True
+        except Exception as e:
+            logger.error("转回bot接待异常: %s", e)
+            return False
 
     async def _extract_faq_from_session(self, session: dict) -> None:
         """用 AI 从人工对话中提取 FAQ."""
@@ -602,6 +637,10 @@ class WeChatKFAdapter(BasePlatformAdapter):
     ) -> str:
         """通过微信客服 API 发送文本消息."""
         import httpx
+        # Skip if user is in transfer state (bot can't send)
+        if external_userid in self._transfer_sessions:
+            logger.debug("Skipping send to transferred user %s", external_userid)
+            return ""
         # Skip if user is in rate-limit cooldown (30s)
         now = time.time()
         cooldown_until = self._rate_limited_users.get(external_userid, 0)
