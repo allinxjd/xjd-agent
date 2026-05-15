@@ -133,6 +133,7 @@ class WeChatKFAdapter(BasePlatformAdapter):
         self._next_cursor: str = ""
         self._sync_lock: Optional[asyncio.Lock] = None
         self._seen_msgids: dict[str, float] = {}
+        self._seen_callbacks: dict[str, float] = {}
         self._knowledge: Optional[dict] = None
         self._knowledge_mtime: float = 0
         self._last_send_time: dict[str, float] = {}
@@ -234,6 +235,13 @@ class WeChatKFAdapter(BasePlatformAdapter):
         msg_signature = request.query.get("msg_signature", "")
         timestamp = request.query.get("timestamp", "")
         nonce = request.query.get("nonce", "")
+        # Dedup: same msg_signature+timestamp = same event, skip
+        cb_key = f"{msg_signature}:{timestamp}"
+        now = time.time()
+        self._seen_callbacks = {k: v for k, v in self._seen_callbacks.items() if now - v < 60}
+        if cb_key in self._seen_callbacks:
+            return web.Response(text="success")
+        self._seen_callbacks[cb_key] = now
         try:
             body = await request.text()
         except Exception:
@@ -454,7 +462,11 @@ class WeChatKFAdapter(BasePlatformAdapter):
             resp = await client.post(url, json=payload)
             data = resp.json()
         if data.get("errcode") != 0:
-            logger.error("微信客服发送消息失败: %s", data)
+            errcode = data.get("errcode")
+            if errcode == 95001:
+                logger.warning("微信客服发送限流(95001), user=%s", external_userid)
+            else:
+                logger.error("微信客服发送消息失败: %s", data)
             return ""
         return data.get("msgid", "")
 

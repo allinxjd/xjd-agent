@@ -351,6 +351,7 @@ class AgentEngine:
         deadline: Optional[float] = None,
         skip_grounding: bool = False,
         skip_skill_match: bool = False,
+        max_rounds: Optional[int] = None,
     ) -> TurnResult:
         """执行一轮对话 (包含完整的 tool calling loop).
 
@@ -429,7 +430,7 @@ class AgentEngine:
             )
 
         # Pipeline 技能 → 提升工具轮次上限 + 设置沙箱上下文
-        effective_max_rounds = self._max_tool_rounds
+        effective_max_rounds = max_rounds if max_rounds is not None else self._max_tool_rounds
         self._active_skill = None
         if forced_skill:
             self._active_skill = forced_skill
