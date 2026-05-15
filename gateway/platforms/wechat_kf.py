@@ -49,11 +49,19 @@ _shared_refcount: int = 0
 _instance_dispatch: dict[str, "WeChatKFAdapter"] = {}
 
 
+def _resolve_adapter(instance_id: str) -> "Optional[WeChatKFAdapter]":
+    """Resolve adapter by instance_id, fallback to single instance if empty."""
+    adapter = _instance_dispatch.get(instance_id)
+    if not adapter and not instance_id and len(_instance_dispatch) == 1:
+        adapter = next(iter(_instance_dispatch.values()))
+    return adapter
+
+
 async def _shared_handle_verify(request: Any) -> Any:
     """共享路由：URL 验证 — 根据 path 分发到对应实例."""
     from aiohttp import web
     instance_id = request.match_info.get("instance_id", "")
-    adapter = _instance_dispatch.get(instance_id)
+    adapter = _resolve_adapter(instance_id)
     if not adapter:
         return web.Response(text="unknown instance", status=404)
     return await adapter._handle_verify(request)
@@ -63,7 +71,7 @@ async def _shared_handle_callback(request: Any) -> Any:
     """共享路由：回调处理 — 根据 path 分发到对应实例."""
     from aiohttp import web
     instance_id = request.match_info.get("instance_id", "")
-    adapter = _instance_dispatch.get(instance_id)
+    adapter = _resolve_adapter(instance_id)
     if not adapter:
         return web.Response(text="unknown instance", status=404)
     return await adapter._handle_callback(request)
