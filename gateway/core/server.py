@@ -1009,6 +1009,10 @@ class GatewayServer:
 
         # 调用 engine（传入 session 消息，不操作全局 messages）
         _is_wechat_kf = (platform_name == "wechat_kf" or platform_name.startswith("wechat_kf:"))
+        _original_system_prompt = None
+        if _is_wechat_kf:
+            _original_system_prompt = self._engine._system_prompt
+            self._engine._system_prompt = "你是微信客服机器人。严格按照用户消息中的[客服指令]回复，不要自我介绍为其他身份。"
         result = await self._engine.run_turn(
             user_content,
             session_messages=session_msgs,
@@ -1019,6 +1023,8 @@ class GatewayServer:
             max_rounds=1 if _is_wechat_kf else None,
             disable_tools=_is_wechat_kf,
         )
+        if _original_system_prompt is not None:
+            self._engine._system_prompt = _original_system_prompt
 
         # 记录 assistant 回复到 session
         session.add_message("assistant", result.content)
