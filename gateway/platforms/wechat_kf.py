@@ -419,10 +419,35 @@ class WeChatKFAdapter(BasePlatformAdapter):
         content_lower = content.lower()
         return any(kw in content_lower for kw in keywords)
 
+    async def _transfer_to_human_queue(
+        self, external_userid: str, open_kfid: str
+    ) -> bool:
+        """调用 service_state/trans API 将用户转入企业微信人工客服队列."""
+        import httpx
+        try:
+            token = await self._get_token()
+            url = f"https://qyapi.weixin.qq.com/cgi-bin/kf/service_state/trans?access_token={token}"
+            payload = {
+                "open_kfid": open_kfid,
+                "external_userid": external_userid,
+                "service_state": 2,
+            }
+            async with httpx.AsyncClient(trust_env=False) as client:
+                resp = await client.post(url, json=payload)
+                data = resp.json()
+            if data.get("errcode") != 0:
+                logger.warning("service_state/trans 失败: %s", data)
+                return False
+            logger.info("用户已转入人工队列: user=%s", external_userid)
+            return True
+        except Exception as e:
+            logger.error("service_state/trans 异常: %s", e)
+            return False
+
     async def _handle_transfer(
         self, external_userid: str, open_kfid: str, content: str
     ) -> None:
-        """转人工：回复用户 + 本地标记转人工状态（不调用 service_state API）."""
+        """转人工：先发提示消息，再调用 service_state/trans 将用户转入人工队列."""
         # 已在转人工状态，不重复处理
         if external_userid in self._transfer_sessions:
             self._transfer_sessions[external_userid]["customer_messages"].append(
@@ -433,9 +458,11 @@ class WeChatKFAdapter(BasePlatformAdapter):
         transfer_msg = kb.get("templates", {}).get(
             "transfer", "好的，正在为您转接人工客服，请稍候。工作时间内会尽快回复您。"
         )
-        # 先发转接提示
+        # 1. 先发转接提示（必须在 service_state 之前，否则 95018）
         await self._send_kf_text(external_userid, open_kfid, transfer_msg)
-        # 标记为转人工状态（bot 停止自动回复，等待人工介入或用户发新消息恢复）
+        # 2. 调用 service_state/trans 将用户转入企业微信人工队列
+        await self._transfer_to_human_queue(external_userid, open_kfid)
+        # 3. 标记为转人工状态（bot 停止自动回复）
         self._transfer_sessions[external_userid] = {
             "started_at": time.time(),
             "open_kfid": open_kfid,
