@@ -46,14 +46,39 @@ _shared_app: Optional[Any] = None
 _shared_runner: Optional[Any] = None
 _shared_port: int = 0
 _shared_refcount: int = 0
+_instance_dispatch: dict[str, "WeChatKFAdapter"] = {}
 
 
-async def _get_shared_server(port: int) -> Any:
-    """获取或创建共享 aiohttp Application（多实例共用）."""
+async def _shared_handle_verify(request: Any) -> Any:
+    """共享路由：URL 验证 — 根据 path 分发到对应实例."""
+    from aiohttp import web
+    instance_id = request.match_info.get("instance_id", "")
+    adapter = _instance_dispatch.get(instance_id)
+    if not adapter:
+        return web.Response(text="unknown instance", status=404)
+    return await adapter._handle_verify(request)
+
+
+async def _shared_handle_callback(request: Any) -> Any:
+    """共享路由：回调处理 — 根据 path 分发到对应实例."""
+    from aiohttp import web
+    instance_id = request.match_info.get("instance_id", "")
+    adapter = _instance_dispatch.get(instance_id)
+    if not adapter:
+        return web.Response(text="unknown instance", status=404)
+    return await adapter._handle_callback(request)
+
+
+async def _get_shared_server(port: int) -> None:
+    """获取或创建共享 HTTP server（路由在创建时一次性注册）."""
     global _shared_app, _shared_runner, _shared_port, _shared_refcount
     if _shared_app is None:
         from aiohttp import web
         _shared_app = web.Application()
+        _shared_app.router.add_get("/wechat-kf/callback", _shared_handle_verify)
+        _shared_app.router.add_post("/wechat-kf/callback", _shared_handle_callback)
+        _shared_app.router.add_get("/wechat-kf/callback/{instance_id}", _shared_handle_verify)
+        _shared_app.router.add_post("/wechat-kf/callback/{instance_id}", _shared_handle_callback)
         runner = web.AppRunner(_shared_app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", port)
@@ -62,7 +87,6 @@ async def _get_shared_server(port: int) -> Any:
         _shared_port = port
         logger.info("微信客服共享 HTTP server 已启动, port: %d", port)
     _shared_refcount += 1
-    return _shared_app
 
 
 async def _release_shared_server() -> None:
@@ -160,13 +184,10 @@ class WeChatKFAdapter(BasePlatformAdapter):
             display_name=self._instance_name or "智能客服",
             is_bot=True,
         )
-        # 使用共享 HTTP server，按 instance_id 区分回调路径
-        app = await _get_shared_server(self._webhook_port)
-        cb_path = self._callback_path
-        app.router.add_get(cb_path, self._handle_verify)
-        app.router.add_post(cb_path, self._handle_callback)
+        await _get_shared_server(self._webhook_port)
+        _instance_dispatch[self._instance_id] = self
         self._running = True
-        logger.info("微信客服适配器[%s]已启动, callback: %s", self._instance_id or "default", cb_path)
+        logger.info("微信客服适配器[%s]已启动, callback: %s", self._instance_id or "default", self._callback_path)
 
     @property
     def _callback_path(self) -> str:
@@ -176,6 +197,7 @@ class WeChatKFAdapter(BasePlatformAdapter):
 
     async def stop(self) -> None:
         self._running = False
+        _instance_dispatch.pop(self._instance_id, None)
         await _release_shared_server()
         logger.info("微信客服适配器[%s]已停止", self._instance_id or "default")
 
