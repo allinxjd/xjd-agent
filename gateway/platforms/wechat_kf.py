@@ -127,6 +127,8 @@ class WeChatKFAdapter(BasePlatformAdapter):
         self._seen_msgids: dict[str, float] = {}
         self._knowledge: Optional[dict] = None
         self._knowledge_mtime: float = 0
+        self._last_send_time: dict[str, float] = {}
+        self._send_interval: float = 0.25
 
     @property
     def instance_id(self) -> str:
@@ -424,6 +426,14 @@ class WeChatKFAdapter(BasePlatformAdapter):
     ) -> str:
         """通过微信客服 API 发送文本消息."""
         import httpx
+        # 限流：同一用户两次发送间隔至少 250ms
+        key = f"{open_kfid}:{external_userid}"
+        now = time.time()
+        last = self._last_send_time.get(key, 0)
+        wait = self._send_interval - (now - last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        self._last_send_time[key] = time.time()
         token = await self._get_token()
         url = f"https://qyapi.weixin.qq.com/cgi-bin/kf/send_msg?access_token={token}"
         payload = {

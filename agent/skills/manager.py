@@ -520,9 +520,11 @@ class SkillManager:
                             (dest / "SKILL.md").write_text(text, encoding="utf-8")
                             logger.info("Updated builtin skill %s: %s -> %s",
                                         skill.skill_id, existing.version, skill.version)
+                            self._skills[skill.skill_id] = skill
                         except OSError:
                             pass
                     if existing and skill.secrets:
+                        existing = self._skills.get(skill.skill_id, existing)
                         existing.secrets = skill.secrets
                 if skill.skill_id not in self._skills:
                     self._skills[skill.skill_id] = skill
