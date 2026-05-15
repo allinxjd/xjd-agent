@@ -842,7 +842,7 @@ QUICK_TASK = Action(
         "回复简短专业，汇报关键结果即可。\n\n"
         "{context}"
     ),
-    tools_filter=["code", "file", "terminal", "system"],
+    tools_filter=["code", "file", "terminal", "system", "wechat_kf"],
     max_tool_rounds=20,
 )
 
