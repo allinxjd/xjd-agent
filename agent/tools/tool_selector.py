@@ -80,6 +80,12 @@ _INTENT_RULES: list[tuple[set[str], list[str], set[str]]] = [
         [],
         {"send_to_contact", "list_contacts", "set_contact_nickname"},
     ),
+    # 微信客服
+    (
+        {"客服", "微信客服", "wechat_kf", "kf", "启动客服", "停止客服", "客服状态"},
+        ["wechat_kf"],
+        set(),
+    ),
 ]
 
 _ALWAYS_INCLUDE: set[str] = {

@@ -52,6 +52,9 @@ TOOLSETS: dict[str, list[str]] = {
         "ecommerce_create_ad", "ecommerce_manage_ad", "ecommerce_ad_stats",
         "ecommerce_batch_ship", "ecommerce_daily_report",
     ],
+    "wechat_kf": [
+        "wechat_kf_start", "wechat_kf_stop", "wechat_kf_status", "wechat_kf_update_kb",
+    ],
 }
 
 @dataclass
