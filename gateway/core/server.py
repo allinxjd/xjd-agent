@@ -358,6 +358,9 @@ class GatewayServer:
         except Exception as e:
             logger.warning("AI Company 自动恢复检查失败: %s", e)
 
+        # 自动启动微信客服 (如果已配置密钥)
+        asyncio.create_task(self._auto_start_wechat_kf())
+
     async def _start_adapter(self, name: str, adapter: BasePlatformAdapter, max_retries: int = 3) -> None:
         """安全启动单个适配器 (带重试)."""
         for attempt in range(1, max_retries + 1):
@@ -447,6 +450,22 @@ class GatewayServer:
         logger.error("AI Company 自动恢复失败 3 次，已关闭自动恢复")
         cfg.company_standby_enabled = False
         cfg.save()
+
+    async def _auto_start_wechat_kf(self) -> None:
+        """自动启动微信客服适配器 (如果密钥已配置)."""
+        await asyncio.sleep(2)
+        try:
+            from agent.tools.wechat_kf_tools import _secrets_to_config
+            config, err = _secrets_to_config()
+            if err:
+                return
+            result = await self.add_adapter_runtime("wechat_kf", config)
+            if result == "ok":
+                logger.info("微信客服已自动启动 (webhook port: %s)", config.get("webhook_port", 9003))
+            else:
+                logger.warning("微信客服自动启动失败: %s", result)
+        except Exception as e:
+            logger.debug("微信客服自动启动跳过: %s", e)
 
     async def stop(self) -> None:
         """停止 Gateway."""
