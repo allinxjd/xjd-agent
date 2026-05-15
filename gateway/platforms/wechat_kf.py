@@ -40,12 +40,51 @@ TRANSFER_KEYWORDS = [
     "投诉", "找经理", "找负责人",
 ]
 
+# ── 共享 HTTP Server（多实例共用端口 9003）──
+
+_shared_app: Optional[Any] = None
+_shared_runner: Optional[Any] = None
+_shared_port: int = 0
+_shared_refcount: int = 0
+
+
+async def _get_shared_server(port: int) -> Any:
+    """获取或创建共享 aiohttp Application（多实例共用）."""
+    global _shared_app, _shared_runner, _shared_port, _shared_refcount
+    if _shared_app is None:
+        from aiohttp import web
+        _shared_app = web.Application()
+        runner = web.AppRunner(_shared_app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+        _shared_runner = runner
+        _shared_port = port
+        logger.info("微信客服共享 HTTP server 已启动, port: %d", port)
+    _shared_refcount += 1
+    return _shared_app
+
+
+async def _release_shared_server() -> None:
+    """释放共享 server 引用，引用归零时关闭."""
+    global _shared_app, _shared_runner, _shared_port, _shared_refcount
+    _shared_refcount -= 1
+    if _shared_refcount <= 0 and _shared_runner:
+        await _shared_runner.cleanup()
+        _shared_app = None
+        _shared_runner = None
+        _shared_port = 0
+        _shared_refcount = 0
+        logger.info("微信客服共享 HTTP server 已关闭")
+
 
 class WeChatKFAdapter(BasePlatformAdapter):
     """微信客服适配器 — 处理小程序客服消息，支持智能回复 + 转人工通知."""
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(PlatformType.WECHAT_KF, config)
+        self._instance_id: str = config.get("instance_id", "")
+        self._instance_name: str = config.get("instance_name", "")
         self._corp_id = config.get("corp_id", "")
         self._corp_secret = config.get("corp_secret", "")
         self._kf_secret = config.get("kf_secret", "")
@@ -53,25 +92,28 @@ class WeChatKFAdapter(BasePlatformAdapter):
         self._callback_token = config.get("token", "")
         self._encoding_aes_key = config.get("encoding_aes_key", "")
         self._webhook_port = config.get("webhook_port", 9003)
-        # 转人工通知目标 (个人微信联系人 ID，通过 wechat_clawbot 发送)
         self._notify_contact = config.get("notify_contact", "")
         self._transfer_keywords = config.get("transfer_keywords", TRANSFER_KEYWORDS)
         self._access_token: str = ""
         self._token_expire_time: float = 0
         self._server = None
         self._crypto: Optional[WXBizMsgCrypt] = None
-        # 最新的 cursor，用于拉取消息
         self._next_cursor: str = ""
-        # 防止并发 sync_msg
         self._sync_lock: Optional[asyncio.Lock] = None
-        # 消息去重 (msgid → timestamp)
         self._seen_msgids: dict[str, float] = {}
-        # 知识库缓存
         self._knowledge: Optional[dict] = None
         self._knowledge_mtime: float = 0
 
     @property
+    def instance_id(self) -> str:
+        return self._instance_id
+
+    @property
     def name(self) -> str:
+        if self._instance_name:
+            return f"微信客服({self._instance_name})"
+        if self._instance_id:
+            return f"微信客服({self._instance_id})"
         return "微信客服"
 
     @property
@@ -115,27 +157,27 @@ class WeChatKFAdapter(BasePlatformAdapter):
         self._bot_user = PlatformUser(
             user_id=self._open_kfid or "kf",
             username="微信客服",
-            display_name="智能客服",
+            display_name=self._instance_name or "智能客服",
             is_bot=True,
         )
-        from aiohttp import web
-        app = web.Application()
-        app.router.add_get("/wechat-kf/callback", self._handle_verify)
-        app.router.add_post("/wechat-kf/callback", self._handle_callback)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", self._webhook_port)
-        await site.start()
-        self._server = runner
+        # 使用共享 HTTP server，按 instance_id 区分回调路径
+        app = await _get_shared_server(self._webhook_port)
+        cb_path = self._callback_path
+        app.router.add_get(cb_path, self._handle_verify)
+        app.router.add_post(cb_path, self._handle_callback)
         self._running = True
-        logger.info("微信客服适配器已启动, webhook port: %d", self._webhook_port)
+        logger.info("微信客服适配器[%s]已启动, callback: %s", self._instance_id or "default", cb_path)
+
+    @property
+    def _callback_path(self) -> str:
+        if self._instance_id:
+            return f"/wechat-kf/callback/{self._instance_id}"
+        return "/wechat-kf/callback"
 
     async def stop(self) -> None:
         self._running = False
-        if self._server:
-            await self._server.cleanup()
-            self._server = None
-        logger.info("微信客服适配器已停止")
+        await _release_shared_server()
+        logger.info("微信客服适配器[%s]已停止", self._instance_id or "default")
 
     # ── 回调处理 ──
 
@@ -212,7 +254,12 @@ class WeChatKFAdapter(BasePlatformAdapter):
     # ── 知识库 + 欢迎语 ──
 
     def _get_knowledge_path(self) -> Path:
-        """知识库文件路径."""
+        """知识库文件路径 — 多实例时按 instance_id 隔离."""
+        if self._instance_id:
+            from agent.core.config import get_home
+            kb_path = get_home() / "skills" / "wechat-kf" / f"kb_{self._instance_id}.json"
+            if kb_path.exists():
+                return kb_path
         return Path(__file__).parent.parent.parent / "agent" / "builtin_skills" / "wechat-kf" / "cs_knowledge.json"
 
     def _load_knowledge(self) -> dict:
@@ -299,6 +346,7 @@ class WeChatKFAdapter(BasePlatformAdapter):
             content=content.strip(),
             timestamp=msg.get("send_time", time.time()),
             raw=msg,
+            metadata={"instance_id": self._instance_id} if self._instance_id else {},
         )
         await self._dispatch_message(platform_msg)
 

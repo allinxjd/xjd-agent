@@ -246,6 +246,9 @@ class WebServer:
         app.router.add_get("/api/admin/skill-secrets", self._skill_secrets_list)
         app.router.add_get("/api/admin/skill-secrets/{skill_id}", self._skill_secrets_get)
         app.router.add_post("/api/admin/skill-secrets/{skill_id}", self._skill_secrets_save)
+        app.router.add_delete("/api/admin/skill-secrets/{skill_id}", self._skill_secrets_delete)
+        app.router.add_get("/api/admin/skill-instances/{skill_id}", self._skill_instances_list)
+        app.router.add_post("/api/admin/skill-instances/{skill_id}", self._skill_instances_create)
 
         # AI Company API
         app.router.add_post("/api/company/standby", self._company_standby)
@@ -2873,27 +2876,37 @@ class WebServer:
                     continue
                 vals = store.get_all(s.skill_id)
                 configured = sum(1 for sec in s.secrets if vals.get(sec.key) or sec.default)
-                skills.append({
+                entry = {
                     "skill_id": s.skill_id,
                     "skill_name": s.name,
                     "total_secrets": len(s.secrets),
                     "configured": configured,
-                })
+                }
+                if s.multi_instance:
+                    entry["multi_instance"] = True
+                    entry["instances"] = store.list_instances(s.skill_id)
+                skills.append(entry)
         return web.json_response({"skills": skills})
 
     async def _skill_secrets_get(self, request):
-        """GET /api/admin/skill-secrets/{skill_id} — 获取技能凭证详情."""
+        """GET /api/admin/skill-secrets/{skill_id} — 获取技能凭证详情.
+
+        支持 skill_id 格式: "wechat-kf" (单实例) 或 "wechat-kf:xjd" (多实例).
+        """
         from aiohttp import web
         _, err = self._require_admin(request)
         if err:
             return err
 
         skill_id = request.match_info["skill_id"]
+        # 多实例格式: "base_skill_id:instance_id"
+        base_skill_id = skill_id.split(":")[0] if ":" in skill_id else skill_id
+
         skill = None
         if self._engine and hasattr(self._engine, "_skill_manager") and self._engine._skill_manager:
             sm = self._engine._skill_manager
             await sm._ensure_loaded()
-            skill = sm._skills.get(skill_id)
+            skill = sm._skills.get(base_skill_id)
         if not skill:
             return web.json_response({"error": "Skill not found"}, status=404)
 
@@ -2930,12 +2943,13 @@ class WebServer:
             return err
 
         skill_id = request.match_info["skill_id"]
+        base_skill_id = skill_id.split(":")[0] if ":" in skill_id else skill_id
 
         skill = None
         if self._engine and hasattr(self._engine, "_skill_manager") and self._engine._skill_manager:
             sm = self._engine._skill_manager
             await sm._ensure_loaded()
-            skill = sm._skills.get(skill_id)
+            skill = sm._skills.get(base_skill_id)
         if not skill:
             return web.json_response({"error": "Skill not found"}, status=404)
 
@@ -2954,6 +2968,81 @@ class WebServer:
         if updates:
             store.set_bulk(skill_id, updates)
         return web.json_response({"status": "ok"})
+
+    async def _skill_secrets_delete(self, request):
+        """DELETE /api/admin/skill-secrets/{skill_id} — 删除实例凭证."""
+        from aiohttp import web
+        _, err = self._require_admin(request)
+        if err:
+            return err
+        skill_id = request.match_info["skill_id"]
+        from agent.core.secrets import get_secrets_store
+        store = get_secrets_store()
+        store.delete_skill(skill_id)
+        return web.json_response({"status": "ok"})
+
+    async def _skill_instances_list(self, request):
+        """GET /api/admin/skill-instances/{skill_id} — 列出多实例技能的所有实例."""
+        from aiohttp import web
+        _, err = self._require_admin(request)
+        if err:
+            return err
+        skill_id = request.match_info["skill_id"]
+        skill = None
+        if self._engine and hasattr(self._engine, "_skill_manager") and self._engine._skill_manager:
+            sm = self._engine._skill_manager
+            await sm._ensure_loaded()
+            skill = sm._skills.get(skill_id)
+        if not skill:
+            return web.json_response({"error": "Skill not found"}, status=404)
+        if not skill.multi_instance:
+            return web.json_response({"error": "Not a multi-instance skill"}, status=400)
+
+        from agent.core.secrets import get_secrets_store
+        store = get_secrets_store()
+        instances = store.list_instances(skill_id)
+        result = []
+        for inst_id in instances:
+            vals = store.get_all(f"{skill_id}:{inst_id}")
+            name = vals.get("WECHAT_KF_INSTANCE_NAME", inst_id)
+            configured = sum(1 for sec in skill.secrets if vals.get(sec.key) or sec.default)
+            result.append({
+                "instance_id": inst_id,
+                "name": name,
+                "configured": configured,
+                "total_secrets": len(skill.secrets),
+            })
+        return web.json_response({
+            "skill_id": skill_id,
+            "multi_instance": True,
+            "instance_id_label": skill.instance_id_label,
+            "instances": result,
+            "secrets_schema": [{"key": s.key, "description": s.description, "default": s.default} for s in skill.secrets],
+        })
+
+    async def _skill_instances_create(self, request):
+        """POST /api/admin/skill-instances/{skill_id} — 创建新实例."""
+        from aiohttp import web
+        _, err = self._require_admin(request)
+        if err:
+            return err
+        skill_id = request.match_info["skill_id"]
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        instance_id = body.get("instance_id", "").strip()
+        if not instance_id:
+            return web.json_response({"error": "instance_id is required"}, status=400)
+        if not all(c.isalnum() or c in "-_" for c in instance_id):
+            return web.json_response({"error": "instance_id 只能包含字母、数字、-、_"}, status=400)
+        from agent.core.secrets import get_secrets_store
+        store = get_secrets_store()
+        full_key = f"{skill_id}:{instance_id}"
+        if store.get_all(full_key):
+            return web.json_response({"error": f"实例 {instance_id} 已存在"}, status=409)
+        store.set_bulk(full_key, {"WECHAT_KF_INSTANCE_NAME": body.get("name", instance_id)})
+        return web.json_response({"status": "ok", "instance_id": instance_id})
 
     # ─── Workspace API ───
 
@@ -3339,6 +3428,8 @@ class WebServer:
                 if s.secrets:
                     d["has_secrets"] = True
                     d["total_secrets"] = len(s.secrets)
+                if s.multi_instance:
+                    d["multi_instance"] = True
                 result.append(d)
             return web.json_response({"skills": result, "count": len(result)})
         except Exception as e:

@@ -85,6 +85,19 @@ class SecretsStore:
     def list_skills(self) -> list[str]:
         return list(self._data.keys())
 
+    def list_instances(self, prefix: str) -> list[str]:
+        """列出某前缀下的所有实例 ID.
+
+        例: list_instances("wechat-kf") → ["xjd", "shop2"]
+        对应 secrets.yaml 中的 "wechat-kf:xjd", "wechat-kf:shop2" 条目。
+        """
+        sep = f"{prefix}:"
+        return [
+            skill_id[len(sep):]
+            for skill_id in self._data
+            if skill_id.startswith(sep)
+        ]
+
     def _migrate_calabash(self):
         """从 config.yaml 的 calabash 节迁移到 secrets.yaml."""
         if self._data.get("ecommerce-image-pipeline"):

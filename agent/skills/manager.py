@@ -99,6 +99,10 @@ class Skill:
     requires_tools: list[str] = field(default_factory=list)   # 需要这些工具才激活
     fallback_for_tools: list[str] = field(default_factory=list)  # 这些工具可用时不激活
 
+    # 多实例支持
+    multi_instance: bool = False
+    instance_id_label: str = ""
+
     # XjdHub / 状态管理
     status: str = "active"              # draft / active / deprecated
     source: str = "manual"              # manual / chat / hub / auto_extracted
@@ -249,6 +253,8 @@ class Skill:
             success_rate=meta.get("success_rate", 1.0),
             requires_tools=fm.get("requires_tools") or _compat.get("requires_tools", []),
             fallback_for_tools=fm.get("fallback_for_tools") or _compat.get("fallback_for_tools", []),
+            multi_instance=bool(fm.get("multi_instance", False)),
+            instance_id_label=fm.get("instance_id_label", ""),
             status=fm.get("status", "active"),
             source=fm.get("source", "manual"),
             author=fm.get("author", ""),

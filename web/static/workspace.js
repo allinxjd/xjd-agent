@@ -1448,6 +1448,14 @@ async function _loadSkillSecretsInCard(skill) {
   const container = document.getElementById('secretsArea_' + skill.skill_id);
   if (!container) return;
   try {
+    // 多实例技能：加载实例列表
+    if (skill.multi_instance) {
+      const res = await fetch('/api/admin/skill-instances/' + encodeURIComponent(skill.skill_id));
+      if (!res.ok) throw new Error(res.statusText);
+      const data = await res.json();
+      _renderMultiInstanceUI(container, data, skill);
+      return;
+    }
     const res = await fetch('/api/admin/skill-secrets/' + encodeURIComponent(skill.skill_id));
     if (!res.ok) throw new Error(res.statusText);
     const data = await res.json();
@@ -1530,4 +1538,130 @@ async function _saveSkillSecrets(skillId) {
   } catch(e) {
     if (statusEl) { statusEl.textContent = 'Error: ' + e.message; statusEl.style.color = 'var(--red)'; }
   }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  Multi-Instance Management
+// ══════════════════════════════════════════════════════════════
+
+function _renderMultiInstanceUI(container, data, skill) {
+  const instances = data.instances || [];
+  const label = data.instance_id_label || '实例 ID';
+  let html = '<div class="skill-detail-section"><label>实例管理</label></div>';
+
+  if (instances.length === 0) {
+    html += '<div style="color:var(--text-tertiary);font-size:12px;margin:4px 0">暂无实例，点击下方按钮添加</div>';
+  } else {
+    for (const inst of instances) {
+      const badge = inst.configured >= inst.total_secrets
+        ? '<span style="font-size:11px;color:var(--green);margin-left:4px">&#10003;</span>'
+        : `<span style="font-size:11px;color:var(--text-tertiary);margin-left:4px">${inst.configured}/${inst.total_secrets}</span>`;
+      const instKey = skill.skill_id + ':' + inst.instance_id;
+      html += `<div class="mi-instance-row" style="display:flex;align-items:center;gap:8px;margin:6px 0;padding:6px 8px;border-radius:6px;background:var(--bg-secondary)">` +
+        `<span style="font-size:13px;font-weight:500;flex:1">${_esc(inst.name || inst.instance_id)}</span>${badge}` +
+        `<button class="btn-secondary" style="font-size:11px;padding:2px 8px" onclick="event.stopPropagation();_toggleInstanceConfig('${_esc(instKey)}','${_esc(skill.skill_id)}')">配置</button>` +
+        `<button style="font-size:11px;padding:2px 8px;background:none;border:1px solid var(--red);color:var(--red);border-radius:4px;cursor:pointer" onclick="event.stopPropagation();_deleteInstance('${_esc(skill.skill_id)}','${_esc(inst.instance_id)}')">删除</button>` +
+        `</div>` +
+        `<div id="miConfig_${_esc(instKey)}" style="display:none;margin:0 0 8px 12px;padding:8px;border-left:2px solid var(--border)"></div>`;
+    }
+  }
+
+  html += `<div style="margin-top:8px;display:flex;align-items:center;gap:8px">` +
+    `<input type="text" id="miNewId_${_esc(skill.skill_id)}" placeholder="${_esc(label)}" style="flex:1;padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:12px" onclick="event.stopPropagation()">` +
+    `<button class="btn-primary" style="font-size:12px;padding:4px 12px" onclick="event.stopPropagation();_addInstance('${_esc(skill.skill_id)}')">添加实例</button>` +
+    `</div>` +
+    `<div id="miStatus_${_esc(skill.skill_id)}" style="font-size:12px;margin-top:4px"></div>`;
+  container.innerHTML = html;
+}
+
+async function _toggleInstanceConfig(instKey, baseSkillId) {
+  const el = document.getElementById('miConfig_' + instKey);
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = '<div style="color:var(--text-tertiary);font-size:12px">Loading...</div>';
+  try {
+    const res = await fetch('/api/admin/skill-secrets/' + encodeURIComponent(instKey));
+    if (!res.ok) throw new Error(res.statusText);
+    const data = await res.json();
+    _renderInstanceSecrets(el, data, instKey);
+  } catch(e) {
+    el.innerHTML = `<div style="color:var(--red);font-size:12px">${_esc(e.message)}</div>`;
+  }
+}
+
+function _renderInstanceSecrets(container, data, instKey) {
+  const inputStyle = 'flex:1;padding:5px 8px;border-radius:5px;border:1px solid var(--border);background:var(--bg-secondary);color:var(--text-primary);font-size:12px;';
+  let html = '';
+  for (const sec of data.secrets) {
+    const sensitive = /password|secret|token/i.test(sec.key);
+    const type = sensitive ? 'password' : 'text';
+    const ph = sensitive ? (sec.has_value ? '(configured)' : '(not set)') : (sec.default || '');
+    const val = sec.value || '';
+    html += `<div style="display:flex;align-items:center;gap:6px;margin:3px 0">` +
+      `<span style="font-size:11px;color:var(--text-secondary);min-width:80px" title="${_esc(sec.key)}">${_esc(sec.description || sec.key)}</span>` +
+      `<input type="${type}" data-secret-key="${_esc(sec.key)}" value="${_esc(val)}" placeholder="${_esc(ph)}" style="${inputStyle}" onclick="event.stopPropagation()"></div>`;
+  }
+  html += `<div style="margin-top:6px;display:flex;align-items:center;gap:6px">` +
+    `<button class="btn-primary" style="font-size:11px;padding:3px 10px" onclick="event.stopPropagation();_saveInstanceSecrets('${_esc(instKey)}')">保存</button>` +
+    `<span id="miSaveStatus_${_esc(instKey)}" style="font-size:11px;color:var(--text-tertiary)"></span></div>`;
+  container.innerHTML = html;
+}
+
+async function _saveInstanceSecrets(instKey) {
+  const container = document.getElementById('miConfig_' + instKey);
+  if (!container) return;
+  const inputs = container.querySelectorAll('input[data-secret-key]');
+  const body = {};
+  inputs.forEach(inp => { if (inp.value) body[inp.dataset.secretKey] = inp.value; });
+  const statusEl = document.getElementById('miSaveStatus_' + instKey);
+  try {
+    const res = await fetch('/api/admin/skill-secrets/' + encodeURIComponent(instKey), {
+      method: 'POST', headers: {'Content-Type': 'application/json', 'X-XJD-Request': '1'},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (statusEl) { statusEl.textContent = data.status === 'ok' ? '已保存' : (data.error || '失败'); statusEl.style.color = data.status === 'ok' ? 'var(--green)' : 'var(--red)'; }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = e.message; statusEl.style.color = 'var(--red)'; }
+  }
+}
+
+async function _addInstance(skillId) {
+  const input = document.getElementById('miNewId_' + skillId);
+  const statusEl = document.getElementById('miStatus_' + skillId);
+  if (!input || !input.value.trim()) { if (statusEl) { statusEl.textContent = '请输入实例 ID'; statusEl.style.color = 'var(--red)'; } return; }
+  const instanceId = input.value.trim();
+  try {
+    const res = await fetch('/api/admin/skill-instances/' + encodeURIComponent(skillId), {
+      method: 'POST', headers: {'Content-Type': 'application/json', 'X-XJD-Request': '1'},
+      body: JSON.stringify({instance_id: instanceId, name: instanceId}),
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      input.value = '';
+      if (statusEl) { statusEl.textContent = ''; }
+      const skill = _skillsCache.find(s => s.skill_id === skillId);
+      if (skill) _loadSkillSecretsInCard(skill);
+    } else {
+      if (statusEl) { statusEl.textContent = data.error || '失败'; statusEl.style.color = 'var(--red)'; }
+    }
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = e.message; statusEl.style.color = 'var(--red)'; }
+  }
+}
+
+async function _deleteInstance(skillId, instanceId) {
+  if (!confirm(`确定删除实例 "${instanceId}"？此操作不可恢复。`)) return;
+  const fullKey = skillId + ':' + instanceId;
+  try {
+    const res = await fetch('/api/admin/skill-secrets/' + encodeURIComponent(fullKey), {
+      method: 'DELETE', headers: {'X-XJD-Request': '1'},
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      const skill = _skillsCache.find(s => s.skill_id === skillId);
+      if (skill) _loadSkillSecretsInCard(skill);
+    }
+  } catch(e) { /* ignore */ }
 }

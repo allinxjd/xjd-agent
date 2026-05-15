@@ -1,12 +1,16 @@
 ---
 name: 微信客服
 description: 微信客服智能接待 — 自动回复客户消息、关键词转人工、知识库匹配
-version: 1.0.0
+version: 1.1.0
 category: customer-service
 tags: [微信客服, 企业微信, 智能客服, 转人工, 自动回复]
 trigger: 微信客服 启动客服 启动微信客服 停止微信客服 客服状态 wechat kf 企业微信客服
 tools: [wechat_kf_start, wechat_kf_stop, wechat_kf_status, wechat_kf_update_kb]
+multi_instance: true
+instance_id_label: "实例名称（如：小巨蛋、商城B）"
 secrets:
+  - key: WECHAT_KF_INSTANCE_NAME
+    description: 实例显示名称（如"小巨蛋客服"）
   - key: WECHAT_KF_CORP_ID
     description: 企业微信企业 ID (corpid)
   - key: WECHAT_KF_SECRET

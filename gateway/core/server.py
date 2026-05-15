@@ -199,16 +199,16 @@ class GatewayServer:
 
     # ── 适配器管理 ────────────────────────────────────────────
 
-    def register_adapter(self, adapter: BasePlatformAdapter) -> None:
+    def register_adapter(self, adapter: BasePlatformAdapter, name: str = "") -> None:
         """注册消息平台适配器."""
-        name = adapter.platform_type.value
-        self._adapters[name] = adapter
+        key = name or adapter.platform_type.value
+        self._adapters[key] = adapter
 
         # 绑定消息处理器
         adapter.on_message(self._handle_incoming_message)
         adapter.on_event(self._handle_platform_event)
 
-        logger.info("Gateway: registered adapter %s", name)
+        logger.info("Gateway: registered adapter %s", key)
 
     def get_adapter(self, platform: str) -> Optional[BasePlatformAdapter]:
         """获取平台适配器."""
@@ -223,7 +223,9 @@ class GatewayServer:
         from gateway.platforms.schemas import ADAPTER_MAP
         import importlib
 
-        entry = ADAPTER_MAP.get(platform)
+        # 支持 "wechat_kf:instance_id" 格式 — 查找基础平台类型
+        base_platform = platform.split(":")[0] if ":" in platform else platform
+        entry = ADAPTER_MAP.get(base_platform)
         if not entry:
             return f"不支持的平台: {platform}"
 
@@ -239,7 +241,7 @@ class GatewayServer:
             await self.remove_adapter_runtime(platform)
 
         adapter = adapter_cls(config)
-        self.register_adapter(adapter)
+        self.register_adapter(adapter, name=platform)
 
         try:
             await adapter.start()
@@ -452,18 +454,34 @@ class GatewayServer:
         cfg.save()
 
     async def _auto_start_wechat_kf(self) -> None:
-        """自动启动微信客服适配器 (如果密钥已配置)."""
+        """自动启动微信客服适配器 (支持多实例)."""
         await asyncio.sleep(2)
         try:
+            from agent.core.secrets import get_secrets_store
             from agent.tools.wechat_kf_tools import _secrets_to_config
-            config, err = _secrets_to_config()
-            if err:
-                return
-            result = await self.add_adapter_runtime("wechat_kf", config)
-            if result == "ok":
-                logger.info("微信客服已自动启动 (webhook port: %s)", config.get("webhook_port", 9003))
+            store = get_secrets_store()
+            instances = store.list_instances("wechat-kf")
+            if instances:
+                for inst_id in instances:
+                    config, err = _secrets_to_config(inst_id)
+                    if err:
+                        logger.debug("微信客服[%s]配置不完整: %s", inst_id, err)
+                        continue
+                    config["instance_id"] = inst_id
+                    name = config.get("instance_name", inst_id)
+                    key = f"wechat_kf:{inst_id}"
+                    result = await self.add_adapter_runtime(key, config)
+                    if result == "ok":
+                        logger.info("微信客服[%s]已自动启动", name)
+                    else:
+                        logger.warning("微信客服[%s]自动启动失败: %s", name, result)
             else:
-                logger.warning("微信客服自动启动失败: %s", result)
+                config, err = _secrets_to_config()
+                if err:
+                    return
+                result = await self.add_adapter_runtime("wechat_kf", config)
+                if result == "ok":
+                    logger.info("微信客服已自动启动 (webhook port: %s)", config.get("webhook_port", 9003))
         except Exception as e:
             logger.debug("微信客服自动启动跳过: %s", e)
 
@@ -736,6 +754,10 @@ class GatewayServer:
         """
         self._stats.total_messages_received += 1
         platform = message.platform.value
+        # 多实例：用 instance_id 构建完整 adapter key
+        _msg_instance_id = message.metadata.get("instance_id", "")
+        if _msg_instance_id:
+            platform = f"{platform}:{_msg_instance_id}"
         self._stats.platform_stats.setdefault(platform, {"received": 0, "sent": 0})
         self._stats.platform_stats[platform]["received"] += 1
 
@@ -899,14 +921,18 @@ class GatewayServer:
 
         # 构建平台上下文前缀
         platform_name = message.platform.value
+        # 多实例：从 metadata 获取 instance_id 构建完整 adapter key
+        _instance_id = message.metadata.get("instance_id", "")
+        if _instance_id:
+            platform_name = f"{platform_name}:{_instance_id}"
         chat_type = message.chat.chat_type.value if hasattr(message.chat, 'chat_type') else "private"
         sender_name = message.sender.display_name or message.sender.username or message.sender.user_id
         platform_ctx = f"[来源: {platform_name} | 会话类型: {chat_type} | 发送者: {sender_name}]"
         user_content = f"{platform_ctx}\n{user_text_with_file}"
 
         # 微信客服模式：注入客服 system prompt + FAQ 上下文
-        if platform_name == "wechat_kf":
-            kf_context = self._get_wechat_kf_context(message.content)
+        if platform_name == "wechat_kf" or platform_name.startswith("wechat_kf:"):
+            kf_context = self._get_wechat_kf_context(message.content, platform_name)
             if kf_context:
                 user_content = f"{kf_context}\n\n{user_content}"
 
@@ -962,7 +988,7 @@ class GatewayServer:
                     logger.debug("Ecommerce image delivery failed", exc_info=True)
 
         # 调用 engine（传入 session 消息，不操作全局 messages）
-        _is_wechat_kf = (platform_name == "wechat_kf")
+        _is_wechat_kf = (platform_name == "wechat_kf" or platform_name.startswith("wechat_kf:"))
         result = await self._engine.run_turn(
             user_content,
             session_messages=session_msgs,
@@ -984,21 +1010,34 @@ class GatewayServer:
 
     # ── 微信客服上下文注入 ──
 
-    def _get_wechat_kf_context(self, user_message: str) -> str:
+    def _get_wechat_kf_context(self, user_message: str, platform_name: str = "") -> str:
         """为微信客服消息构建 system prompt + FAQ 上下文."""
         from pathlib import Path
-        kb_path = Path(__file__).parent.parent / "platforms" / ".." / ".." / "agent" / "builtin_skills" / "wechat-kf" / "cs_knowledge.json"
-        kb_path = kb_path.resolve()
+
+        # 多实例：优先加载实例专属知识库
+        instance_id = platform_name.split(":", 1)[1] if ":" in platform_name else ""
+        kb_path = None
+        if instance_id:
+            from agent.core.config import get_home
+            inst_kb = get_home() / "skills" / "wechat-kf" / f"kb_{instance_id}.json"
+            if inst_kb.exists():
+                kb_path = inst_kb
+
+        if not kb_path:
+            kb_path = Path(__file__).parent.parent / "platforms" / ".." / ".." / "agent" / "builtin_skills" / "wechat-kf" / "cs_knowledge.json"
+            kb_path = kb_path.resolve()
+
         if not kb_path.exists():
             return ""
         try:
+            cache_key = f"_wechat_kf_kb_cache_{instance_id}"
             mtime = kb_path.stat().st_mtime
-            cache = getattr(self, "_wechat_kf_kb_cache", None)
+            cache = getattr(self, cache_key, None)
             if cache and cache[0] == mtime:
                 kb = cache[1]
             else:
                 kb = json.loads(kb_path.read_text(encoding="utf-8"))
-                self._wechat_kf_kb_cache = (mtime, kb)
+                setattr(self, cache_key, (mtime, kb))
         except Exception:
             return ""
 
