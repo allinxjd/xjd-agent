@@ -291,6 +291,12 @@ class WebServer:
         except ImportError:
             pass
 
+        # WeChat KF callback routes (forward to adapter dispatch table)
+        app.router.add_get("/wechat-kf/callback", self._wechat_kf_callback_proxy)
+        app.router.add_post("/wechat-kf/callback", self._wechat_kf_callback_proxy)
+        app.router.add_get("/wechat-kf/callback/{instance_id}", self._wechat_kf_callback_proxy)
+        app.router.add_post("/wechat-kf/callback/{instance_id}", self._wechat_kf_callback_proxy)
+
         # 静态文件
         app.router.add_static("/static", self._static_dir, show_index=False)
 
@@ -306,6 +312,23 @@ class WebServer:
 
         import webbrowser
         webbrowser.open(url)
+
+    async def _wechat_kf_callback_proxy(self, request):
+        """Forward wechat-kf callbacks to the adapter dispatch table."""
+        from aiohttp import web
+        try:
+            from gateway.platforms.wechat_kf import (
+                _resolve_adapter, _instance_dispatch,
+            )
+        except ImportError:
+            return web.Response(text="wechat_kf not available", status=503)
+        instance_id = request.match_info.get("instance_id", "")
+        adapter = _resolve_adapter(instance_id)
+        if not adapter:
+            return web.Response(text="unknown instance", status=404)
+        if request.method == "GET":
+            return await adapter._handle_verify(request)
+        return await adapter._handle_callback(request)
 
     async def stop(self):
         """优雅关闭服务器."""
