@@ -349,6 +349,7 @@ class AgentEngine:
         abort_check: Optional[Callable[[], bool]] = None,
         skill_id: Optional[str] = None,
         deadline: Optional[float] = None,
+        skip_grounding: bool = False,
     ) -> TurnResult:
         """执行一轮对话 (包含完整的 tool calling loop).
 
@@ -462,7 +463,8 @@ class AgentEngine:
                 force_tool_rounds = 1
 
         # Layer 2: 事实性查询 → 强制至少调一次工具
-        if not force_tool_rounds and turn_tools:
+        _turn_skip_grounding = skip_grounding or self._skip_grounding
+        if not force_tool_rounds and turn_tools and not _turn_skip_grounding:
             from agent.tools.tool_selector import is_factual_query
             if is_factual_query(user_message):
                 force_tool_rounds = 1
@@ -551,6 +553,7 @@ class AgentEngine:
                     total_tool_calls == 0
                     and round_idx == 0
                     and turn_tools
+                    and not _turn_skip_grounding
                 ):
                     from agent.tools.tool_selector import is_factual_query
                     if is_factual_query(user_message):
@@ -565,7 +568,7 @@ class AgentEngine:
                 _grounded = None
                 _grounding_score = -1.0
                 _hard_blocked = False
-                if total_tool_calls > 0 and not self._skip_grounding:
+                if total_tool_calls > 0 and not _turn_skip_grounding:
                     from agent.tools.tool_selector import is_factual_query as _is_fq
                     from agent.tools.tool_selector import is_factual_by_tools
 

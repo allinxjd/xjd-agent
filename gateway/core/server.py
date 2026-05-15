@@ -948,6 +948,7 @@ class GatewayServer:
             session_messages=session_msgs,
             on_tool_result=on_tool_result,
             deadline=time.time() + 300.0,
+            skip_grounding=(platform_name == "wechat_kf"),
         )
 
         # 记录 assistant 回复到 session
